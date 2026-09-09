@@ -31,10 +31,8 @@ use qconnect_app::{
     arm_local_queue_takeover, is_local_renderer_active, local_queue_takeover_needs_retry,
     qconnect_queue_track_is_resolvable, set_local_playback_conflict_pending, QueueCommandType,
 };
-use serde_json::json;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
 use super::authority::{AuthorityCell, AuthorityStamp};
 use super::DaemonQconnectInner;
@@ -202,20 +200,16 @@ async fn publish_local_queue(
     }
 
     let count = ordered_ids.len();
-    let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
     let start_index = projected_start.unwrap_or(0);
-    let payload = json!({
-        "track_ids": track_ids,
-        "queue_position": start_index,
-        "shuffle_mode": false,
-        "shuffle_pivot_index": start_index,
-        "context_uuid": Uuid::new_v4().to_string(),
-        "autoplay_reset": true,
-        "autoplay_loading": false,
-    });
+    let local_shuffle = runtime.core().get_queue_state().await.shuffle;
     let command = app
-        .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
+        .build_local_queue_sync_command(
+            &ordered_ids,
+            start_index,
+            !force_takeover && !takeover_retry && !local_shuffle,
+        )
         .await;
+    let append = command.command_type == QueueCommandType::CtrlSrvrQueueAddTracks;
     if !authority.is_current(stamp) {
         return false;
     }
@@ -233,7 +227,7 @@ async fn publish_local_queue(
                 set_local_playback_conflict_pending(&mut state, false);
             }
             log::info!(
-                "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
+                "[QConnect] Synced local queue to Connect ({count} tracks, start={start_index}, append={append})"
             );
             if !authority.is_current(stamp) {
                 return false;

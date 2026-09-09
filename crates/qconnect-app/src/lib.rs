@@ -64,8 +64,9 @@ pub use qconnect_protocol::{
 pub use renderer::{qconnect_queue_track_is_resolvable, qconnect_source_is_resolvable};
 pub use renderer_engine::QconnectRendererEngine;
 pub use reporting::{
-    build_renderer_playback_report, qconnect_report_track_id, renderer_buffer_state,
-    renderer_playing_state, RendererPlaybackSnapshot,
+    build_renderer_playback_report, playback_snapshot_from_event, qconnect_report_track_id,
+    renderer_buffer_state, renderer_playing_state, resolve_report_queue_items,
+    RendererPlaybackSnapshot,
 };
 pub use session::{
     build_effective_renderer_snapshot, build_session_renderer_snapshot, compute_connection_state,

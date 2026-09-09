@@ -1154,6 +1154,52 @@ impl QueueManager {
         state.tracks.get(target).cloned().map(|t| (t, moved))
     }
 
+    /// Only reconcile the current occurrence or its next playable playback-order
+    /// successor. Never rewind to the first copy of a repeated catalog id.
+    pub fn sync_gapless_successor(&self, id: u64) -> Option<(QueueTrack, bool)> {
+        let mut state = self.state.lock().unwrap();
+        let current = state.current_index?;
+        let target = if state.tracks.get(current)?.id == id {
+            current
+        } else if state.shuffle {
+            state
+                .shuffle_order
+                .iter()
+                .skip(state.shuffle_position + 1)
+                .copied()
+                .find(|index| {
+                    state
+                        .tracks
+                        .get(*index)
+                        .is_some_and(|t| t.streamable || t.is_local)
+                })?
+        } else {
+            ((current + 1)..state.tracks.len()).find(|index| {
+                let t = &state.tracks[*index];
+                t.streamable || t.is_local
+            })?
+        };
+        if state.tracks.get(target)?.id != id {
+            return None;
+        }
+        let moved = state.current_index != Some(target);
+        if moved {
+            // Record the outgoing track so `previous` still walks back.
+            if let Some(curr_idx) = state.current_index {
+                Self::record_history_internal(&mut state, curr_idx);
+            }
+            state.history.retain(|&index| index != target);
+            state.current_index = Some(target);
+            // Keep the shuffle cursor aligned with the new position.
+            if state.shuffle {
+                if let Some(pos) = state.shuffle_order.iter().position(|&x| x == target) {
+                    state.shuffle_position = pos;
+                }
+            }
+        }
+        state.tracks.get(target).cloned().map(|t| (t, moved))
+    }
+
     /// Jump to a track by its position in the `upcoming` list as returned by
     /// `get_state`. This is the position the user sees in the Queue sidebar;
     /// the method resolves it to the correct canonical index even when
@@ -1898,6 +1944,73 @@ mod tests {
             isrc: None,
             recording_mbid: None,
         }
+    }
+
+    #[test]
+    fn connect_queue_echo_preserves_play_later_block_and_batch_order() {
+        let queue = QueueManager::new();
+        for id in [1, 2, 3] {
+            queue.add_track(create_test_track(id));
+        }
+        queue.play_index(0);
+        // Play next batch [10, 11] uses reverse front inserts.
+        for id in [11, 10] {
+            queue.add_track_next(create_test_track(id));
+        }
+        let echo = queue.get_all_tracks();
+        queue.set_queue_with_order(echo.0, echo.1, false, None);
+        for id in [12, 13] {
+            queue.add_track_later(create_test_track(id));
+        }
+        let (tracks, cursor) = queue.get_all_tracks();
+        assert_eq!(cursor, Some(0));
+        assert_eq!(
+            tracks.iter().map(|track| track.id).collect::<Vec<_>>(),
+            vec![1, 10, 11, 12, 13, 2, 3]
+        );
+        assert_eq!(queue.get_state_full().manual_next_count, 4);
+        // Append is outside the manual block; another "later" still precedes source.
+        queue.add_tracks(vec![create_test_track(20), create_test_track(21)]);
+        let echo = queue.get_all_tracks();
+        queue.set_queue_with_order(echo.0, echo.1, false, None);
+        queue.add_track_later(create_test_track(14));
+        assert_eq!(
+            queue
+                .get_all_tracks()
+                .0
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            vec![1, 10, 11, 12, 13, 14, 2, 3, 20, 21]
+        );
+    }
+
+    #[test]
+    fn gapless_reconciliation_keeps_the_actual_duplicate_occurrence() {
+        let queue = QueueManager::new();
+        for id in [100, 200, 100, 300] {
+            queue.add_track(create_test_track(id));
+        }
+        queue.play_index(1);
+        assert!(queue.sync_gapless_successor(100).unwrap().1);
+        assert_eq!(queue.get_state_full().current_index, Some(2));
+        assert!(!queue.sync_gapless_successor(100).unwrap().1);
+        assert_eq!(queue.get_state_full().current_index, Some(2));
+        assert!(queue.sync_gapless_successor(200).is_none());
+        assert_eq!(queue.get_state_full().current_index, Some(2));
+    }
+    #[test]
+    fn gapless_reconciliation_follows_shuffle_and_skips_unplayable_rows() {
+        let queue = QueueManager::new();
+        let mut tracks: Vec<_> = [100, 200, 100, 300]
+            .into_iter()
+            .map(create_test_track)
+            .collect();
+        tracks[3].streamable = false;
+        queue.set_queue_with_order(tracks, Some(1), true, Some(vec![1, 3, 2, 0]));
+        assert!(queue.sync_gapless_successor(100).unwrap().1);
+        assert_eq!(queue.get_state_full().current_index, Some(2));
+        assert!(queue.sync_gapless_successor(200).is_none());
     }
 
     #[test]

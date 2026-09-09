@@ -625,6 +625,18 @@ enum StreamType {
 }
 
 impl StreamType {
+    fn output_format(&self) -> (u32, u16) {
+        match self {
+            Self::Rodio { sink, .. } => (
+                sink.config().sample_rate().get(),
+                sink.config().channel_count().get(),
+            ),
+            Self::Direct(sink) => (sink.sample_rate(), sink.channels()),
+            #[cfg(target_os = "linux")]
+            Self::Jack(sink) => (sink.sample_rate(), sink.channels()),
+        }
+    }
+
     /// Construct a shared-mode Rodio stream (no exclusive guard).
     fn rodio(sink: MixerDeviceSink) -> Self {
         StreamType::Rodio {
@@ -1228,7 +1240,7 @@ impl PlaybackBufferReporter {
 }
 
 /// Event payload for playback state updates
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PlaybackEvent {
     pub is_playing: bool,
     pub position: u64,
@@ -1345,6 +1357,9 @@ pub struct SharedState {
     /// 0 = Unknown (no stream active yet), 1 = Disabled (CPAL/Rodio / shared
     /// system path), 2 = DirectHardware (ALSA hw:), 3 = PluginFallback (plughw:).
     bit_perfect_mode: Arc<AtomicU8>,
+    // Actual QBZ-owned stream configuration, packed atomically: rate + channels.
+    // Does not claim the physical DAC format downstream of a system mixer.
+    output_stream_format: Arc<AtomicU64>,
     /// Monotonic play generation (PR #583). Bumped by `Player::begin_play` on
     /// every new play intent. Lives in the shared state so the audio thread
     /// can detect that a queued `PlayStreaming` was superseded by a newer play
@@ -1412,6 +1427,7 @@ impl SharedState {
             buffer_progress: Arc::new(AtomicU32::new(0)),
             buffer_state: Arc::new(std::sync::Mutex::new(PlaybackBufferSlot::default())),
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
+            output_stream_format: Arc::new(AtomicU64::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
             engine_empty_generation: Arc::new(AtomicU64::new(0)),
             engine_empty_track_id: Arc::new(AtomicU64::new(0)),
@@ -1736,6 +1752,22 @@ impl SharedState {
         }
     }
 
+    pub fn output_stream_format(&self) -> Option<(u32, u16)> {
+        let value = self.output_stream_format.load(Ordering::Acquire);
+        let rate = value as u32;
+        let channels = (value >> 32) as u16;
+        (rate > 0 && channels > 0).then_some((rate, channels))
+    }
+    fn publish_output_stream_format(&self, stream: Option<&StreamType>) {
+        let value = stream
+            .map(|stream| {
+                let (rate, channels) = stream.output_format();
+                u64::from(rate) | (u64::from(channels) << 32)
+            })
+            .unwrap_or(0);
+        self.output_stream_format.store(value, Ordering::Release);
+    }
+
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
         self.sample_rate.store(sample_rate, Ordering::SeqCst);
         self.bit_depth.store(bit_depth, Ordering::SeqCst);
@@ -1917,6 +1949,14 @@ impl SharedState {
         self.playback_start_millis
             .store(now_millis, Ordering::SeqCst);
         self.position_at_start.store(position, Ordering::SeqCst);
+    }
+
+    /// Resuming an already running stream must not rebase its live clock on
+    /// the stored pause position (which may still be zero).
+    fn resume_playback_timer(&self) {
+        if !self.is_playing() {
+            self.start_playback_timer(self.position.load(Ordering::SeqCst));
+        }
     }
 
     /// Mark playback as paused, saving current position
@@ -4006,8 +4046,7 @@ impl Player {
 
                             if let Some(ref engine) = *current_engine {
                                 engine.play();
-                                let current_pos = thread_state.position.load(Ordering::SeqCst);
-                                thread_state.start_playback_timer(current_pos);
+                                thread_state.resume_playback_timer();
                                 thread_state.is_playing.store(true, Ordering::SeqCst);
                                 log::info!("Audio thread: resumed");
                             }
@@ -4828,6 +4867,7 @@ impl Player {
                 };
 
             loop {
+                thread_state.publish_output_stream_format(stream_opt.as_ref());
                 if thread_state.is_playing.load(Ordering::SeqCst) {
                     match rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(command) => handle_command(
@@ -5276,6 +5316,7 @@ impl Player {
                     }
                 }
             }
+            thread_state.publish_output_stream_format(None);
         });
 
         // Two-level playback cache: L1 in memory, L2 on disk (~800 MB). The
@@ -7165,6 +7206,44 @@ mod tests {
         AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
     };
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn duplicate_resume_preserves_live_clock_and_real_pause_can_resume() {
+        let state = SharedState::new();
+        state.duration.store(290, Ordering::SeqCst);
+        state.start_playback_timer(67);
+        state.is_playing.store(true, Ordering::SeqCst);
+        let started = state.playback_start_millis.load(Ordering::SeqCst);
+        assert_eq!(
+            state.position(),
+            0,
+            "stored pause position intentionally stale"
+        );
+        state.resume_playback_timer();
+        assert_eq!(state.playback_start_millis.load(Ordering::SeqCst), started);
+        assert_eq!(state.position_at_start.load(Ordering::SeqCst), 67);
+        assert!(state.current_position() >= 67);
+        state.pause_playback_timer();
+        state.is_playing.store(false, Ordering::SeqCst);
+        let paused = state.position();
+        state.resume_playback_timer();
+        assert_eq!(state.position_at_start.load(Ordering::SeqCst), paused);
+        assert_ne!(state.playback_start_millis.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn output_telemetry_is_independent_of_source_quality_and_clears_on_release() {
+        let state = SharedState::new();
+        state.set_stream_quality(192000, 24);
+        assert_eq!(state.output_stream_format(), None);
+        state
+            .output_stream_format
+            .store(48000 | (2_u64 << 32), Ordering::Release);
+        assert_eq!(state.output_stream_format(), Some((48000, 2)));
+        assert_eq!(state.get_sample_rate(), 192000);
+        state.publish_output_stream_format(None);
+        assert_eq!(state.output_stream_format(), None);
+    }
 
     #[test]
     #[ignore = "requires QBZ_ALAC_PROBE_PATH to a real ALAC file"]

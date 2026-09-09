@@ -973,6 +973,23 @@ mod tests {
     }
 
     #[test]
+    fn unknown_device_depth_remains_absent_on_the_wire() {
+        let report = RendererReport::new(
+            RendererReportType::RndrSrvrDeviceAudioQualityChanged,
+            "00000000-0000-0000-0000-000000000000",
+            QueueVersion::default(),
+            json!({ "sampling_rate": 48000, "bit_depth": null, "nb_channels": 2 }),
+        );
+        let dev = map_renderer_report(&report)
+            .unwrap()
+            .rndr_srvr_device_audio_quality_changed
+            .unwrap();
+        assert_eq!(dev.sampling_rate, Some(48000));
+        assert_eq!(dev.bit_depth, None);
+        assert_eq!(dev.nb_channels, Some(2));
+    }
+
+    #[test]
     fn encodes_add_tracks_command_into_binary_batch() {
         let command = QueueCommand::new(
             QueueCommandType::CtrlSrvrQueueAddTracks,

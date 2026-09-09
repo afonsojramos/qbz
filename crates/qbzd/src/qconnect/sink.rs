@@ -24,8 +24,7 @@ use qconnect_app::{
     active_peer_renderer_is_playing, build_session_renderer_snapshot, cache_renderer_snapshot,
     is_peer_renderer_active, remote_renderer_commands_are_fenced, should_materialize_remote_queue,
     QconnectApp, QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState,
-    QconnectRendererEngine, RendererBufferState, RendererCommand, RendererReport,
-    RendererReportType,
+    QconnectRendererEngine, RendererCommand,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -96,8 +95,7 @@ impl DaemonEventSink {
         self.authority.is_current(self.stamp)
     }
 
-    /// Emit a StateUpdated report announcing this renderer is now active. Sent
-    /// after SetActive(true) is applied so the controller learns we are ready.
+    /// Acknowledge activation with the actual player state, including buffering.
     async fn report_active_renderer_ready(&self) {
         if !self.is_current() {
             return;
@@ -105,22 +103,25 @@ impl DaemonEventSink {
         let Some(app) = self.app.get().and_then(Weak::upgrade) else {
             return;
         };
-        let queue_version = app.queue_state_snapshot().await.version;
+        let queue = app.queue_state_snapshot().await;
+        let renderer = app.renderer_state_snapshot().await;
         if !self.is_current() {
             return;
         }
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrStateUpdated,
+        let event = self.engine.playback_event();
+        let snapshot = qconnect_app::playback_snapshot_from_event(
+            &event,
+            &queue,
+            renderer
+                .current_track
+                .as_ref()
+                .map(|item| item.queue_item_id),
+            renderer.next_track.as_ref().map(|item| item.queue_item_id),
+        );
+        let report = qconnect_app::build_renderer_playback_report(
             Uuid::new_v4().to_string(),
-            queue_version,
-            serde_json::json!({
-                "is_active": true,
-                "buffer_state": RendererBufferState::Ok.as_i32(),
-                "queue_version": {
-                    "major": queue_version.major,
-                    "minor": queue_version.minor
-                }
-            }),
+            queue.version,
+            snapshot,
         );
         if !self.is_current() {
             return;
@@ -368,6 +369,10 @@ fn renderer_command_name(command: &RendererCommand) -> &'static str {
 
 #[async_trait]
 impl QconnectEventSink for DaemonEventSink {
+    fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
+        self.is_current().then(|| self.engine.playback_event())
+    }
+
     async fn on_event(&self, event: QconnectAppEvent) {
         if !self.is_current() {
             return;

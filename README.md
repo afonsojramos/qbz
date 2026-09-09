@@ -883,7 +883,7 @@ pull requests.
 - [@Ronjar](https://github.com/Ronjar) — deb822 APT instructions
 - [@eldios](https://github.com/eldios) — Nix packaging
 - [@herder](https://github.com/herder) — Spotify-parity hotkeys and the Vim keymap
-- [@PhilipVinc](https://github.com/PhilipVinc) — daemon event hooks
+- [@PhilipVinc](https://github.com/PhilipVinc) — daemon event hooks and QConnect reporting diagnostics
 - [@Mazipani](https://github.com/Mazipani) — Chromecast X.509 v1 certificates
 - [@RayneGit](https://github.com/RayneGit) — Wayland clipboard
 - [@LuckyTheCoder](https://github.com/LuckyTheCoder) — macOS Liquid Glass icon

@@ -206,6 +206,10 @@ pub struct QtRendererEngine {
 }
 
 impl QtRendererEngine {
+    pub fn playback_event(&self) -> qbz_player::player::PlaybackEvent {
+        self.runtime.core().player().get_playback_event()
+    }
+
     pub fn owner(
         runtime: Arc<AppRuntime<LoggingAdapter>>,
         authority: Arc<AuthorityCell>,

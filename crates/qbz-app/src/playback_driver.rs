@@ -246,7 +246,18 @@ pub fn plan_tick(
         && ev.track_id != last.track_id
         && ev.is_playing
         && last.is_playing;
-    if seamless_change {
+    let missed_gapless_edge = ev.is_playing
+        && last.track_id != ev.track_id
+        && ev.track_id != 0
+        && queue.current != ev.track_id
+        && !matches!(ev.buffer_state, PlaybackBufferState::InitialBuffering)
+        && queue
+            .upcoming
+            .iter()
+            .find(|(_, playable)| *playable)
+            .map(|(id, _)| *id)
+            == Some(ev.track_id);
+    if seamless_change || missed_gapless_edge {
         actions.push(DriverAction::SyncCursorTo(ev.track_id));
         return actions;
     }
@@ -776,7 +787,7 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
             executed_actions.push(action.clone());
             match action {
                 DriverAction::SyncCursorTo(id) => {
-                    core.sync_current_to_id(*id).await;
+                    core.sync_gapless_successor(*id).await;
                 }
                 DriverAction::ArmGapless(id) => {
                     let quality = (deps.quality)();
@@ -1291,6 +1302,33 @@ mod tests {
             stop_after,
             autoplay_infinite: false,
         }
+    }
+
+    #[test]
+    fn gapless_cursor_recovers_after_a_nonplaying_transition_tick() {
+        let old = ev(1, false, 200, 200);
+        let state = DriverState::after(&old);
+        let live = ev(2, true, 1, 180);
+        let queue = q(1, &[(2, true)], "off", None);
+        assert!(plan_tick(&state, &live, &queue, None).contains(&DriverAction::SyncCursorTo(2)));
+    }
+    #[test]
+    fn cursor_recovery_does_not_starve_reports_or_override_pending_loads() {
+        let live = ev(2, true, 1, 180);
+        let state = DriverState::after(&live);
+        let queue = q(1, &[(2, true)], "off", None);
+        assert!(!plan_tick(&state, &live, &queue, None).contains(&DriverAction::SyncCursorTo(2)));
+        let state = DriverState::after(&ev(1, false, 180, 180));
+        let mut loading = live.clone();
+        loading.buffer_state = PlaybackBufferState::InitialBuffering;
+        assert!(!plan_tick(&state, &loading, &queue, None).contains(&DriverAction::SyncCursorTo(2)));
+        assert!(!plan_tick(
+            &state,
+            &live,
+            &q(1, &[(3, true), (2, true)], "off", None),
+            None
+        )
+        .contains(&DriverAction::SyncCursorTo(2)));
     }
 
     #[test]

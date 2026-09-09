@@ -71,12 +71,14 @@ pub async fn report_playback_state(
         }
     }
 
-    let (current_qid, next_qid) =
+    let (current_qid, next_qid, queue_version) =
         resolve_queue_item_ids_by_track_id(app, sync_state, authority, stamp, track_id).await;
-    if !authority.is_current(stamp) {
+    if current_qid.is_none() {
+        log::debug!(
+            "[QConnect] renderer report deferred: no unambiguous queue item for track {track_id}"
+        );
         return;
     }
-    let queue_version = app.queue_state_snapshot().await.version;
     if !authority.is_current(stamp) {
         return;
     }
@@ -119,10 +121,9 @@ pub async fn report_playback_state(
         return;
     }
 
-    // Report the live output format so the controller shows the correct quality
-    // badge (CD / Hi-Res). Reads the player's current output (sample_rate/
-    // bit_depth); channels default to stereo. Both reports dedup internally in
-    // qconnect-app, so calling them every report tick is cheap.
+    // File quality comes from the decoder; device quality comes only from
+    // the QBZ-owned output stream. A PCM container does not establish
+    // the effective device bit depth. Reports deduplicate in qconnect-app.
     let player = runtime.core().player();
     let sample_rate = player.state.get_sample_rate();
     let bit_depth = player.state.get_bit_depth();
@@ -144,19 +145,21 @@ pub async fn report_playback_state(
         if !authority.is_current(stamp) {
             return;
         }
-        if let Err(err) = app
-            .report_device_audio_quality_if_changed(
-                queue_version,
-                snapshot.sampling_rate,
-                snapshot.bit_depth,
-                snapshot.nb_channels,
-            )
-            .await
-        {
-            if !authority.is_current(stamp) {
-                return;
+        if let Some((output_rate, output_channels)) = player.state.output_stream_format() {
+            if let Err(err) = app
+                .report_device_audio_quality_if_changed(
+                    queue_version,
+                    output_rate as i32,
+                    0, // Effective device bit depth is not known from a PCM container.
+                    output_channels as i32,
+                )
+                .await
+            {
+                if !authority.is_current(stamp) {
+                    return;
+                }
+                log::warn!("[QConnect] Failed to report device audio quality: {err}");
             }
-            log::warn!("[QConnect] Failed to report device audio quality: {err}");
         }
     }
 }
@@ -207,29 +210,36 @@ async fn resolve_queue_item_ids_by_track_id(
     authority: &AuthorityCell,
     stamp: AuthorityStamp,
     track_id: u64,
-) -> (Option<u64>, Option<u64>) {
+) -> (Option<u64>, Option<u64>, qconnect_app::QueueVersion) {
     if !authority.is_current(stamp) {
-        return (None, None);
+        return (None, None, Default::default());
     }
     let queue = app.queue_state_snapshot().await;
     if !authority.is_current(stamp) {
-        return (None, None);
+        return (None, None, Default::default());
     }
-    let (current_qid, next_qid, next_track_id) =
-        qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, track_id);
+    let (current_qid, next_qid, next_track_id) = {
+        let state = sync_state.lock().await;
+        qconnect_app::resolve_report_queue_items(
+            &queue,
+            track_id,
+            state.last_renderer_queue_item_id,
+            state.last_renderer_next_queue_item_id,
+        )
+    };
 
     if let Some(current_qid) = current_qid {
         let mut state = sync_state.lock().await;
         if !authority.is_current(stamp) {
-            return (None, None);
+            return (None, None, Default::default());
         }
         state.last_renderer_queue_item_id = Some(current_qid);
         state.last_renderer_next_queue_item_id = next_qid;
         state.last_renderer_track_id = Some(track_id);
         state.last_renderer_next_track_id = next_track_id;
-        (Some(current_qid), next_qid)
+        (Some(current_qid), next_qid, queue.version)
     } else {
-        (None, None)
+        (None, None, queue.version)
     }
 }
 

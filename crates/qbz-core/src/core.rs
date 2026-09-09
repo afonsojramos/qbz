@@ -1109,6 +1109,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         result
     }
 
+    /// Reconcile an observed engine handover without guessing a duplicate occurrence.
+    pub async fn sync_gapless_successor(&self, id: u64) -> Option<(QueueTrack, bool)> {
+        let queue = self.queue.write().await;
+        let result = queue.sync_gapless_successor(id);
+        if matches!(result, Some((_, true))) {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        result
+    }
+
     /// Patch the cached quality of any queued Plex track whose `rating_key`
     /// matches one of `updates` (`(rating_key, bit_depth, sample_rate_khz)`).
     /// Frontend-agnostic hook for the Plex quality-hydration path: a track

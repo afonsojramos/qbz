@@ -4565,7 +4565,7 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                 // cursor through the stamped QConnect engine, so this owner
                 // poller must never realign it.
                 if owner_snapshot.is_some() {
-                    let _ = runtime.core().sync_current_to_id(track_id).await;
+                    let _ = runtime.core().sync_gapless_successor(track_id).await;
                 }
                 // UI reflection is authority-neutral: the local renderer must
                 // still paint and report guest playback.
