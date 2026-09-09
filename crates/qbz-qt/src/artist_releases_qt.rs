@@ -27,12 +27,11 @@
 //! so this file issues the identical core call itself:
 //!
 //! ```text
-//! get_releases_grid(id, release_type, RELEASE_PAGE_SIZE, offset, Some("release_date"))
+//! get_releases_grid(id, release_type, RELEASE_PAGE_SIZE, offset, Some(order))
 //! ```
 //!
-//! Same 20-row page size, same server sort — there is no separate discography
-//! endpoint, and `Some("release_date")` is what makes the picker's "Default"
-//! option mean something (see `sort_cards`).
+//! Same 20-row page size. Default/date/title use release_date pages; Popularity
+//! uses relevant pages. Changing between them restarts pagination.
 //!
 //! # Why the rows are `home_qt::HomeCard`, not `album_qt::AlbumCardData`
 //!
@@ -188,6 +187,7 @@ fn map_card(release: &PageArtistRelease) -> Option<HomeCard> {
         artist: card.year.clone(),
         artist_id: String::new(),
         genre: card.genre,
+        release_sort_key: card.release_sort_key,
         year: card.year,
         quality_tier: card.quality_tier,
         quality_detail: card.quality_detail,
@@ -204,17 +204,28 @@ fn map_card(release: &PageArtistRelease) -> Option<HomeCard> {
 /// `label_qt::sort_cards`, minus the artist arms (this page's picker has five
 /// options and stops at title-desc, and `artist` holds the year here anyway).
 ///
-/// `year` is the PLAIN 4-digit year, so the lexicographic compare IS a
-/// chronological one.
+/// `release_sort_key` carries the original date independently of the localized
+/// display label in `year`.
 ///
-/// `"default"` falls through UNSORTED, and that is the whole point of the key:
-/// the fetch asks the server for `release_date` order, so leaving the vector
-/// alone IS "the order Qobuz sent". Applying any "sensible default" here is a
-/// visible parity break on the very first frame.
+/// Default and Popularity restore the server ordinal, including after local
+/// sorts and appended pages. The fetch selects the matching server order.
 fn sort_cards(items: &mut [HomeCard], sort: &str) {
     match sort {
-        "oldest" | "year-asc" => items.sort_by(|a, b| a.year.cmp(&b.year)),
-        "newest" | "year-desc" => items.sort_by(|a, b| b.year.cmp(&a.year)),
+        "default" | "relevant" => items.sort_by_key(|card| card.default_order),
+        "oldest" | "year-asc" => items.sort_by(|a, b| {
+            qbz_text_utils::dates::compare_release_dates(
+                a.release_sort_key,
+                b.release_sort_key,
+                false,
+            )
+        }),
+        "newest" | "year-desc" => items.sort_by(|a, b| {
+            qbz_text_utils::dates::compare_release_dates(
+                a.release_sort_key,
+                b.release_sort_key,
+                true,
+            )
+        }),
         "title-asc" => items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
         "title-desc" => items.sort_by(|a, b| b.title.to_lowercase().cmp(&a.title.to_lowercase())),
         _ => {}
@@ -293,32 +304,33 @@ pub fn load_more() {
     fetch(generation, artist_id, release_type, offset, false);
 }
 
-/// The sort picker (`main.rs:15143-15148`) — persist, re-order the LOADED set
-/// in place, republish. NO fetch: none of the five keys has a server
-/// equivalent, every `get_releases_grid` call in both trees passes the constant
-/// `Some("release_date")`, and `sort_album_items` applies the picker locally.
-///
-/// The store is `artist_prefs`, SHARED with the artist page's per-section
-/// picker: sorting here also re-seats that one on the next visit, and vice
-/// versa. That is the reference's design, not a coincidence — the pref is keyed
-/// by release_type alone.
-///
-/// 1:1 note carried over from `artist_qt::resort_section`: picking "Default"
-/// after "A–Z" does NOT restore the server order until the page is reloaded,
-/// because "default" is a no-op over the vector as it stands. The reference
-/// behaves identically.
+/// Popularity is the server's relevant order; reload from page zero when
+/// switching its pagination order. Other sorts keep the loaded set.
 pub fn set_sort(sort: String) {
-    // Persist FIRST and OUTSIDE the lock — it is a read-modify-write of a file
-    // shared with the Slint build, and there is no reason to hold the page
-    // state across it.
     let release_type = with_state(|s| s.release_type.clone());
     crate::artist_prefs::set_sort(&release_type, &sort);
-    with_state(|s| {
+    let reload = with_state(|s| {
+        let changed = crate::artist_qt::release_server_sort(&s.sort_by)
+            != crate::artist_qt::release_server_sort(&sort);
         s.sort_by = sort;
-        let key = s.sort_by.clone();
-        sort_cards(&mut s.cards, &key);
+        if changed {
+            s.generation = s.generation.wrapping_add(1);
+            s.cards.clear();
+            s.offset = 0;
+            s.has_more = false;
+            s.loading = true;
+            s.load_more_loading = false;
+            s.load_error = false;
+            Some((s.generation, s.artist_id.clone(), s.release_type.clone()))
+        } else {
+            sort_cards(&mut s.cards, &s.sort_by);
+            None
+        }
     });
     publish();
+    if let Some((generation, artist_id, release_type)) = reload {
+        fetch(generation, artist_id, release_type, 0, true);
+    }
 }
 
 /// The error state's Retry button (`main.rs:15158-15176`) — a full re-run of
@@ -371,6 +383,7 @@ pub fn republish() {
 /// `load_more_loading` and leaves what is already on screen alone
 /// (`main.rs:15129`).
 fn fetch(generation: u64, artist_id: String, release_type: String, offset: u32, first: bool) {
+    let order = with_state(|s| crate::artist_qt::release_server_sort(&s.sort_by));
     let runtime = crate::app();
     crate::spawn(async move {
         let Ok(id) = artist_id.parse::<u64>() else {
@@ -385,7 +398,7 @@ fn fetch(generation: u64, artist_id: String, release_type: String, offset: u32, 
                 &release_type,
                 crate::artist_qt::RELEASE_PAGE_SIZE,
                 offset,
-                Some("release_date"),
+                Some(order),
             )
             .await
         {
@@ -401,7 +414,16 @@ fn fetch(generation: u64, artist_id: String, release_type: String, offset: u32, 
 
         let returned = resp.items.len() as u32;
         let server_has_more = resp.has_more;
-        let mut cards: Vec<HomeCard> = resp.items.iter().filter_map(map_card).collect();
+        let mut cards: Vec<HomeCard> = resp
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, release)| {
+                let mut card = map_card(release)?;
+                card.default_order = offset.saturating_add(index as u32);
+                Some(card)
+            })
+            .collect();
         let missing = crate::home_qt::attach_card_art(&mut cards);
 
         {
@@ -487,5 +509,51 @@ fn fail(generation: u64, first: bool) {
     });
     if changed {
         publish();
+    }
+}
+
+#[cfg(test)]
+mod release_order_tests {
+    use super::*;
+
+    #[test]
+    fn default_and_popularity_preserve_server_rank_after_local_sorts_and_pages() {
+        let mut cards = vec![
+            HomeCard {
+                id: "beast".into(),
+                default_order: 0,
+                release_sort_key: 19820322,
+                ..Default::default()
+            },
+            HomeCard {
+                id: "mind".into(),
+                default_order: 1,
+                release_sort_key: 19830501,
+                ..Default::default()
+            },
+            HomeCard {
+                id: "senjutsu".into(),
+                default_order: 2,
+                release_sort_key: 20210903,
+                ..Default::default()
+            },
+        ];
+        sort_cards(&mut cards, "newest");
+        assert_eq!(cards[0].id, "senjutsu");
+        sort_cards(&mut cards, "relevant");
+        assert_eq!(
+            cards.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(),
+            ["beast", "mind", "senjutsu"]
+        );
+        cards.push(HomeCard {
+            id: "page2".into(),
+            default_order: 20,
+            release_sort_key: 19800401,
+            ..Default::default()
+        });
+        sort_cards(&mut cards, "oldest");
+        assert_eq!(cards[0].id, "page2");
+        sort_cards(&mut cards, "default");
+        assert_eq!(cards.last().unwrap().id, "page2");
     }
 }

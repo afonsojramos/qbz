@@ -890,7 +890,7 @@ mod phase_a_tests {
         assert!(local.contains("visible: root.view.tracksGroup !== \"off\""));
         assert!(local.contains("completeAlphabet: true"));
         assert!(library.contains("activeTab === \"tracks\" && tracksGroup !== \"off\""));
-        assert!(library.contains("completeAlphabet: true"));
+        assert!(library.contains("completeAlphabet: !root.dateGrouping"));
         assert!(strip.contains("model: root.completeAlphabet ? 27"));
         assert!(strip.contains("\"#ABCDEFGHIJKLMNOPQRSTUVWXYZ\".charAt(position)"));
         assert!(strip.contains("enabled: cell.entry.index >= 0"));

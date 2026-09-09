@@ -33,6 +33,7 @@
 // carries the .slint's header-colour rules with it (light text + overlay
 // CircleActions while the band is on).
 
+import "../assets/release-sort.js" as ReleaseSort
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
@@ -173,7 +174,7 @@ Rectangle {
                 // on every `setSectionSort` — so there is nothing to do to it.)
                 out.push(extra === undefined ? src
                          : { "releaseType": src.releaseType, "title": src.title,
-                             "cards": cards, "hasMore": hasMore, "sortBy": sortBy })
+                             "cards": cards, "hasMore": hasMore, "sortBy": sortBy, "sortLoading": src.sortLoading === true })
                 continue
             }
             // Filtered arm: the merge happened FIRST, so an appended album
@@ -206,23 +207,18 @@ Rectangle {
     /// Repeaters the same reference back — "Rebind requires a NEW object
     /// reference" (cards/PlaylistCollage.qml).
     ///
-    /// `year` on these cards is the PLAIN 4-digit year (artist_qt.rs
-    /// `map_release` slices `dates.original[..4]`), so the string compare is
-    /// chronological. "default" and every unknown key fall through UNSORTED —
-    /// `album_map.rs:262` is a bare `_ => {}`, because "Default" means "the
-    /// order Qobuz sent".
+    /// Sort by the original numeric date; `year` is a localized label.
+    /// Default preserves the server order, as in the official client.
     function sortReleaseCards(cards, sort) {
         function byTitle(a, b) {
             var x = (a.title || "").toLowerCase(), y = (b.title || "").toLowerCase()
             return x < y ? -1 : (x > y ? 1 : 0)
         }
-        function byYear(a, b) {
-            var x = a.year || "", y = b.year || ""
-            return x < y ? -1 : (x > y ? 1 : 0)
-        }
         switch (sort) {
-        case "oldest": return cards.slice().sort(byYear)
-        case "newest": return cards.slice().sort(function (a, b) { return byYear(b, a) })
+        case "relevant":
+        case "default": return cards.slice().sort(function (a, b) { return (a.defaultOrder || 0) - (b.defaultOrder || 0) })
+        case "oldest": return cards.slice().sort(function (a, b) { return ReleaseSort.compareDates(a, b, false) })
+        case "newest": return cards.slice().sort(function (a, b) { return ReleaseSort.compareDates(a, b, true) })
         case "title-asc": return cards.slice().sort(byTitle)
         case "title-desc": return cards.slice().sort(function (a, b) { return byTitle(b, a) })
         default: return cards
@@ -682,13 +678,25 @@ Rectangle {
     /// longer exists, and the republish re-creates every delegate.
     function releaseSortChanged(releaseType, sortKey) {
         delete releaseFade[releaseType]
-        if (root.releaseOverlay[releaseType] !== undefined) {
-            var e = Object.assign({}, root.releaseOverlay[releaseType])
-            delete e.cards
-            var o = Object.assign({}, root.releaseOverlay)
-            o[releaseType] = e
-            root.releaseOverlay = o
+        var sections = root.artist.releaseSections || []
+        var oldSort = "default"
+        for (var i = 0; i < sections.length; i++) {
+            if (sections[i].releaseType === releaseType) oldSort = sections[i].sortBy || "default"
         }
+        var serverChanged = (oldSort === "relevant") !== (sortKey === "relevant")
+        var overlay = Object.assign({}, root.releaseOverlay)
+        if (serverChanged) {
+            delete overlay[releaseType]
+            delete root.releaseCursor[releaseType]
+            var pending = Object.assign({}, root.releasePending)
+            delete pending[releaseType]
+            root.releasePending = pending
+        } else if (overlay[releaseType] !== undefined) {
+            var e = Object.assign({}, overlay[releaseType])
+            delete e.cards
+            overlay[releaseType] = e
+        }
+        root.releaseOverlay = overlay
         QbzArtist.setSectionSort(releaseType, sortKey)
     }
     Timer {
@@ -2122,7 +2130,8 @@ Rectangle {
                           QbzSession.tr("Newest", QbzSession.trRev),
                           QbzSession.tr("Oldest", QbzSession.trRev),
                           QbzSession.tr("A–Z", QbzSession.trRev),
-                          QbzSession.tr("Z–A", QbzSession.trRev)]
+                          QbzSession.tr("Z–A", QbzSession.trRev),
+                          QbzSession.tr("Popularity", QbzSession.trRev)]
                 // ReleaseGrid.slint:34-39 — the wire key back to an index. This
                 // is what makes the picker come back showing the sort the user
                 // actually chose: `sortBy` is stamped on the section by
@@ -2136,7 +2145,7 @@ Rectangle {
                 currentIndex: {
                     var s = relSection.section.sortBy || "default"
                     return s === "newest" ? 1 : s === "oldest" ? 2
-                         : s === "title-asc" ? 3 : s === "title-desc" ? 4 : 0
+                         : s === "title-asc" ? 3 : s === "title-desc" ? 4 : s === "relevant" ? 5 : 0
                 }
                 // ReleaseGrid.slint:81-89 — index to wire key. These five
                 // strings are BOTH what gets persisted and what the sort
@@ -2148,7 +2157,7 @@ Rectangle {
                 onSelected: function (i) {
                     root.releaseSortChanged(relSection.section.releaseType,
                         i === 1 ? "newest" : i === 2 ? "oldest"
-                        : i === 3 ? "title-asc" : i === 4 ? "title-desc" : "default")
+                        : i === 3 ? "title-asc" : i === 4 ? "title-desc" : i === 5 ? "relevant" : "default")
                 }
             }
             // Play all / Play random / Play selected over THIS bucket, in
@@ -2250,7 +2259,7 @@ Rectangle {
         // `section.hasMore` gate and bridge call as before. What is new is the
         // placeholder row it draws underneath while the page is in flight.
         QbzLoadMore {
-            visible: section.hasMore
+            visible: section.hasMore || section.sortLoading === true
             width: parent.width
             // The grid above has a 224 x 270 PITCH: cards/AlbumCard.qml:186-189
             // is 200 x 246 and the Grid adds 24px of column/row spacing — the
@@ -2265,7 +2274,7 @@ Rectangle {
             // in-flight state is driven locally, off root's map, cleared by
             // that signal and capped by root's 8s settle timer (the error path
             // emits nothing at all — main.rs:872).
-            busy: root.releasePending[section.releaseType] === true
+            busy: section.sortLoading === true || root.releasePending[section.releaseType] === true
             onClicked: {
                 // BEFORE the call: the threshold is the count on screen now
                 // (`section.cards` is the MERGED array — document page 1 plus

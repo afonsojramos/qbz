@@ -60,7 +60,7 @@ Item {
                 id: cell
                 required property int index
                 readonly property var entry: root.entryAt(index)
-                width: 18
+                width: root.width
                 // A complete rail is 27 entries (# + A-Z). Keep the reference
                 // 15px row when it fits, then compress uniformly on short
                 // windows instead of painting letters outside the viewport.

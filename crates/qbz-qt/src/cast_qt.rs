@@ -2492,7 +2492,10 @@ impl CastService {
     // Ok(true) = handled. Call sites live on the playback path — see the
     // report's GLUE NEEDED for `playback_qt.rs`.
 
-    pub(crate) async fn toggle_play_if_cast(self: &Arc<Self>) -> Result<bool, String> {
+    pub(crate) async fn request_playing_if_cast(
+        self: &Arc<Self>,
+        requested: Option<bool>,
+    ) -> Result<bool, String> {
         // Serialize both derivation and execution of a toggle. Two rapid
         // toggles must observe each other's committed target (play, then
         // pause), rather than both deriving `play` from the same old state.
@@ -2503,6 +2506,9 @@ impl CastService {
                 return Ok(false);
             };
             let playing = inner.is_playing;
+            if requested == Some(playing) {
+                return Ok(true);
+            }
             let transport = committed_media_stamp(&inner)
                 .and_then(|media| issue_transport_intent(&mut inner, media));
             (connection, playing, transport)
@@ -4594,7 +4600,7 @@ mod tests {
         assert!(seek.contains("transport_stamp_matches"));
 
         let toggle = source
-            .split_once("pub(crate) async fn toggle_play_if_cast")
+            .split_once("pub(crate) async fn request_playing_if_cast")
             .expect("toggle")
             .1
             .split_once("pub(crate) async fn seek_fraction_if_cast")

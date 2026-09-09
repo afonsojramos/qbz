@@ -555,6 +555,8 @@ Item {
                 { "value": "off", "label": QbzSession.tr("Group: Off", QbzSession.trRev) },
                 { "value": "alpha", "label": QbzSession.tr("Group: A-Z", QbzSession.trRev) },
                 { "value": "artist", "label": QbzSession.tr("Group: Artist", QbzSession.trRev) },
+                { "value": "year", "label": QbzSession.tr("Group: Year", QbzSession.trRev) },
+                { "value": "decade", "label": QbzSession.tr("Group: Decade", QbzSession.trRev) },
             ]
             onPicked: function (v) { root.view.setPref("albumsGroup", v) }
         }
@@ -591,6 +593,8 @@ Item {
                         root.view.albumsSort === "title-asc" ? QbzSession.tr("Title A-Z", QbzSession.trRev)
                         : root.view.albumsSort === "title-desc" ? QbzSession.tr("Title Z-A", QbzSession.trRev)
                         : root.view.albumsSort === "artist-asc" ? QbzSession.tr("Artist A-Z", QbzSession.trRev)
+                        : root.view.albumsSort === "newest" ? QbzSession.tr("Newest", QbzSession.trRev)
+                        : root.view.albumsSort === "oldest" ? QbzSession.tr("Oldest", QbzSession.trRev)
                         : QbzSession.tr("Default", QbzSession.trRev))
                     color: theme.textSecondary
                     font.pixelSize: 12
@@ -610,6 +614,8 @@ Item {
                 Repeater {
                     model: [
                         { "value": "default", "label": QbzSession.tr("Default", QbzSession.trRev) },
+                        { "value": "newest", "label": QbzSession.tr("Newest", QbzSession.trRev) },
+                        { "value": "oldest", "label": QbzSession.tr("Oldest", QbzSession.trRev) },
                         { "value": "title-asc", "label": QbzSession.tr("Title A-Z", QbzSession.trRev) },
                         { "value": "title-desc", "label": QbzSession.tr("Title Z-A", QbzSession.trRev) },
                         { "value": "artist-asc", "label": QbzSession.tr("Artist A-Z", QbzSession.trRev) },

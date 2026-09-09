@@ -3048,12 +3048,29 @@ pub async fn enqueue_single_track(
 // Transport
 // ---------------------------------------------------------------------------
 
+// Repeated Play must not cancel a pending start; Pause must cancel it and
+// must never enter the cold-start/resume branch of the transport ladder.
+fn ignore_playing_request(requested: Option<bool>, playing: bool, pending: bool) -> bool {
+    match requested {
+        Some(true) => playing || pending,
+        Some(false) => !playing && !pending,
+        None => false,
+    }
+}
+
 pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
+    request_playing(runtime, None).await;
+}
+
+pub(crate) async fn request_playing(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    requested: Option<bool>,
+) {
     let Some(_transport_action) = begin_transport_action() else {
         return;
     };
     // A connected renderer owns transport — the local player is stopped.
-    match crate::cast_qt::service().toggle_play_if_cast().await {
+    match crate::cast_qt::service().request_playing_if_cast(requested).await {
         Ok(true) => return,
         Ok(false) => {}
         Err(e) => {
@@ -3067,7 +3084,7 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // is no local fallback (a peer owns audio; a local resume would
     // double-play).
     if let Some(svc) = crate::qconnect_qt::service() {
-        match svc.toggle_remote_renderer_playback_if_active().await {
+        match svc.request_remote_renderer_playback_if_active(requested).await {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => {
@@ -3078,6 +3095,10 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     }
     let event = runtime.core().player().get_playback_event();
     let was_playing = event.is_playing;
+    let pending = PENDING_PLAY_ID.load(Ordering::Relaxed);
+    if ignore_playing_request(requested, was_playing, pending != 0) {
+        return;
+    }
 
     // COLD CURSOR: not playing, and the engine holds no loaded stream.
     //
@@ -3104,7 +3125,6 @@ pub async fn toggle_play(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
     // start. Without this arm the window below is re-entrant — see
     // PENDING_PLAY_ID. Ordered before the `has_loaded_audio` test because
     // during that window the engine answers false to both.
-    let pending = PENDING_PLAY_ID.load(Ordering::Relaxed);
     if !was_playing && pending != 0 {
         let Some(_owner_action) = begin_owner_action() else {
             return;
@@ -5187,6 +5207,27 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn explicit_pause_never_starts_a_paused_or_empty_player() {
+        for playing in [false, true] {
+            for pending in [false, true] {
+                let ignored = super::ignore_playing_request(Some(false), playing, pending);
+                assert_eq!(ignored, !playing && !pending);
+                // A non-ignored Pause must either pause audio or cancel a load.
+                assert!(ignored || playing || pending);
+            }
+        }
+        // Repeating Play while the first request is loading must not cancel it.
+        assert!(super::ignore_playing_request(Some(true), false, true));
+        assert!(super::ignore_playing_request(Some(true), true, false));
+        assert!(!super::ignore_playing_request(Some(true), false, false));
+        for playing in [false, true] {
+            for pending in [false, true] {
+                assert!(!super::ignore_playing_request(None, playing, pending));
+            }
+        }
+    }
+
     use super::{
         begin_resolved_play, cancel_owner_playback_tasks, capture_owner_scoped_snapshot,
         filter_queue_with, gapless_edge_matches, gapless_successor_changed,

@@ -6847,3 +6847,12 @@ msgstr "Les images SACD utilisent des métadonnées dans un fichier annexe."
 
 msgid "SACD track numbers cannot be changed."
 msgstr "Les numéros de piste SACD ne peuvent pas être modifiés."
+
+msgid "Group: Year"
+msgstr "Grouper : Année"
+
+msgid "Group: Decade"
+msgstr "Grouper : Décennie"
+
+msgid "Popularity"
+msgstr "Popularité"

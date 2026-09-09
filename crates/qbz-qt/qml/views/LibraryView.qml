@@ -24,7 +24,7 @@
 //
 // Filter by genre IS wired, on the All / Tracks / Albums toolbars — the three
 // places the Slint FavoritesView draws it (FavoritesView.slint:609, :652,
-// :864, `context: "library-all"`). It filters CLIENT-side over the feed,
+// :864). Each tab now has an independent context. Filtering runs over the feed,
 // exactly like library_all.rs::derive: an item shows when its (lowercased)
 // genre contains one of the selected genre names (+ their sub-genres), so rows
 // with no genre at all (artist / label / playlist) drop out while a genre is
@@ -36,6 +36,7 @@
 // toggle all go through `setPref` into the same favorites_ui.json the shipping
 // Slint build writes. Search queries stay transient — deliberately, there too.
 
+import "../assets/release-sort.js" as ReleaseSort
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Window
@@ -195,15 +196,17 @@ Rectangle {
     // Grouping REORDERS rows; for the tracks list it also injects separator
     // rows — see visibleItems / withGroupHeaders.
     property string tracksGroup: "off"   // "off" | "album" | "artist" | "name"
-    property string albumsGroup: "off"   // "off" | "alpha" | "artist"
+    property string albumsGroup: "off"   // "off" | "alpha" | "artist" | "year" | "decade"
     property string artistsGroup: "off"  // "off" | "alpha"
     property string sortBy: "date"      // "date" | "title" | "artist"
     property bool sortAsc: false        // date: false = newest first
-    // Shared source state for All / Tracks / Albums. The bridge singleton
-    // survives navigation, so the two new per-tab toggles inherit the same
-    // session persistence (and default ON) as their All-tab counterparts.
-    readonly property bool showPurchases: QbzLibrary.sessionShowPurchases
-    readonly property bool showFavorites: QbzLibrary.sessionShowFavorites
+    // Each tab retains its own source choices across navigation.
+    readonly property bool showPurchases: activeTab === "albums"
+        ? QbzLibrary.sessionAlbumsShowPurchases : activeTab === "tracks"
+        ? QbzLibrary.sessionTracksShowPurchases : QbzLibrary.sessionShowPurchases
+    readonly property bool showFavorites: activeTab === "albums"
+        ? QbzLibrary.sessionAlbumsShowFavorites : activeTab === "tracks"
+        ? QbzLibrary.sessionTracksShowFavorites : QbzLibrary.sessionShowFavorites
     readonly property bool showFollowing: QbzLibrary.sessionShowFollowing
     property bool showLocal: true
     // Only bumped when a live heart change can alter membership in the
@@ -215,8 +218,16 @@ Rectangle {
     property string playlistsView: "grid" // "grid" | "list"
     property string artistsView: "grid"   // "grid" | "sidepanel"
 
-    function setShowPurchases(on) { QbzLibrary.sessionShowPurchases = on }
-    function setShowFavorites(on) { QbzLibrary.sessionShowFavorites = on }
+    function setShowPurchases(on) {
+        if (activeTab === "albums") QbzLibrary.sessionAlbumsShowPurchases = on
+        else if (activeTab === "tracks") QbzLibrary.sessionTracksShowPurchases = on
+        else QbzLibrary.sessionShowPurchases = on
+    }
+    function setShowFavorites(on) {
+        if (activeTab === "albums") QbzLibrary.sessionAlbumsShowFavorites = on
+        else if (activeTab === "tracks") QbzLibrary.sessionTracksShowFavorites = on
+        else QbzLibrary.sessionShowFavorites = on
+    }
     function setShowFollowing(on) { QbzLibrary.sessionShowFollowing = on }
 
     // --- persisted toolbar choices (library_prefs.rs) --------------------
@@ -274,7 +285,9 @@ Rectangle {
         QbzLibrary.setLibraryPref("allShowLocal", on ? "true" : "false")
     }
 
-    // --- shared genre filter, "library-all" context ----------------------
+    // Genre selections are independent for each Library tab, too.
+    readonly property string genreContext: activeTab === "albums" ? "library-albums"
+        : activeTab === "tracks" ? "library-tracks" : "library-all"
     // Read STRAIGHT off the bridge singleton, not off libGenrePopup: the
     // popup is declared LAST (z-order) and a creation-time binding that
     // dereferences a not-yet-created id registers NO dependency, so it would
@@ -287,13 +300,13 @@ Rectangle {
             return {}
         }
     }
-    readonly property int genreCount: (genreDoc.counts || {})["library-all"] || 0
+    readonly property int genreCount: (genreDoc.counts || {})[genreContext] || 0
     // Selected genre NAMES (+ sub-genres), lowercased once here — the port's
     // FeedItem keeps the display casing (the Slint model lowercases at build
     // time instead, library_all.rs:540). Reading this inside visibleItems()
     // is what makes the grid/list model re-derive when a chip is toggled.
     readonly property var genreNames: {
-        var src = (genreDoc.names || {})["library-all"] || []
+        var src = (genreDoc.names || {})[genreContext] || []
         var out = []
         for (var i = 0; i < src.length; i++)
             out.push(String(src[i]).toLowerCase())
@@ -316,8 +329,7 @@ Rectangle {
         if (!root.showPurchases)
             hidden.push(QbzSession.tr("Purchases", tr))
         // Following / Local are All-only sources. Do not claim they filter
-        // the Albums or Tracks toolbar just because their shared session
-        // switches happen to be off on All.
+        // the Albums or Tracks toolbar when those switches are off on All.
         if (root.activeTab === "all") {
             if (!root.showFollowing)
                 hidden.push(QbzSession.tr("Following", tr))
@@ -332,7 +344,7 @@ Rectangle {
 
     // Other-tab state.
     property string tabSearch: ""
-    property string albumsSort: "default" // default|title-asc|title-desc|artist-asc
+    property string albumsSort: "default" // default|title-asc|title-desc|artist-asc|oldest|newest
     property string playlistsSubTab: "favorites"
 
     /// The All tab's search field debounces; the toolbar routes through here
@@ -488,12 +500,18 @@ Rectangle {
         return out
     }
 
+    function matchesSources(isPurchased, isFavorite, isFollowing) {
+        var following = activeTab === "all" && showFollowing
+        var any = showPurchases || showFavorites || following
+        return !any || (showPurchases && isPurchased)
+            || (showFavorites && isFavorite) || (following && isFollowing)
+    }
+
     function visibleItems() {
         var items = []
         var i
         if (activeTab === "all") {
             var needle = search.toLowerCase()
-            var anyGroup = showPurchases || showFavorites || showFollowing
             // Genre gate (library_all.rs::derive): empty = no filter;
             // otherwise the item's genre must contain one of the selected
             // names, so genre-less kinds are excluded.
@@ -510,13 +528,9 @@ Rectangle {
                 var isLocal = it.source === "local" || it.source === "plex"
                 if (isLocal) {
                     if (!showLocal) continue
-                } else if (anyGroup) {
-                    var g = it.group
-                    var ok = (g === "purchases" && showPurchases)
-                        || (g === "favorites" && showFavorites)
-                        || (g === "following" && showFollowing)
-                    if (!ok) continue
-                }
+                } else if (!matchesSources(it.group === "purchases",
+                                           it.group === "favorites",
+                                           it.group === "following")) continue
                 if (needle !== ""
                     && it._titleLc.indexOf(needle) < 0
                     && it._artistLc.indexOf(needle) < 0) continue
@@ -554,12 +568,9 @@ Rectangle {
         var sourceTab = activeTab === "tracks" || activeTab === "albums"
         var sourceKind = activeTab === "tracks" ? "track" : "album"
         var tabGenres = sourceTab ? root.genreNames : []
-        // Mobile-Qobuz semantics (owner video, 2026-09-03): neither switch is
-        // the unconstrained union, either switch alone selects that source,
-        // and both switches select their INTERSECTION. Membership comes from
-        // the actual source rows, not the asynchronously-warmed isFavorite
-        // cache on a purchase row. Rendering still prefers the purchase row
-        // so a qualifying favourite retains its purchase-quality metadata.
+        // Enabled sources form a union in every tab. With none selected,
+        // retain All's unconstrained behavior. Prefer purchase metadata for
+        // entities belonging to both sources, and render each entity once.
         var purchased = feed._tabPurchased || ({})
         var favorites = feed._tabFavorites || ({})
         var tabSeen = ({})
@@ -570,16 +581,7 @@ Rectangle {
                 var sourceKey = sourceKind + ":" + x.id
                 var isPurchased = purchased[sourceKey] === true
                 var isFavorite = favorites[sourceKey] === true
-                var included
-                if (showPurchases && showFavorites) {
-                    included = isPurchased && isFavorite
-                } else if (showPurchases) {
-                    included = isPurchased
-                } else if (showFavorites) {
-                    included = isFavorite
-                } else {
-                    included = isPurchased || isFavorite
-                }
+                var included = matchesSources(isPurchased, isFavorite, false)
                 // One representative row per included entity. A purchase row
                 // wins even in Favorites-only so its quality badge survives.
                 keep = included && ((isPurchased && x.group === "purchases")
@@ -601,15 +603,8 @@ Rectangle {
             }
             if (keep && hit(x)) items.push(x)
         }
-        if (activeTab === "albums" && albumsSort !== "default") {
-            var field = albumsSort.indexOf("artist") === 0 ? "artist" : "title"
-            items.sort(function (a, b) {
-                var av = field === "artist" ? a._artistLc : a._titleLc
-                var bv = field === "artist" ? b._artistLc : b._titleLc
-                return av < bv ? -1 : 1
-            })
-            if (albumsSort.slice(-4) === "desc") items.reverse()
-        }
+        if (activeTab === "albums")
+            items = ReleaseSort.sortAlbums(items, albumsSort, albumsGroup)
         // --- Group-by (favorites.rs::derive_tracks / derive_albums) ------
         // Grouping REORDERS the rows so a group's entries sit together. The
         // TRACKS list also gets separator rows (see withGroupHeaders); the
@@ -637,11 +632,6 @@ Rectangle {
             else if (tracksGroup === "artist") by(["artist", "album", "title"])
             else if (tracksGroup === "name") by(["title"])
             items = withGroupHeaders(items, tracksGroup)
-        } else if (activeTab === "albums" && albumsGroup !== "off") {
-            // "alpha" is the album title's initial, which title-order gives
-            // for free; "artist" groups by artist then title.
-            if (albumsGroup === "alpha") by(["title"])
-            else if (albumsGroup === "artist") by(["artist", "title"])
         } else if (activeTab === "artists" && artistsGroup === "alpha") {
             by(["title"])
         }
@@ -658,7 +648,10 @@ Rectangle {
     // Flickable cannot address a cell; a QML GridView can, so the strip lands
     // on the letter's FIRST card instead of near it. Same strip, same
     // buckets, an exact landing.
+    readonly property bool dateGrouping: activeTab === "albums"
+        && (albumsGroup === "year" || albumsGroup === "decade")
     readonly property bool alphaActive:
+        dateGrouping ||
         (activeTab === "tracks" && tracksGroup !== "off")
         || (activeTab === "albums" && albumsGroup === "alpha")
         || (activeTab === "artists" && artistsGroup === "alpha" && artistsView === "grid")
@@ -679,7 +672,9 @@ Rectangle {
                 last = trackKey
                 continue
             }
-            var key = root.alphaKey(rows[i].title)
+            var key = root.dateGrouping
+                ? ReleaseSort.groupLabel(rows[i], root.albumsGroup)
+                : root.alphaKey(rows[i].title)
             if (key !== last) {
                 out.push({ "letter": key, "index": i })
                 last = key
@@ -1262,7 +1257,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.leftMargin: 32
-                anchors.rightMargin: root.alphaVisible ? 52 : 32
+                anchors.rightMargin: root.alphaVisible ? (root.dateGrouping ? 98 : 52) : 32
                 anchors.topMargin: 16
                 height: grid.visible ? parent.height - 16 : 0
                 visible: content.showGrid && root.activeTab !== "tracks"
@@ -1324,7 +1319,7 @@ Rectangle {
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.leftMargin: 32
-                anchors.rightMargin: root.alphaVisible ? 52 : 32
+                anchors.rightMargin: root.alphaVisible ? (root.dateGrouping ? 98 : 52) : 32
                 anchors.topMargin: 10 + content.barInset
                 height: list.visible ? parent.height - (10 + content.barInset) : 0
                 visible: content.showList
@@ -1452,7 +1447,7 @@ Rectangle {
                 visible: content.showAlbumsList
                 anchors.fill: parent
                 anchors.leftMargin: 32
-                anchors.rightMargin: root.alphaVisible ? 52 : 32
+                anchors.rightMargin: root.alphaVisible ? (root.dateGrouping ? 98 : 52) : 32
                 anchors.topMargin: 16
                 view: root
                 rows: content.showAlbumsList ? root.visibleRows : []
@@ -1560,7 +1555,8 @@ Rectangle {
                 anchors.topMargin: 16
                 anchors.bottom: parent.bottom
                 jumps: root.alphaJumps
-                completeAlphabet: true
+                width: root.dateGrouping ? 64 : 18
+                completeAlphabet: !root.dateGrouping
                 onJump: function (ordinal, index) { root.alphaJumpTo(index) }
             }
 
@@ -1571,7 +1567,7 @@ Rectangle {
             ScrollMemory { target: grid; scope: "library:" + root.activeTab }
             QbzScrollBar {
                 anchors.right: parent.right
-                anchors.rightMargin: root.alphaVisible ? 34 : 4
+                anchors.rightMargin: root.alphaVisible ? (root.dateGrouping ? 80 : 34) : 4
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: grid
@@ -1583,7 +1579,7 @@ Rectangle {
             ScrollMemory { target: list; scope: "library:" + root.activeTab }
             QbzScrollBar {
                 anchors.right: parent.right
-                anchors.rightMargin: root.alphaVisible ? 34 : 4
+                anchors.rightMargin: root.alphaVisible ? (root.dateGrouping ? 80 : 34) : 4
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
                 target: list
@@ -1653,12 +1649,11 @@ Rectangle {
     // Declared LAST: declaration order IS z-order, so the popup sits above
     // the toolbar and the grid and keeps its own presses. Hidden AND
     // disabled while closed, so it never eats a click meant for the view.
-    // Its "library-all" context is independent from Discover's "discover"
-    // one — each button carries its own count.
+    // Each Library tab and Discover carry independent selections and counts.
     GenreFilterPopup {
         id: libGenrePopup
         anchors.fill: parent
-        context: "library-all"
+        context: root.genreContext
         // Under the 56px toolbar, right-aligned like the Slint overlay.
         anchorTop: 62
         anchorRight: 32

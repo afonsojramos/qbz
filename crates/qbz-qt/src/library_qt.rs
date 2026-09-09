@@ -48,7 +48,6 @@ use crate::home_qt;
 
 /// Matches favorites.rs paging.
 const PAGE_SIZE: u32 = 500;
-const MAX_ITEMS: usize = 10_000;
 
 /// One normalized row (superset of the per-tab cards + the All feed item).
 #[derive(Clone, Default, Serialize)]
@@ -151,6 +150,12 @@ pub struct FeedItem {
     pub cache_status: i32,
     pub genre: String,
     pub year: String,
+    #[serde(
+        default,
+        rename = "releaseSortKey",
+        skip_serializing_if = "is_zero_u32"
+    )]
+    pub release_sort_key: u32,
     pub duration: String,
     /// Matching evidence carried by Qobuz favourite-track rows. Omitted for
     /// every other feed kind so the high-cardinality mixed document only pays
@@ -348,15 +353,29 @@ async fn fetch_favorites(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     key: &str,
 ) -> Result<(Vec<serde_json::Value>, usize), String> {
+    collect_favorite_pages(key, |offset| async move {
+        runtime
+            .core()
+            .get_favorites(key, PAGE_SIZE, offset)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+async fn collect_favorite_pages<F, Fut>(
+    key: &str,
+    mut fetch: F,
+) -> Result<(Vec<serde_json::Value>, usize), String>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, String>>,
+{
     let mut total: usize;
     let mut all_items: Vec<serde_json::Value> = Vec::new();
     let mut offset = 0u32;
     loop {
-        let value = runtime
-            .core()
-            .get_favorites(key, PAGE_SIZE, offset)
-            .await
-            .map_err(|e| e.to_string())?;
+        let value = fetch(offset).await?;
         let branch = value.get(key);
         total = branch
             .and_then(|b| b.get("total"))
@@ -368,12 +387,23 @@ async fn fetch_favorites(
             .cloned()
             .unwrap_or_default();
         let page_len = page.len();
-        all_items.extend(page);
-        offset += page_len as u32;
-        if page_len < PAGE_SIZE as usize
-            || (total > 0 && offset as usize >= total)
-            || all_items.len() >= MAX_ITEMS
+        // A server ignoring offset must not turn an uncapped fetch into an
+        // endless loop. Fail explicitly instead of publishing truncated data.
+        if page_len > 0
+            && all_items.len() >= page_len
+            && all_items[all_items.len() - page_len..] == page
         {
+            return Err(format!(
+                "Favorites {key}: server repeated a page at offset {offset}"
+            ));
+        }
+        all_items.extend(page);
+        offset = offset
+            .checked_add(
+                u32::try_from(page_len).map_err(|_| "Favorites page is too large".to_string())?,
+            )
+            .ok_or_else(|| "Favorites offset overflow".to_string())?;
+        if page_len < PAGE_SIZE as usize || (total > 0 && offset as usize >= total) {
             break;
         }
     }
@@ -574,16 +604,7 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
         .as_ref()
         .and_then(|a| a.maximum_sampling_rate)
         .or(album.maximum_sampling_rate);
-    let date = album
-        .dates
-        .as_ref()
-        .and_then(|d| {
-            d.original
-                .clone()
-                .or(d.download.clone())
-                .or(d.stream.clone())
-        })
-        .or(album.release_date_original.clone());
+    let date = home_qt::album_release_date(&album);
     let artist = if !album.artist.name.is_empty() {
         album.artist.name
     } else {
@@ -606,6 +627,7 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
         artist_id: album.artist.id.to_string(),
         genre: album.genre.map(|g| g.name).unwrap_or_default(),
         year: qbz_text_utils::dates::release_label(date.as_deref()),
+        release_sort_key: qbz_text_utils::dates::release_sort_key(date.as_deref()),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         // Library grid card: full variant (best()) — the down-tier was
@@ -1316,6 +1338,10 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
                 bit_depth: a.bit_depth,
                 sample_rate: Some(khz(a.sample_rate)),
                 is_favorite: hearted("album", &a.id),
+                release_sort_key: a
+                    .year
+                    .map(|y| qbz_text_utils::dates::release_sort_key(Some(&y.to_string())))
+                    .unwrap_or(0),
                 year: a.year.map(|y| y.to_string()).unwrap_or_default(),
                 added_rank: rank(i, n),
                 id: a.id,
@@ -1459,6 +1485,38 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
     out
 }
 
+fn map_purchased_album(a: qbz_models::PurchaseAlbum) -> FeedItem {
+    let tier = if a.hires { "hires" } else { "cd" };
+    FeedItem {
+        // Purchase rows are the ONE group in this feed whose flags are
+        // not implied by the group itself: a purchased album can also
+        // be pinned and can also be a favourite, and both were left at
+        // their `Default` false. The card then drew a hollow heart and
+        // an unpinned badge over an album that IS both, and the first
+        // click on either REMOVED it. Same two O(1) reads every other
+        // producer does.
+        is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
+        kind: "album".into(),
+        group: "purchases".into(),
+        source: "qobuz".into(),
+        subtitle: a.artist.name.clone(),
+        artist: a.artist.name,
+        artist_id: a.artist.id.to_string(),
+        image_url: a.image.best().cloned().unwrap_or_default(),
+        quality_tier: tier.into(),
+        year: qbz_text_utils::dates::release_label(a.release_date_original.as_deref()),
+        release_sort_key: qbz_text_utils::dates::release_sort_key(
+            a.release_date_original.as_deref(),
+        ),
+        genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
+        id: a.id,
+        title: a.title,
+        ..Default::default()
+    }
+    .keyed()
+}
+
 /// Purchases via the offline-cache crate's pass-through (best-effort).
 async fn fetch_purchases(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
@@ -1480,33 +1538,7 @@ async fn fetch_purchases(
         .albums
         .items
         .into_iter()
-        .map(|a| {
-            let tier = if a.hires { "hires" } else { "cd" };
-            FeedItem {
-                // Purchase rows are the ONE group in this feed whose flags are
-                // not implied by the group itself: a purchased album can also
-                // be pinned and can also be a favourite, and both were left at
-                // their `Default` false. The card then drew a hollow heart and
-                // an unpinned badge over an album that IS both, and the first
-                // click on either REMOVED it. Same two O(1) reads every other
-                // producer does.
-                is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
-                is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
-                kind: "album".into(),
-                group: "purchases".into(),
-                source: "qobuz".into(),
-                subtitle: a.artist.name.clone(),
-                artist: a.artist.name,
-                artist_id: a.artist.id.to_string(),
-                image_url: a.image.best().cloned().unwrap_or_default(),
-                quality_tier: tier.into(),
-                genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
-                id: a.id,
-                title: a.title,
-                ..Default::default()
-            }
-            .keyed()
-        })
+        .map(map_purchased_album)
         .collect();
     let tracks = filtered
         .tracks
@@ -2568,6 +2600,115 @@ pub fn play_from_visible(visible_ids_json: String, clicked_id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn favorites_paging_passes_ten_thousand_and_preserves_every_track() {
+        for reported_total in [0, 10_751] {
+            let mut offsets = Vec::new();
+            let (items, total) = collect_favorite_pages("tracks", |offset| {
+                offsets.push(offset);
+                let end = (offset + PAGE_SIZE).min(10_751);
+                let items: Vec<_> = (offset..end)
+                    .map(|id| serde_json::json!({"id": id}))
+                    .collect();
+                std::future::ready(Ok(serde_json::json!({
+                    "tracks": {"items": items, "total": reported_total}
+                })))
+            })
+            .await
+            .unwrap();
+            assert_eq!(items.len(), 10_751);
+            assert_eq!(total, reported_total);
+            assert_eq!(offsets.last(), Some(&10_500));
+            assert!(items.iter().enumerate().all(|(id, item)| item["id"] == id));
+        }
+    }
+
+    #[tokio::test]
+    async fn favorites_paging_stops_at_total_or_empty_page_and_propagates_errors() {
+        let mut calls = 0;
+        let (items, _) = collect_favorite_pages("tracks", |offset| {
+            calls += 1;
+            assert_eq!(offset, 0);
+            std::future::ready(Ok(serde_json::json!({"tracks": {
+                "total": PAGE_SIZE,
+                "items": (0..PAGE_SIZE).map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }})))
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(items.len(), PAGE_SIZE as usize);
+        let (items, _) = collect_favorite_pages("tracks", |_| {
+            std::future::ready(Ok(serde_json::json!({"tracks":{"items":[],"total":0}})))
+        })
+        .await
+        .unwrap();
+        assert!(items.is_empty());
+        let error = collect_favorite_pages("tracks", |_| {
+            std::future::ready(Err("API failed".to_string()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error, "API failed");
+    }
+
+    #[tokio::test]
+    async fn favorites_paging_rejects_a_server_ignoring_offset() {
+        let mut calls = 0;
+        let error = collect_favorite_pages("tracks", |_| {
+            calls += 1;
+            std::future::ready(Ok(serde_json::json!({"tracks": {
+                "total": 0,
+                "items": (0..PAGE_SIZE).map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }})))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 2);
+        assert!(error.contains("repeated a page at offset 500"));
+    }
+
+    #[test]
+    fn album_sort_key_prefers_original_over_digital_reissue_dates() {
+        let album: Album = serde_json::from_value(serde_json::json!({
+            "id":"souls", "title":"The Book of Souls",
+            "release_date_original":"2015-09-04",
+            "dates":{"stream":"2026-09-08", "download":"2025-01-01"}
+        }))
+        .unwrap();
+        let item = map_album(album, 0);
+        assert_eq!(item.release_sort_key, 20150904);
+        assert!(item.year.ends_with("2015"));
+        assert_eq!(
+            serde_json::to_value(item).unwrap()["releaseSortKey"],
+            20150904
+        );
+    }
+
+    #[test]
+    fn purchased_albums_carry_visible_dates_and_chronological_keys() {
+        for (date, expected) in [
+            (Some("2015-09-04"), 20150904),
+            (Some("2021-09-03"), 20210903),
+            (None, 0),
+        ] {
+            let album = serde_json::from_value(serde_json::json!({
+                "id":"purchased", "title":"Purchased album", "release_date_original":date
+            }))
+            .unwrap();
+            let row = map_purchased_album(album);
+            assert_eq!(row.release_sort_key, expected);
+            assert_eq!(row.year, qbz_text_utils::dates::release_label(date));
+            if expected != 0 {
+                assert!(!row.year.is_empty());
+                assert_eq!(
+                    serde_json::to_value(row).unwrap()["releaseSortKey"],
+                    expected
+                );
+            }
+        }
+    }
 
     fn track(id: &str, title: &str) -> FeedItem {
         FeedItem {

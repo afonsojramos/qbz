@@ -2433,3 +2433,12 @@ msgstr "SACD images use sidecar metadata."
 
 msgid "SACD track numbers cannot be changed."
 msgstr "SACD track numbers cannot be changed."
+
+msgid "Group: Year"
+msgstr "Group: Year"
+
+msgid "Group: Decade"
+msgstr "Group: Decade"
+
+msgid "Popularity"
+msgstr "Popularity"

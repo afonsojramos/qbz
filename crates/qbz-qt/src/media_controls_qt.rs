@@ -546,14 +546,15 @@ fn maybe_notify(track: &qbz_models::QueueTrack, title: &str, album: &str) {
 /// `crate::transport_*`, which spawns onto the process-global runtime.
 /// Time values are MICROSECONDS (`qbz-media-controls/src/types.rs:47`).
 fn dispatch(ev: MediaEvent) {
+    if matches!(ev, MediaEvent::Play | MediaEvent::Pause | MediaEvent::Toggle) {
+        log::info!("[media-controls] inbound {ev:?}");
+    }
     match ev {
-        // The OS only sends Play when paused and Pause when playing (it reads
-        // PlaybackStatus), so routing all three through the toggle is correct
-        // and keeps the cast → QConnect → local ladder the tray verbs ride
-        // (`src/tray_qt.rs:487-500`).
-        MediaEvent::Play | MediaEvent::Pause | MediaEvent::Toggle => {
-            crate::tray_qt::dispatch_play_pause()
-        }
+        // Explicit OS commands are idempotent. Desktops may send Pause to an
+        // already paused player before suspend; only PlayPause is a toggle.
+        MediaEvent::Play => crate::transport_set_playing(true),
+        MediaEvent::Pause => crate::transport_set_playing(false),
+        MediaEvent::Toggle => crate::tray_qt::dispatch_play_pause(),
         MediaEvent::Next => crate::tray_qt::dispatch_next(),
         MediaEvent::Previous => crate::tray_qt::dispatch_previous(),
         // The one command with no transport verb — direct on the core, like the

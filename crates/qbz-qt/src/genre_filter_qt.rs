@@ -115,10 +115,15 @@ static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| {
     })
 });
 
-/// The contexts this port draws a genre button for. Both are published in
+/// The contexts this port draws a genre button for. All are published in
 /// `counts` / `names` so each button shows ITS OWN badge regardless of which
 /// context the popup last edited.
-const CONTEXTS: [&str; 2] = ["discover", "library-all"];
+const CONTEXTS: [&str; 4] = [
+    "discover",
+    "library-all",
+    "library-albums",
+    "library-tracks",
+];
 
 // ---------------------------------------------------------------------------
 // Persistence (same file + shape as the Slint controller)
@@ -727,6 +732,29 @@ mod tests {
         assert_eq!(s.count_for("library-all"), 1);
         let names = selected_names(&s, "library-all");
         assert_eq!(names, vec!["Cool Jazz"]);
+    }
+
+    #[test]
+    fn library_tab_selections_publish_independently() {
+        let mut s = fixture();
+        s.selected.insert("library-albums".into(), vec![2]);
+        let doc: serde_json::Value = serde_json::from_str(&build_doc(&s)).unwrap();
+        assert_eq!(
+            doc["names"]["library-all"],
+            serde_json::json!(["Cool Jazz"])
+        );
+        assert_eq!(doc["names"]["library-albums"], serde_json::json!(["Rock"]));
+        assert_eq!(doc["names"]["library-tracks"], serde_json::json!([]));
+        assert_eq!(doc["counts"]["library-tracks"], 0);
+        s.selected.insert("library-tracks".into(), vec![11]);
+        s.selected.remove("library-all");
+        let doc: serde_json::Value = serde_json::from_str(&build_doc(&s)).unwrap();
+        assert_eq!(doc["names"]["library-all"], serde_json::json!([]));
+        assert_eq!(doc["names"]["library-albums"], serde_json::json!(["Rock"]));
+        assert_eq!(
+            doc["names"]["library-tracks"],
+            serde_json::json!(["Cool Jazz"])
+        );
     }
 
     #[test]
