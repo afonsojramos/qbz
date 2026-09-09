@@ -6839,3 +6839,80 @@ msgstr "グループ: 年代"
 
 msgid "Popularity"
 msgstr "人気順"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "購入済みのみ"
+
+#: library toolbar
+msgid "Following only"
+msgstr "フォロー中のみ"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Hi-Resのみ"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "ライブラリでローカルアルバムを非表示"
+
+#: library toolbar
+msgid "By you"
+msgstr "自分が作成"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Qobuzが作成"
+
+#: library toolbar
+msgid "By others"
+msgstr "他のユーザーが作成"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "トラックを検索"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "リリースを検索"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "プレイリストを検索"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "アーティストを検索"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "レーベルを検索"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "購入済みの項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "お気に入りのみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "フォロー中の項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Hi-Resの項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "ここではローカルアルバムを非表示にします。ローカルライブラリでは引き続き利用できます。"
+
+msgid "Alphabetical"
+msgstr "アルファベット順"
+
+msgid "Date updated"
+msgstr "更新日"
+
+msgid "Track count"
+msgstr "曲数"

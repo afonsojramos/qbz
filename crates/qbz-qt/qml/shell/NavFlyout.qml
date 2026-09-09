@@ -191,7 +191,7 @@ Item {
                 "entries": [
                     { "label": nav.trs("All"), "icon": "layout-grid", "view": "library", "tab": "all", "enabled": true },
                     { "label": nav.trs("Tracks"), "icon": "music", "view": "library", "tab": "tracks", "enabled": true },
-                    { "label": nav.trs("Albums"), "icon": "disc", "view": "library", "tab": "albums", "enabled": true },
+                    { "label": nav.trs("Releases"), "icon": "disc", "view": "library", "tab": "albums", "enabled": true },
                     { "label": nav.trs("Artists"), "icon": "user", "view": "library", "tab": "artists", "enabled": true },
                     { "label": nav.trs("Playlists"), "icon": "list-music", "view": "library", "tab": "playlists", "enabled": true },
                     { "label": nav.trs("Labels"), "icon": "disc-3", "view": "library", "tab": "labels", "enabled": true }

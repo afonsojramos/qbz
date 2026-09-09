@@ -114,7 +114,7 @@ Item {
             // may additionally show the catalog mark in the mixed feed.
             source: cell.item.source
             sources: cell.item.sources || []
-            showSourceBadge: cell.view.showLocal
+            showSourceBadge: cell.view.showSourceBadges
         }
     }
     // Group separator. These are pseudo-rows injected into the SAME flat model
@@ -142,7 +142,7 @@ Item {
         TrackCard {
             item: cell.item
             artSource: cell.view.artMap[cell.item.artKey] || ""
-            showSourceBadge: cell.view.showLocal
+            showSourceBadge: cell.view.showSourceBadges
             confirmReleaseRemoval: function (item) {
                 cell.view.askRemoveReleaseFavorites(item)
             }

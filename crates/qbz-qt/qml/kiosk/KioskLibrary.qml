@@ -69,7 +69,7 @@ Rectangle {
     property string activeTab: "albums"
 
     function tabLabel(id) {
-        return id === "albums" ? root.t("Albums")
+        return id === "albums" ? root.t("Releases")
             : id === "tracks" ? root.t("Tracks")
             : id === "artists" ? root.t("Artists")
             : id === "playlists" ? root.t("Playlists")

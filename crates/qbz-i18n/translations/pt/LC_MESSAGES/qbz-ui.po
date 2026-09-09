@@ -6856,3 +6856,80 @@ msgstr "Agrupar: Década"
 
 msgid "Popularity"
 msgstr "Popularidade"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Somente compras"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Somente seguidos"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Somente Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Ocultar álbuns locais da biblioteca"
+
+#: library toolbar
+msgid "By you"
+msgstr "Por você"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Por Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Por outros"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Buscar nas suas faixas"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Buscar nos seus lançamentos"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Buscar nas suas playlists"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Buscar nos seus artistas"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Buscar nas suas gravadoras"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Mostrar somente compras. Combina com os outros filtros ativos."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Mostrar somente favoritos. Combina com os outros filtros ativos."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Mostrar somente itens seguidos. Combina com os outros filtros ativos."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Mostrar somente conteúdo Hi-Res. Combina com os outros filtros ativos."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Ocultar álbuns locais aqui. Eles continuam disponíveis na Biblioteca local."
+
+msgid "Alphabetical"
+msgstr "Alfabético"
+
+msgid "Date updated"
+msgstr "Data de atualização"
+
+msgid "Track count"
+msgstr "Número de faixas"

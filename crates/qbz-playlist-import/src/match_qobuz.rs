@@ -433,6 +433,7 @@ mod tests {
             streamable: None,
             streamable_at: None,
             release_date_stream: None,
+            release_date_original: None,
         }
     }
 

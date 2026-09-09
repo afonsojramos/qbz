@@ -695,6 +695,9 @@ pub struct AlbumSummary {
     /// ISO streaming release date, used as the fallback upcoming signal.
     #[serde(default)]
     pub release_date_stream: Option<String>,
+    /// Original release date, when included by the embedded album endpoint.
+    #[serde(default)]
+    pub release_date_original: Option<String>,
 }
 
 impl AlbumSummary {

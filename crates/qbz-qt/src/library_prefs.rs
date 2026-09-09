@@ -36,6 +36,14 @@ pub struct Prefs {
     pub albums_view: String,
     #[serde(default = "d_default")]
     pub albums_sort: String,
+    #[serde(default = "d_default")]
+    pub labels_sort: String,
+    #[serde(default = "d_default")]
+    pub artists_sort: String,
+    #[serde(default = "d_default")]
+    pub playlists_sort: String,
+    #[serde(default = "d_default")]
+    pub tracks_sort: String,
     #[serde(default = "d_off")]
     pub albums_group: String,
     #[serde(default = "d_off")]
@@ -76,6 +84,10 @@ impl Default for Prefs {
         Self {
             albums_view: d_grid(),
             albums_sort: d_default(),
+            labels_sort: d_default(),
+            artists_sort: d_default(),
+            playlists_sort: d_default(),
+            tracks_sort: d_default(),
             albums_group: d_off(),
             tracks_group: d_off(),
             playlists_view: d_grid(),
@@ -112,6 +124,10 @@ pub fn to_json() -> String {
     serde_json::json!({
         "albumsView": p.albums_view,
         "albumsSort": p.albums_sort,
+        "labelsSort": p.labels_sort,
+        "artistsSort": p.artists_sort,
+        "playlistsSort": p.playlists_sort,
+        "tracksSort": p.tracks_sort,
         "albumsGroup": p.albums_group,
         "tracksGroup": p.tracks_group,
         "playlistsView": p.playlists_view,
@@ -179,6 +195,10 @@ pub fn set(key: &str, value: &str) {
     match key {
         "albumsView" => update(|p| p.albums_view = v),
         "albumsSort" => update(|p| p.albums_sort = v),
+        "labelsSort" => update(|p| p.labels_sort = v),
+        "artistsSort" => update(|p| p.artists_sort = v),
+        "playlistsSort" => update(|p| p.playlists_sort = v),
+        "tracksSort" => update(|p| p.tracks_sort = v),
         "albumsGroup" => update(|p| p.albums_group = v),
         "tracksGroup" => update(|p| p.tracks_group = v),
         "playlistsView" => update(|p| p.playlists_view = v),

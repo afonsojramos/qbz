@@ -2442,3 +2442,96 @@ msgstr "Group: Decade"
 
 msgid "Popularity"
 msgstr "Popularity"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Purchases only"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Following only"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Hi-Res only"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Hide local albums from library"
+
+#: library toolbar
+msgid "By you"
+msgstr "By you"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "By Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "By others"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Search your tracks"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Search your releases"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Search your playlists"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Search your artists"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Search your labels"
+
+#: library toolbar
+msgid "Releases"
+msgstr "Releases"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Show only purchased items. Combines with the other enabled filters."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Show only favorites. Combines with the other enabled filters."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Show only followed items. Combines with the other enabled filters."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Show only Hi-Res items. Combines with the other enabled filters."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Hide local albums here. They remain available in Local Library."
+
+msgid "Filters"
+msgstr "Filters"
+
+msgid "Alphabetical"
+msgstr "Alphabetical"
+
+msgid "Date updated"
+msgstr "Date updated"
+
+msgid "Track count"
+msgstr "Track count"
+
+msgid "Release"
+msgstr "Release"
+
+msgid "Release date"
+msgstr "Release date"
+
+msgid "Label"
+msgstr "Label"

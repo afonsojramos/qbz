@@ -79,22 +79,24 @@ function qmlFunction(name) {
   return libraryQml.slice(start, stop);
 }
 const bridge = {
-  sessionShowPurchases: true, sessionShowFavorites: true, sessionShowFollowing: true,
-  sessionAlbumsShowPurchases: true, sessionAlbumsShowFavorites: true,
-  sessionTracksShowPurchases: true, sessionTracksShowFavorites: true,
+  sessionShowPurchases: false, sessionShowFavorites: false, sessionShowFollowing: false,
+  sessionAlbumsShowPurchases: false, sessionAlbumsShowFavorites: false,
+  sessionTracksShowPurchases: false, sessionTracksShowFavorites: false,
+  sessionAlbumsHiresOnly:false, sessionTracksHiresOnly:false, sessionHideLocalAlbums:false,
 };
 const lib = vm.createContext({
   QbzLibrary: bridge, ReleaseSort: sort, Qt: {callLater() {}},
   activeTab: 'all', search: '', tabSearch: '', showLocal: true,
   sortBy: 'date', sortAsc: false, albumsSort: 'oldest', albumsGroup: 'off',
-  tracksGroup: 'off', artistsGroup: 'off', genreNames: [],
+  tracksGroup: 'off', artistsGroup: 'off', artistsView:'grid', genreNames: [],
+  tracksSort:'default', playlistsSort:'default', artistsSort:'default', labelsSort:'default',
 });
 lib.root = lib;
-for (const name of ['showPurchases', 'showFavorites', 'showFollowing', 'genreContext']) {
+for (const name of ['showPurchases', 'showFavorites', 'showFollowing', 'genreContext', 'hiresOnly', 'activeSort']) {
   const expr = libraryQml.match(new RegExp(`readonly property (?:bool|string) ${name}:([^\\n]*(?:\\n        [^\\n]*)*)`))[1];
   Object.defineProperty(lib, name, {get() { return vm.runInContext(expr, lib); }});
 }
-for (const name of ['parseFeed', 'visibleItems', 'matchesSources', 'setShowPurchases', 'setShowFavorites', 'setShowFollowing']) {
+for (const name of ['alphaKey', 'pickSort', 'isLocalFeedItem', 'hideableLocalAlbum', 'parseFeed', 'visibleItems', 'matchesSources', 'setShowPurchases', 'setShowFavorites', 'setShowFollowing', 'setHiresOnly']) {
   vm.runInContext(qmlFunction(name), lib);
 }
 const libraryRows = [];
@@ -114,7 +116,7 @@ for (const tab of ['all', 'albums', 'tracks']) {
   lib.activeTab = tab;
   if (tab === 'all') lib.setShowFollowing(false);
   for (const [purchases, favorites, expected] of [
-    [true, true, ['both','favorite','purchased']],
+    [true, true, ['both']],
     [true, false, ['both','purchased']],
     [false, true, ['both','favorite']],
     [false, false, ['both','favorite','purchased']],
@@ -128,7 +130,7 @@ for (const tab of ['all', 'albums', 'tracks']) {
     }
   }
 }
-lib.activeTab = 'albums'; lib.setShowPurchases(true); lib.setShowFavorites(true);
+lib.activeTab = 'albums'; lib.setShowPurchases(false); lib.setShowFavorites(false);
 assert.deepEqual(ids(lib.visibleItems()), ['favorite', 'both', 'purchased']);
 lib.albumsSort = 'newest';
 assert.deepEqual(ids(lib.visibleItems()), ['purchased', 'both', 'favorite']);
@@ -146,7 +148,7 @@ lib.activeTab = 'all'; lib.setShowPurchases(false); lib.setShowFavorites(false);
 assert.deepEqual(ids(lib.visibleItems()), ['followed']);
 lib.activeTab = 'albums';
 assert.deepEqual(ids(lib.visibleItems()), ['purchased', 'both'], 'Following cannot gate Albums');
-console.log('Library source union, per-tab state, purchase-row dates, deduplication and chronology: passed');
+console.log('Library only-filter intersections, per-tab state, purchase-row dates, deduplication and chronology: passed');
 
 // Popularity leaves server order intact, and changing its paging order must
 // discard the old overlay/cursor while a local date/title sort keeps them.
@@ -173,3 +175,135 @@ for (const [from,to,reset] of [['default','relevant',true],['relevant','oldest',
   if (reset) assert.equal(artistState.releasePending.album, undefined);
 }
 console.log('Artist popularity preserves server rank and resets pagination across server-order changes: passed');
+
+// Artists must remain independent of album/track source and genre switches.
+// The #758 log contains 19 artists; it does not establish a rendering cause.
+const artistRows = Array.from({length:19}, (_, i) => ({kind:'artist', id:`artist-${i}`,
+  title:`Artist ${i}`, group:'favorites', source:'qobuz'}));
+lib.feed = lib.parseFeed(JSON.stringify([...libraryRows, ...artistRows]));
+lib.activeTab = 'artists';
+lib.genreNames = ['genre absent from every artist'];
+for (const group of ['off', 'alpha']) {
+  lib.artistsGroup = group;
+  for (const enabled of [false, true]) {
+    bridge.sessionShowPurchases = enabled;
+    bridge.sessionShowFavorites = enabled;
+    bridge.sessionAlbumsShowPurchases = enabled;
+    bridge.sessionTracksShowFavorites = enabled;
+    assert.equal(lib.visibleItems().length, 19);
+  }
+}
+lib.tabSearch = 'Artist 18';
+assert.deepEqual(ids(lib.visibleItems()), ['artist-18']);
+lib.tabSearch = '';
+assert.equal(lib.visibleItems().length, 19);
+console.log('Library Artists preserves all 19 rows independently of source/genre switches: passed');
+
+// Each Hi-Res restriction combines with source restrictions in its own tab.
+lib.genreNames = [];
+lib.feed = lib.parseFeed(JSON.stringify(libraryRows.map(row => ({...row,
+    qualityTier: row.id === 'both' ? 'hires' : 'cd'}))));
+lib.activeTab = 'albums'; lib.setShowPurchases(false); lib.setShowFavorites(false);
+lib.setHiresOnly(true);
+assert.deepEqual(ids(lib.visibleItems()), ['both']);
+lib.activeTab = 'tracks'; lib.setShowPurchases(false); lib.setShowFavorites(false);
+assert.equal(lib.visibleItems().length, 3);
+lib.setHiresOnly(true); lib.setShowFavorites(true);
+assert.deepEqual(ids(lib.visibleItems()), ['both']);
+lib.activeTab = 'all'; lib.setShowFollowing(false);
+lib.setShowPurchases(false); lib.setShowFavorites(false);
+lib.feed = lib.parseFeed(JSON.stringify([
+  ...['local','plex','jellyfin','subsonic'].map(source => ({
+    kind:'album',id:source+':album',source,group:'local'})),
+  {kind:'track',id:'local-track',source:'local',group:'local'},
+  {kind:'album',id:'online',source:'qobuz',group:'favorites'},
+  {kind:'album',id:'matched-cache',source:'qobuz',group:'favorites',sources:['offline']},
+  {kind:'album',id:'cache',source:'local',group:'local',sources:['offline']},
+]));
+lib.showLocal = false;
+assert.deepEqual(ids(lib.visibleItems()).sort(), ['cache','local-track','matched-cache','online']);
+lib.showLocal = true;
+assert.equal(lib.visibleItems().length, 8);
+const playlists = ['you','qobuz','others','unknown'].map((creator, i) => ({
+  id:String(i), kind:'playlist', source:'qobuz', group:i ? 'following':'favorites',
+  title:creator, playlistCreator:creator, isFavorite:i===2,
+}));
+lib.feed = lib.parseFeed(JSON.stringify([...playlists, {...playlists[2],group:'favorites'}]));
+lib.activeTab = 'playlists';
+for (const creator of ['all','you','qobuz','others']) {
+  lib.playlistsSubTab = creator;
+  assert.equal(lib.visibleItems().length, creator === 'all' ? 4 : 1);
+  if (creator !== 'all') assert.equal(lib.visibleItems()[0].playlistCreator, creator);
+}
+assert.equal(lib.feed._tabTotals.playlists, 4);
+console.log('Hi-Res intersections, per-tab isolation, local-album exclusion and playlist author select: passed');
+
+// Catalog IDs and local row IDs live in different namespaces.
+lib.feed = lib.parseFeed(JSON.stringify([
+  {kind:'track',id:'7',source:'local',group:'local'},
+  {kind:'track',id:'7',source:'qobuz',group:'purchases'},
+]));
+lib.activeTab = 'all'; lib.setShowPurchases(true); lib.setShowFavorites(false); lib.setShowFollowing(false);
+assert.equal(lib.visibleItems().length, 1);
+assert.equal(lib.visibleItems()[0].source, 'qobuz');
+
+// Re-selecting one criterion flips it; other tabs retain their own choices.
+lib.setPref = (key, value) => { lib[key] = value; };
+for (const tab of ['all','tracks','albums','artists','labels','playlists']) {
+  lib.activeTab = tab;
+  lib.pickSort('title');
+  assert.equal(lib.activeSort, 'title-asc');
+  lib.pickSort('title');
+  assert.equal(lib.activeSort, 'title-desc');
+  lib.pickSort('date');
+  assert.equal(lib.activeSort, 'date-desc');
+  lib.pickSort('date');
+  assert.equal(lib.activeSort, 'date-asc');
+}
+lib.activeTab='albums'; lib.albumsSort='oldest'; lib.pickSort('release-date');
+assert.equal(lib.albumsSort,'release-date-desc');
+lib.activeTab='tracks'; assert.equal(lib.tracksSort,'date-asc');
+const sortRows = [
+ {id:'b',title:'Bravo',artist:'B',album:'B',label:'B',genre:'Rock',releaseSortKey:20000101,durationSecs:200,trackCount:10,updatedAt:200,added_rank:0},
+ {id:'a',title:'Alpha',artist:'A',album:'A',label:'A',genre:'Jazz',releaseSortKey:19800101,durationSecs:100,trackCount:0,updatedAt:100,added_rank:1},
+ {id:'missing'}
+];
+for (const field of ['title','artist','release','label','genre','release-date','duration','track-count','updated']) {
+ assert.deepEqual(ids(sort.sortRows(sortRows,field+'-asc')),['a','b','missing'],field);
+ assert.deepEqual(ids(sort.sortRows(sortRows,field+'-desc')),['b','a','missing'],field);
+}
+assert.deepEqual(ids(sort.sortRows(sortRows.slice(0,2),'date-desc')),['b','a']);
+assert.deepEqual(ids(sort.sortRows(sortRows.slice(0,2),'date-asc')),['a','b']);
+assert.deepEqual(ids(sort.sortRows(sortRows,'default-reverse')),['missing','a','b']);
+assert.deepEqual(ids(sortRows),['b','a','missing']);
+console.log('All six tabs: one criterion, repeat-click reversal, independent state, numeric metadata, unknowns last: passed');
+
+// Exercise tab derivation, so a grouping or old forced sort cannot override it.
+lib.genreNames=[]; lib.tabSearch=''; lib.tracksGroup='off'; lib.artistsGroup='off';
+bridge.sessionTracksHiresOnly=false; bridge.sessionAlbumsHiresOnly=false;
+bridge.sessionTracksShowFavorites=false; bridge.sessionTracksShowPurchases=false;
+bridge.sessionAlbumsShowFavorites=false; bridge.sessionAlbumsShowPurchases=false;
+for (const [tab,kind] of [['tracks','track'],['albums','album'],['artists','artist'],['labels','label'],['playlists','playlist']]) {
+ lib.activeTab=tab; lib.playlistsSubTab='all';
+ lib.feed=lib.parseFeed(JSON.stringify(sortRows.map(row=>({...row,kind,source:'qobuz',group:'favorites'}))));
+ lib[tab+'Sort']='title-asc'; assert.deepEqual(ids(lib.visibleItems()),['a','b','missing'],tab);
+ lib[tab+'Sort']='title-desc'; assert.deepEqual(ids(lib.visibleItems()),['b','a','missing'],tab);
+}
+lib.activeTab='artists'; lib.artistsGroup='alpha'; lib.artistsView='sidepanel';
+lib.artistsSort='date-desc';
+lib.feed=lib.parseFeed(JSON.stringify(sortRows.slice(0,2).map(row=>({...row,kind:'artist',source:'qobuz',group:'favorites'}))));
+assert.deepEqual(ids(lib.visibleItems()),['b','a'],'Sidepanel must not inherit grid grouping');
+console.log('Every Library tab applies chosen order through the real visible-items pipeline: passed');
+
+assert.deepEqual(ids(sort.sortRows([
+ {id:'full',kind:'playlist',trackCount:2,durationSecs:200},
+ {id:'empty',kind:'playlist',trackCount:0},
+ {id:'unknown',kind:'playlist',trackCount:2}
+], 'duration-asc')), ['empty','full','unknown']);
+
+lib.activeTab='albums'; lib.albumsSort='title-asc';
+lib.pickSort('default'); assert.equal(lib.albumsSort,'default');
+assert.equal(sort.ascending(lib.activeSort),false);
+lib.pickSort('default'); assert.equal(lib.albumsSort,'default-reverse');
+assert.equal(sort.ascending(lib.activeSort),true);
+lib.pickSort('default'); assert.equal(lib.albumsSort,'default');

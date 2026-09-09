@@ -6846,3 +6846,80 @@ msgstr "Groeperen: Decennium"
 
 msgid "Popularity"
 msgstr "Populariteit"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Alleen aankopen"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Alleen gevolgd"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Alleen Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Lokale albums verbergen in bibliotheek"
+
+#: library toolbar
+msgid "By you"
+msgstr "Door jou"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Door Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Door anderen"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Zoek in je nummers"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Zoek in je uitgaven"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Zoek in je afspeellijsten"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Zoek in je artiesten"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Zoek in je labels"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Toon alleen aankopen. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Toon alleen favorieten. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Toon alleen gevolgde items. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Toon alleen Hi-Res-items. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Verberg lokale albums hier. Ze blijven beschikbaar in de lokale bibliotheek."
+
+msgid "Alphabetical"
+msgstr "Alfabetisch"
+
+msgid "Date updated"
+msgstr "Datum bijgewerkt"
+
+msgid "Track count"
+msgstr "Aantal nummers"
