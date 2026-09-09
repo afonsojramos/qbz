@@ -356,27 +356,47 @@ pub(crate) fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, 
         .default_track()
         .ok_or_else(|| "Symphonia: no supported audio tracks".to_string())?;
 
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| "No sample rate in codec params".to_string())?;
+    audio_metadata_from_codec_params(&track.codec_params)
+}
 
-    // ALAC and some other formats don't include channel info in initial codec params
-    // Default to stereo (2 channels) which is the most common case
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count() as u16)
-        .unwrap_or(2);
-
-    // Get bits per sample for bit depth
-    let bit_depth = track.codec_params.bits_per_sample;
-
+/// ALAC's codec configuration is authoritative. The MP4 sample entry may
+/// contain a placeholder rate (1 Hz in real hi-res files), and Symphonia's
+/// demuxer does not propagate ALAC's bit depth into CodecParameters. Its
+/// decoder already reads the cookie; every source and device setup must agree.
+fn audio_metadata_from_codec_params(
+    params: &symphonia::core::codecs::CodecParameters,
+) -> Result<AudioMetadata, String> {
+    if params.codec == symphonia::core::codecs::CODEC_TYPE_ALAC {
+        let cookie = params
+            .extra_data
+            .as_deref()
+            .ok_or("ALAC configuration missing")?;
+        // ALACSpecificConfig, optionally followed by a 24-byte channel layout.
+        if !matches!(cookie.len(), 24 | 48) {
+            return Err("Invalid ALAC configuration length".into());
+        }
+        let bit_depth = u32::from(cookie[5]);
+        let channels = u16::from(cookie[9]);
+        let sample_rate = u32::from_be_bytes(cookie[20..24].try_into().unwrap());
+        if cookie[4] != 0
+            || !(1..=32).contains(&bit_depth)
+            || !(1..=8).contains(&channels)
+            || sample_rate == 0
+        {
+            return Err("Invalid ALAC signal format".into());
+        }
+        return Ok(AudioMetadata {
+            sample_rate,
+            channels,
+            bit_depth: Some(bit_depth),
+            codec: params.codec,
+        });
+    }
     Ok(AudioMetadata {
-        sample_rate,
-        channels,
-        bit_depth,
-        codec: track.codec_params.codec,
+        sample_rate: params.sample_rate.ok_or("No sample rate in codec params")?,
+        channels: params.channels.map(|c| c.count() as u16).unwrap_or(2),
+        bit_depth: params.bits_per_sample,
+        codec: params.codec,
     })
 }
 
@@ -7145,6 +7165,119 @@ mod tests {
         AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
     };
     use std::sync::atomic::Ordering;
+
+    #[test]
+    #[ignore = "requires QBZ_ALAC_PROBE_PATH to a real ALAC file"]
+    fn real_alac_metadata_matches_decoded_signal() {
+        use symphonia::core::io::MediaSourceStream;
+        let path = std::env::var("QBZ_ALAC_PROBE_PATH").expect("real ALAC file path");
+        let bytes = std::fs::read(path).unwrap();
+        let meta = super::extract_audio_metadata_full(&bytes).unwrap();
+        let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
+        let mut hint = symphonia::core::probe::Hint::new();
+        hint.with_extension("m4a");
+        let mut format = symphonia::default::get_probe()
+            .format(&hint, mss, &Default::default(), &Default::default())
+            .unwrap()
+            .format;
+        let track = format.default_track().unwrap();
+        let id = track.id;
+        let cookie = track.codec_params.extra_data.as_ref().unwrap();
+        let bits = cookie[5] as u32;
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &Default::default())
+            .unwrap();
+        loop {
+            let packet = format.next_packet().unwrap();
+            if packet.track_id() != id {
+                continue;
+            }
+            let audio = decoder.decode(&packet).unwrap();
+            eprintln!(
+                "metadata={}Hz/{:?}bit/{}ch, decoded={}Hz/{}bit/{}ch",
+                meta.sample_rate,
+                meta.bit_depth,
+                meta.channels,
+                audio.spec().rate,
+                bits,
+                audio.spec().channels.count()
+            );
+            assert_eq!(meta.sample_rate, audio.spec().rate);
+            assert_eq!(meta.bit_depth, Some(bits));
+            assert_eq!(meta.channels as usize, audio.spec().channels.count());
+            break;
+        }
+    }
+
+    // Synthetic 32-frame stereo 24-bit ramp encoded with ffmpeg ALAC at
+    // 192 kHz, with the MP4 sample-entry rate replaced by the real-world
+    // placeholder 1 Hz. The ALAC cookie and every audio sample are untouched.
+    #[test]
+    fn alac_placeholder_rate_preserves_signal_in_memory_and_streaming() {
+        let bytes = include_bytes!("../../testdata/alac_24_192_placeholder.m4a");
+        let meta = super::extract_audio_metadata_full(bytes).unwrap();
+        assert_eq!(
+            (meta.sample_rate, meta.bit_depth, meta.channels),
+            (192000, Some(24), 2)
+        );
+        let expected: Vec<f32> = [-8388608, -4194304, -1, 0, 1, 4194304, 8388607, 1234567]
+            .into_iter()
+            .cycle()
+            .take(64)
+            .map(|v| v as f32 / 8388608.0)
+            .collect();
+        let memory = super::streaming_source::InMemorySource::new(bytes.to_vec()).unwrap();
+        assert_eq!(memory.sample_rate(), 192000);
+        assert_eq!(memory.collect::<Vec<_>>(), expected);
+        let (buffer, writer) =
+            BufferedMediaSource::new(StreamingConfig::default(), Some(bytes.len() as u64));
+        writer.push_chunk(bytes).unwrap();
+        writer.complete().unwrap();
+        let streaming =
+            super::streaming_source::IncrementalStreamingSource::new(std::sync::Arc::new(buffer))
+                .unwrap();
+        assert_eq!(streaming.get_sample_rate(), 192000);
+        assert_eq!(streaming.get_channels(), 2);
+        assert_eq!(streaming.collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn alac_metadata_rejects_invalid_config_and_keeps_other_codecs_unchanged() {
+        use symphonia::core::codecs::{CodecParameters, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC};
+        let mut params = CodecParameters::new();
+        params
+            .for_codec(CODEC_TYPE_FLAC)
+            .with_sample_rate(44100)
+            .with_bits_per_sample(16);
+        let meta = super::audio_metadata_from_codec_params(&params).unwrap();
+        assert_eq!((meta.sample_rate, meta.bit_depth), (44100, Some(16)));
+        params.for_codec(CODEC_TYPE_ALAC);
+        assert!(super::audio_metadata_from_codec_params(&params).is_err());
+        for len in [0, 23, 25, 47, 49] {
+            params.with_extra_data(vec![0; len].into_boxed_slice());
+            assert!(super::audio_metadata_from_codec_params(&params).is_err());
+        }
+        for rate in [44100_u32, 48000, 96000, 192000] {
+            for bits in [16_u8, 24] {
+                let mut cookie = vec![0; 24];
+                cookie[5] = bits;
+                cookie[9] = 2;
+                cookie[20..24].copy_from_slice(&rate.to_be_bytes());
+                params.with_extra_data(cookie.clone().into_boxed_slice());
+                let meta = super::audio_metadata_from_codec_params(&params).unwrap();
+                assert_eq!(
+                    (meta.sample_rate, meta.bit_depth),
+                    (rate, Some(bits as u32))
+                );
+                for index in [5, 9] {
+                    let mut bad = cookie.clone();
+                    bad[index] = 0;
+                    params.with_extra_data(bad.into_boxed_slice());
+                    assert!(super::audio_metadata_from_codec_params(&params).is_err());
+                }
+            }
+        }
+    }
 
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
