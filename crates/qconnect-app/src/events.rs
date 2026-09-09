@@ -72,6 +72,11 @@ pub enum QconnectAppEvent {
 
 #[async_trait]
 pub trait QconnectEventSink: Send + Sync {
+    /// Observation only; hosts return None after their session is fenced.
+    fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
+        None
+    }
+
     async fn on_event(&self, event: QconnectAppEvent);
 }
 

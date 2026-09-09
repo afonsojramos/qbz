@@ -569,7 +569,7 @@ pub async fn apply_renderer_command(
                                     "[QConnect] Cold-start load of remote track {track_id} failed: {err}"
                                 ),
                             }
-                        } else {
+                        } else if !engine.get_playback_state().is_playing {
                             engine.resume()?;
                         }
                     }
@@ -1378,6 +1378,37 @@ mod tests {
             engine.calls().seeks.is_empty(),
             "echo seek must be rejected (#387 is_echo_reset)"
         );
+    }
+
+    #[tokio::test]
+    async fn queue_state_echo_does_not_resume_or_seek_an_already_playing_stream() {
+        let mut engine = MockEngine::new();
+        engine.playback = PlaybackState {
+            track_id: 7,
+            position: 67,
+            is_playing: true,
+            ..Default::default()
+        };
+        engine.loaded_audio = true;
+        engine.queue_tracks = vec![mock_queue_track(7)];
+        engine.queue_index = Some(0);
+        let command = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: Some(0),
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        apply_renderer_command(
+            &engine,
+            &sync(),
+            &command,
+            &QConnectRendererState::default(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(engine.calls().resumes, 0);
+        assert!(engine.calls().seeks.is_empty());
+        assert!(engine.calls().start_track_streams.is_empty());
     }
 
     /// #1 / #387 — a genuine peer seek (target far from local) IS honored, even

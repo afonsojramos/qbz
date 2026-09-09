@@ -171,6 +171,73 @@ where
         QueueCommand::new(command_type, self.next_action_uuid(), version_ref, payload)
     }
 
+    /// Publish an extension as an append, preserving the cloud's current item,
+    /// clock and shuffle. New selections and takeovers still load the full queue.
+    pub async fn build_local_queue_sync_command(
+        &self,
+        track_ids: &[u64],
+        start_index: usize,
+        allow_append: bool,
+    ) -> QueueCommand {
+        let observed = self.sink.playback_event();
+        let state = self.state.lock().await;
+        let queue = &state.queue;
+        let append = allow_append
+            && !queue.shuffle_mode
+            && !queue.queue_items.is_empty()
+            && queue.queue_items.len() < track_ids.len()
+            && queue
+                .queue_items
+                .iter()
+                .zip(track_ids)
+                .all(|(item, id)| item.track_id == *id)
+            // A repeated existing ID can also describe a middle insertion;
+            // catalog IDs alone cannot preserve occurrence identity there.
+            && !track_ids[queue.queue_items.len()..]
+                .iter()
+                .any(|id| queue.queue_items.iter().any(|item| item.track_id == *id))
+            && queue.queue_items.get(start_index).is_some_and(|item| {
+                state
+                    .renderer
+                    .current_track
+                    .as_ref()
+                    .is_some_and(|current| {
+                        current.queue_item_id == item.queue_item_id
+                            && current.track_id == item.track_id
+                    })
+            })
+            && observed.as_ref().is_some_and(|event| {
+                event.buffer_state == PlaybackBufferState::Ready
+                    && track_ids.get(start_index) == Some(&event.track_id)
+            });
+        let (command_type, payload) = if append {
+            (
+                QueueCommandType::CtrlSrvrQueueAddTracks,
+                serde_json::json!({
+                    "track_ids": &track_ids[queue.queue_items.len()..],
+                    "context_uuid": Uuid::new_v4().to_string(),
+                    "autoplay_reset": false, "autoplay_loading": false,
+                }),
+            )
+        } else {
+            (
+                QueueCommandType::CtrlSrvrQueueLoadTracks,
+                serde_json::json!({
+                    "track_ids": track_ids, "queue_position": start_index,
+                    "shuffle_mode": false, "shuffle_pivot_index": start_index,
+                    "context_uuid": Uuid::new_v4().to_string(),
+                    "autoplay_reset": true, "autoplay_loading": false,
+                }),
+            )
+        };
+        QueueCommand::new(
+            command_type,
+            self.next_action_uuid(),
+            queue.version,
+            payload,
+        )
+    }
+
     pub async fn send_queue_command(
         &self,
         command: QueueCommand,
@@ -362,8 +429,9 @@ where
     }
 
     /// Emit a RndrSrvrDeviceAudioQualityChanged(27) report describing the actual
-    /// DAC output format (sampling_rate / bit_depth / nb_channels), deduped against
+    /// renderer output stream format (sampling_rate / bit_depth / nb_channels), deduped against
     /// the last reported value. Returns Ok(true) when a report was sent.
+    /// A nonpositive effective bit depth is unknown and omitted from the wire.
     pub async fn report_device_audio_quality_if_changed(
         &self,
         queue_version: QueueVersion,
@@ -386,7 +454,7 @@ where
             queue_version,
             serde_json::json!({
                 "sampling_rate": sampling_rate,
-                "bit_depth": bit_depth,
+                "bit_depth": (bit_depth > 0).then_some(bit_depth),
                 "nb_channels": nb_channels
             }),
         );
@@ -674,7 +742,7 @@ where
         &self,
         command: RendererServerCommand,
     ) -> Result<(), QconnectAppError> {
-        let Some(renderer_command) = map_renderer_server_command(&command) else {
+        let Some(mut renderer_command) = map_renderer_server_command(&command) else {
             return Ok(());
         };
 
@@ -720,8 +788,23 @@ where
                 && current_position_ms.is_none()
         );
 
+        let observed = self.sink.playback_event();
         let (snapshot, queue_version) = {
             let mut state = self.state.lock().await;
+            if let Some(event) = observed.as_ref() {
+                let previous_item = state
+                    .renderer
+                    .current_track
+                    .as_ref()
+                    .map(|track| track.queue_item_id);
+                if crate::reporting::preserve_running_position(
+                    &mut renderer_command,
+                    event,
+                    previous_item,
+                ) {
+                    log::debug!("[QConnect] Preserving live position across same-track queue echo");
+                }
+            }
             apply_renderer_command(&mut state.renderer, &renderer_command, now_ms());
             (state.renderer.clone(), state.queue.version)
         };
@@ -854,11 +937,23 @@ where
                         queue_version_ref.major,
                         queue_version_ref.minor
                     );
-                    let buffer_state = if renderer.playing_state == Some(PLAYING_STATE_PLAYING) {
-                        PlaybackBufferState::InitialBuffering
-                    } else {
-                        PlaybackBufferState::Ready
-                    };
+                    let buffer_state = self
+                        .sink
+                        .playback_event()
+                        .filter(|event| {
+                            renderer
+                                .current_track
+                                .as_ref()
+                                .is_some_and(|track| track.track_id == event.track_id)
+                        })
+                        .map(|event| event.buffer_state)
+                        .unwrap_or_else(|| {
+                            if renderer.playing_state == Some(PLAYING_STATE_PLAYING) {
+                                PlaybackBufferState::InitialBuffering
+                            } else {
+                                PlaybackBufferState::Ready
+                            }
+                        });
                     let report = build_renderer_playback_report(
                         self.next_action_uuid(),
                         queue_version_ref,
@@ -2718,6 +2813,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use qbz_player::player::PlaybackBufferState;
     mod controller_takeover;
 
     use std::collections::VecDeque;
@@ -2752,6 +2848,7 @@ mod tests {
     #[derive(Debug, Default, Clone)]
     struct TestSink {
         events: Arc<Mutex<Vec<QconnectAppEvent>>>,
+        observed: Arc<std::sync::Mutex<Option<qbz_player::player::PlaybackEvent>>>,
     }
 
     impl TestSink {
@@ -2762,6 +2859,9 @@ mod tests {
 
     #[async_trait]
     impl QconnectEventSink for TestSink {
+        fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
+            self.observed.lock().unwrap().clone()
+        }
         async fn on_event(&self, event: QconnectAppEvent) {
             self.events.lock().await.push(event);
         }
@@ -4689,6 +4789,142 @@ mod tests {
                 if message_type == "MESSAGE_TYPE_SRVR_CTRL_LOOP_MODE_SET"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn play_next_and_later_batches_keep_the_complete_manual_block() {
+        let (app, sink, _, _events_rx) = build_connected_app().await;
+        *sink.observed.lock().unwrap() = Some(qbz_player::player::PlaybackEvent {
+            track_id: 1,
+            position: 67,
+            is_playing: true,
+            buffer_state: PlaybackBufferState::Ready,
+            ..Default::default()
+        });
+        let mut base = vec![1, 2, 3];
+        for target in [vec![1, 10, 11, 2, 3], vec![1, 10, 11, 12, 13, 2, 3]] {
+            {
+                let mut state = app.state.lock().await;
+                state.queue.queue_items = base
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| qconnect_core::QueueItem {
+                        track_context_uuid: String::new(),
+                        track_id: *id,
+                        queue_item_id: i as u64,
+                    })
+                    .collect();
+                state.renderer.current_track = Some(state.queue.queue_items[0].clone());
+            }
+            let command = app.build_local_queue_sync_command(&target, 0, true).await;
+            assert_eq!(
+                command.command_type,
+                QueueCommandType::CtrlSrvrQueueLoadTracks
+            );
+            assert_eq!(command.payload["track_ids"], json!(target));
+            assert_eq!(command.payload["queue_position"], 0);
+            base = target;
+        }
+    }
+
+    #[tokio::test]
+    async fn local_append_preserves_clock_and_duplicate_occurrences() {
+        let (app, sink, _, _) = build_connected_app().await;
+        *sink.observed.lock().unwrap() = Some(qbz_player::player::PlaybackEvent {
+            track_id: 10,
+            position: 67,
+            is_playing: true,
+            buffer_state: PlaybackBufferState::Ready,
+            ..Default::default()
+        });
+        {
+            let mut state = app.state.lock().await;
+            state.queue.version = QueueVersion::new(8, 1);
+            state.queue.queue_items = [10, 20, 10]
+                .into_iter()
+                .enumerate()
+                .map(|(i, id)| qconnect_core::QueueItem {
+                    track_context_uuid: String::new(),
+                    track_id: id,
+                    queue_item_id: i as u64,
+                })
+                .collect();
+            state.renderer.current_track = Some(state.queue.queue_items[2].clone());
+        }
+        let append = app
+            .build_local_queue_sync_command(&[10, 20, 10, 30, 30], 2, true)
+            .await;
+        assert_eq!(
+            append.command_type,
+            QueueCommandType::CtrlSrvrQueueAddTracks
+        );
+        assert_eq!(append.payload["track_ids"], json!([30, 30]));
+        assert_eq!(append.payload["autoplay_reset"], false);
+        assert!(append.payload.get("queue_position").is_none());
+        assert!(append.payload.get("shuffle_mode").is_none());
+        assert_eq!(append.queue_version_ref, QueueVersion::new(8, 1));
+        for (ids, current, allowed) in [
+            // Indistinguishable from inserting another 10 before the old one.
+            (vec![10, 20, 10, 10, 30], 2, true),
+            (vec![10, 20, 10, 30], 0, true),
+            (vec![20, 10, 10, 30], 2, true),
+            (vec![10, 20, 10, 30], 2, false),
+        ] {
+            assert_eq!(
+                app.build_local_queue_sync_command(&ids, current, allowed)
+                    .await
+                    .command_type,
+                QueueCommandType::CtrlSrvrQueueLoadTracks
+            );
+        }
+        // In shuffle, a canonical tail insertion could mean "play next" in
+        // playback order. Never infer append from catalog order alone.
+        app.state.lock().await.queue.shuffle_mode = true;
+        assert_eq!(
+            app.build_local_queue_sync_command(&[10, 20, 10, 30], 2, true)
+                .await
+                .command_type,
+            QueueCommandType::CtrlSrvrQueueLoadTracks
+        );
+        app.state.lock().await.queue.shuffle_mode = false;
+        sink.observed.lock().unwrap().as_mut().unwrap().buffer_state =
+            PlaybackBufferState::InitialBuffering;
+        assert_eq!(
+            app.build_local_queue_sync_command(&[10, 20, 10, 30], 2, true)
+                .await
+                .command_type,
+            QueueCommandType::CtrlSrvrQueueLoadTracks
+        );
+    }
+
+    #[tokio::test]
+    async fn queue_echo_keeps_live_position_in_reducer_and_controller_report() {
+        let (app, sink, transport, _events_rx) = build_connected_app().await;
+        *sink.observed.lock().unwrap() = Some(qbz_player::player::PlaybackEvent {
+            track_id: 386331742,
+            position: 67,
+            duration: 290,
+            is_playing: true,
+            buffer_state: qbz_player::player::PlaybackBufferState::Ready,
+            ..Default::default()
+        });
+        app.apply_renderer_server_command(RendererServerCommand {
+            command_type: RendererCommandType::SrvrRndrSetState,
+            payload: json!({ "playing_state": 2, "current_position": 0,
+                "current_track": {"track_context_uuid": "queue-edit", "track_id": 386331742, "queue_item_id": 0} }),
+        }).await.unwrap();
+        assert_eq!(
+            app.renderer_state_snapshot().await.current_position_ms,
+            Some(67000)
+        );
+        let messages = transport.sent_messages().await;
+        let report = messages
+            .iter()
+            .find(|message| message.message_type == "MESSAGE_TYPE_RNDR_SRVR_STATE_UPDATED")
+            .unwrap();
+        assert_eq!(report.payload["current_position"], 67000);
+        assert_eq!(report.payload["buffer_state"], 2);
+        assert_eq!(report.payload["playing_state"], 2);
     }
 
     #[tokio::test]

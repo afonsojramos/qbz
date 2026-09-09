@@ -32,8 +32,7 @@ use qconnect_app::{
     local_playback_should_yield_to_active_peer, remote_renderer_commands_are_fenced,
     renderer_allows_remote_volume, should_materialize_remote_queue, AuthorityCell, AuthorityStamp,
     QconnectApp, QconnectAppEvent, QconnectEventSink, QconnectRemoteSyncState,
-    QconnectRendererEngine, RendererBufferState, RendererCommand, RendererReport,
-    RendererReportType,
+    QconnectRendererEngine, RendererCommand,
 };
 use qconnect_transport_ws::NativeWsTransport;
 use serde_json::Value;
@@ -307,7 +306,16 @@ impl QtQconnectEventSink {
         if !self.is_current() {
             return;
         }
-        crate::playback_qt::refresh_now_playing(&self.runtime).await;
+        let current = self.runtime.core().current_track().await;
+        if !self.is_current() {
+            return;
+        }
+        // Queue edits and repeated SetState do not select a new track. Replacing
+        // the metadata model here would reset its elapsed time and artwork.
+        let displayed = crate::now_playing::art_seed();
+        if current.as_ref().map(|track| track.id) != Some(displayed.track_id) {
+            crate::playback_qt::refresh_now_playing(&self.runtime).await;
+        }
         if !self.is_current() {
             return;
         }
@@ -354,8 +362,7 @@ impl QtQconnectEventSink {
         let _ = self.app.set(Arc::downgrade(app));
     }
 
-    /// Emit a StateUpdated report announcing this renderer is now active. Sent
-    /// after SetActive(true) is applied so the controller learns we are ready.
+    /// Acknowledge activation with the actual player state, including buffering.
     async fn report_active_renderer_ready(&self) {
         if !self.is_current() {
             return;
@@ -363,22 +370,25 @@ impl QtQconnectEventSink {
         let Some(app) = self.app.get().and_then(Weak::upgrade) else {
             return;
         };
-        let queue_version = app.queue_state_snapshot().await.version;
+        let queue = app.queue_state_snapshot().await;
+        let renderer = app.renderer_state_snapshot().await;
         if !self.is_current() {
             return;
         }
-        let report = RendererReport::new(
-            RendererReportType::RndrSrvrStateUpdated,
+        let event = self.engine.playback_event();
+        let snapshot = qconnect_app::playback_snapshot_from_event(
+            &event,
+            &queue,
+            renderer
+                .current_track
+                .as_ref()
+                .map(|item| item.queue_item_id),
+            renderer.next_track.as_ref().map(|item| item.queue_item_id),
+        );
+        let report = qconnect_app::build_renderer_playback_report(
             Uuid::new_v4().to_string(),
-            queue_version,
-            serde_json::json!({
-                "is_active": true,
-                "buffer_state": RendererBufferState::Ok.as_i32(),
-                "queue_version": {
-                    "major": queue_version.major,
-                    "minor": queue_version.minor
-                }
-            }),
+            queue.version,
+            snapshot,
         );
         if !self.is_current() {
             return;
@@ -608,6 +618,10 @@ impl QtQconnectEventSink {
 
 #[async_trait]
 impl QconnectEventSink for QtQconnectEventSink {
+    fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
+        self.is_current().then(|| self.engine.playback_event())
+    }
+
     async fn on_event(&self, event: QconnectAppEvent) {
         if !self.is_current() {
             return;
