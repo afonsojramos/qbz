@@ -229,6 +229,7 @@ pub mod qbz_local {
         /// mirrors `ui_prefs.json`, so one property buys BOTH kinds of
         /// persistence the owner asked for.
         #[qproperty(QString, albums_filter)]
+        #[qproperty(QString, media_status)]
         #[qproperty(bool, media_syncing)]
         #[qproperty(QString, media_sync_progress)]
         /// Tracks written by the last sync; -1 = never synced this session.
@@ -599,6 +600,10 @@ pub mod qbz_local {
             username: QString,
             password: QString,
         );
+        #[qinvokable]
+        fn media_quick_connect(self: Pin<&mut QbzLocal>, url: QString);
+        #[qinvokable]
+        fn media_cancel_quick_connect(self: Pin<&mut QbzLocal>);
         /// Master toggle. OFF collapses the union back immediately; the cache
         /// is KEPT so turning it on again does not re-sweep.
         #[qinvokable]
@@ -783,6 +788,7 @@ pub struct QbzLocalRust {
     media_has_jellyfin: bool,
     media_has_subsonic: bool,
     albums_filter: QString,
+    media_status: QString,
     media_syncing: bool,
     media_sync_progress: QString,
     plex_last_sync_tracks: i32,
@@ -862,6 +868,7 @@ impl Default for QbzLocalRust {
             media_has_jellyfin: false,
             media_has_subsonic: false,
             albums_filter: QString::default(),
+            media_status: QString::from("{}"),
             media_syncing: false,
             media_sync_progress: QString::default(),
             plex_last_sync_tracks: -1,
@@ -1319,13 +1326,82 @@ impl qbz_local::QbzLocal {
     }
 
     pub fn media_test(self: Pin<&mut Self>, server: QString, url: QString) {
-        let (Some(kind), url) = (media_kind(&server), url.to_string()) else {
+        let Some(kind) = media_kind(&server) else {
+            return;
+        };
+        let url = url.to_string();
+        if url.trim().is_empty() {
+            return;
+        }
+        let _ = crate::media_servers_qt::get(kind);
+        let Some(operation) = crate::media_connection_qt::Operation::begin(kind, "testing") else {
             return;
         };
         crate::spawn(async move {
-            match crate::media_servers_qt::probe(kind, &url).await {
-                Ok(name) => crate::toast_qt::success(format!("Connected to {name}")),
-                Err(e) => crate::toast_qt::error(e),
+            let result = operation
+                .request(
+                    crate::media_servers_qt::probe(kind, url.trim()),
+                    std::time::Duration::from_secs(15),
+                )
+                .await;
+            match result {
+                Some(Ok(_)) => operation.phase("reachable", ""),
+                Some(Err(error)) => {
+                    log::warn!(
+                        "[media-connection] provider={} phase=testing failed: {error}",
+                        kind.as_str()
+                    );
+                    operation.phase("failed", &error);
+                    crate::toast_qt::error(error);
+                }
+                None => {}
+            }
+        });
+    }
+
+    pub fn media_cancel_quick_connect(self: Pin<&mut Self>) {
+        crate::media_connection_qt::cancel_pairing();
+    }
+    pub fn media_quick_connect(self: Pin<&mut Self>, url: QString) {
+        let kind = qbz_app::settings::media_servers::MediaServerKind::Jellyfin;
+        let url = url.to_string();
+        if url.trim().is_empty() {
+            return;
+        }
+        let cfg = crate::media_servers_qt::get(kind);
+        let Some(operation) = crate::media_connection_qt::Operation::begin(kind, "pairing-start")
+        else {
+            return;
+        };
+        crate::spawn(async move {
+            let result = operation
+                .request(
+                    crate::media_servers_qt::quick_connect(url.trim(), cfg, &operation),
+                    std::time::Duration::from_secs(350),
+                )
+                .await;
+            match result {
+                Some(Ok(cfg)) => {
+                    if operation
+                        .commit(|| crate::media_servers_qt::put(kind, &cfg))
+                        .is_none()
+                    {
+                        return;
+                    }
+                    operation.phase("connected", "");
+                    crate::settings_qt::publish_snapshot().await;
+                    if operation.current() {
+                        run_media_sync(kind, true, &operation).await;
+                    }
+                }
+                Some(Err(error)) => {
+                    log::warn!(
+                        "[media-connection] provider=jellyfin phase=quick-connect failed: {error}"
+                    );
+                    operation.phase("failed", &error);
+                    crate::toast_qt::error(error);
+                }
+                None => {}
             }
         });
     }
@@ -1341,14 +1417,51 @@ impl qbz_local::QbzLocal {
             return;
         };
         let (url, user, pass) = (url.to_string(), username.to_string(), password.to_string());
+        if url.trim().is_empty() || user.trim().is_empty() || pass.is_empty() {
+            return;
+        }
+        let cfg = crate::media_servers_qt::get(kind);
+        let Some(operation) = crate::media_connection_qt::Operation::begin(kind, "authenticating")
+        else {
+            return;
+        };
         crate::spawn(async move {
-            match crate::media_servers_qt::connect(kind, &url, &user, &pass).await {
-                Ok(()) => {
-                    crate::toast_qt::success(qbz_i18n::t("Connected"));
+            let result = operation
+                .request(
+                    crate::media_servers_qt::connect(
+                        kind,
+                        url.trim(),
+                        user.trim(),
+                        &pass,
+                        cfg,
+                        &operation,
+                    ),
+                    std::time::Duration::from_secs(35),
+                )
+                .await;
+            match result {
+                Some(Ok(cfg)) => {
+                    if operation
+                        .commit(|| crate::media_servers_qt::put(kind, &cfg))
+                        .is_none()
+                    {
+                        return;
+                    }
+                    operation.phase("connected", "");
                     crate::settings_qt::publish_snapshot().await;
-                    run_media_sync(kind, true).await;
+                    if operation.current() {
+                        run_media_sync(kind, true, &operation).await;
+                    }
                 }
-                Err(e) => crate::toast_qt::error(e),
+                Some(Err(error)) => {
+                    log::warn!(
+                        "[media-connection] provider={} phase=connect failed: {error}",
+                        kind.as_str()
+                    );
+                    operation.phase("failed", &error);
+                    crate::toast_qt::error(error);
+                }
+                None => {}
             }
         });
     }
@@ -1357,17 +1470,17 @@ impl qbz_local::QbzLocal {
         let Some(kind) = media_kind(&server) else {
             return;
         };
+        // Invalidate pending authentication before changing the stored switch.
+        // A late response must not silently re-enable a disabled integration.
+        crate::media_connection_qt::cancel(kind);
+        if !enabled {
+            crate::media_sync_qt::cancel(kind);
+        }
+        let mut cfg = crate::media_servers_qt::get(kind);
+        cfg.enabled = enabled;
+        crate::media_servers_qt::put(kind, &cfg);
         crate::spawn(async move {
-            let mut cfg = crate::media_servers_qt::get(kind);
-            cfg.enabled = enabled;
-            crate::media_servers_qt::put(kind, &cfg);
-            // The panel reads `state.enabled` off the SETTINGS DOCUMENT, not
-            // off a bridge property the way Plex's toggle does — so a write
-            // that does not republish leaves the switch visually stuck in its
-            // old position while the store underneath has already changed
-            // (caught by driving the real window, 2026-08-20).
             crate::settings_qt::publish_snapshot().await;
-            // The union IS the query — the grid/tracks/badges must re-run.
             reload_browse();
         });
     }
@@ -1376,29 +1489,38 @@ impl qbz_local::QbzLocal {
         let Some(kind) = media_kind(&server) else {
             return;
         };
-        // Refuse HERE rather than letting the sweep's own guard reject it: a
-        // second click should say why, and by the time the guard sees it the
-        // caller has already been told the task started.
-        if crate::media_sync_qt::is_syncing(kind) {
-            crate::toast_qt::info(qbz_i18n::t("A sync is already running"));
+        let Some(operation) = crate::media_connection_qt::Operation::begin(kind, "syncing") else {
             return;
-        }
-        crate::spawn(async move { run_media_sync(kind, full).await });
+        };
+        crate::spawn(async move {
+            run_media_sync(kind, full, &operation).await;
+        });
     }
 
     pub fn media_disconnect(self: Pin<&mut Self>, server: QString) {
         let Some(kind) = media_kind(&server) else {
             return;
         };
+        crate::media_connection_qt::cancel(kind);
+        // Invalidate credentials before another event can start a connection.
+        crate::media_servers_qt::disconnect(kind);
+        let user = qbz_app::user_data::UserDataPaths::load_last_user_id();
         crate::spawn(async move {
-            crate::media_servers_qt::disconnect(kind);
             crate::settings_qt::publish_snapshot().await;
-            // Purge the rows too: leaving them would keep a signed-out
-            // server's music in the grid until something else cleared it,
-            // and the master-toggle path deliberately does NOT purge (so it
-            // can be undone cheaply). Disconnect is the destructive one.
-            crate::media_servers_qt::purge_cache(kind);
-            reload_browse();
+            // A large cache purge must not block the UI. The state gate also
+            // protects against a profile rebind while this job owns the cache.
+            let _ = tokio::task::spawn_blocking(move || {
+                let _guard = crate::media_sync_qt::media_server_state_guard(kind);
+                if qbz_app::user_data::UserDataPaths::load_last_user_id() == user
+                    && !crate::media_servers_qt::get(kind).is_configured(kind)
+                {
+                    crate::media_servers_qt::purge_cache(kind);
+                }
+            })
+            .await;
+            if qbz_app::user_data::UserDataPaths::load_last_user_id() == user {
+                reload_browse();
+            }
         });
     }
 
@@ -2114,7 +2236,15 @@ fn media_kind(server: &QString) -> Option<qbz_app::settings::media_servers::Medi
 
 /// Run a sweep and report it, then reload the browse documents so the new rows
 /// appear without the user navigating away and back.
-async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind, full: bool) {
+async fn run_media_sync(
+    kind: qbz_app::settings::media_servers::MediaServerKind,
+    full: bool,
+    operation: &crate::media_connection_qt::Operation,
+) {
+    if !operation.current() {
+        return;
+    }
+    operation.phase("syncing", "");
     use qbz_app::settings::media_servers::MediaServerKind;
     let result = match kind {
         MediaServerKind::Jellyfin => crate::media_sync_qt::sync_jellyfin(full)
@@ -2122,8 +2252,12 @@ async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind,
             .map_err(crate::media_sync_qt::SyncError::Failed),
         MediaServerKind::Subsonic => crate::media_sync_qt::sync_subsonic(full).await,
     };
+    if !operation.current() {
+        return;
+    }
     match result {
         Ok(r) => {
+            operation.phase("ready", "");
             log::info!(
                 "[qbz-qt] {} sync: {} saved, {} pruned, {} cached",
                 kind.as_str(),
@@ -2137,11 +2271,20 @@ async fn run_media_sync(kind: qbz_app::settings::media_servers::MediaServerKind,
             reload_browse();
         }
         Err(crate::media_sync_qt::SyncError::ServerRefreshing { server, scanned }) => {
+            operation.phase("refreshing", "");
             crate::toast_qt::info(qbz_i18n::t_args(
                 "{} is refreshing its library ({} items scanned). Wait for it to finish, then sync again.",
                 &[&server, &scanned.to_string()],
             ));
         }
-        Err(crate::media_sync_qt::SyncError::Failed(error)) => crate::toast_qt::error(error),
+        Err(crate::media_sync_qt::SyncError::Failed(error)) => {
+            let message = qbz_i18n::t_args("Library sync failed: {}", &[&error]);
+            log::warn!(
+                "[media-connection] provider={} phase=syncing failed: {error}",
+                kind.as_str()
+            );
+            operation.phase("sync-failed", &message);
+            crate::toast_qt::error(message);
+        }
     }
 }

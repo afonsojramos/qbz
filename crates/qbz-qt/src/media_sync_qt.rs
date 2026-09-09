@@ -197,20 +197,24 @@ fn invalidate_jellyfin_quality() {
 
 /// RAII guard so an early return — or a `?` — cannot leave the flag stuck on.
 /// A stuck flag means the sync button never works again until a restart.
-struct BusyGuard(&'static AtomicBool);
+struct BusyGuard(&'static AtomicBool, MediaServerKind);
 
 impl BusyGuard {
     fn acquire(kind: MediaServerKind) -> Option<Self> {
         let flag = busy_flag(kind);
+        if flag.load(Ordering::Acquire) || !crate::media_connection_qt::begin_sync(kind) {
+            return None;
+        }
         flag.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .ok()
-            .map(|_| BusyGuard(flag))
+            .map(|_| BusyGuard(flag, kind))
     }
 }
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Release);
+        crate::media_connection_qt::syncing(self.1, false);
     }
 }
 
@@ -254,25 +258,7 @@ impl std::fmt::Display for SyncError {
 fn report(kind: MediaServerKind, done: u64, total: u64) {
     log::info!("[qbz-qt] {} sync: {done}/{total}", kind.as_str());
     let text = format!("{done}/{total}");
-    crate::local_bridge::ui(move |mut b| {
-        b.as_mut()
-            .set_media_sync_progress(cxx_qt_lib::QString::from(text.as_str()));
-    });
-}
-
-/// Raise/lower the spinner flag and clear the progress text when it goes down.
-///
-/// Separate from [`BusyGuard`] on purpose: that guard is process state and must
-/// be released synchronously on every path, while this hop crosses to the Qt
-/// thread and cannot be done from a `Drop`.
-fn set_syncing_ui(on: bool) {
-    crate::local_bridge::ui(move |mut b| {
-        b.as_mut().set_media_syncing(on);
-        if !on {
-            b.as_mut()
-                .set_media_sync_progress(cxx_qt_lib::QString::default());
-        }
-    });
+    crate::media_connection_qt::progress(kind, text.clone());
 }
 
 // ---------------------------------------------------------------------------
@@ -299,9 +285,7 @@ pub async fn sync_jellyfin(full: bool) -> Result<SyncReport, String> {
     if !cfg.is_configured(kind) {
         return Err("jellyfin is not configured".into());
     }
-    set_syncing_ui(true);
     let out = sync_jellyfin_inner(cfg, full).await;
-    set_syncing_ui(false);
     out
 }
 
@@ -810,11 +794,9 @@ pub async fn sync_subsonic(_full: bool) -> Result<SyncReport, SyncError> {
         }
     }
     let sync_epoch = SUBSONIC_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
-    set_syncing_ui(true);
     let out = sync_subsonic_inner(cfg, client, sync_epoch)
         .await
         .map_err(SyncError::Failed);
-    set_syncing_ui(false);
     out
 }
 

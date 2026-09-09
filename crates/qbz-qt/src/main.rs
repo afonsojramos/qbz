@@ -152,6 +152,7 @@ mod source_wiring;
 // Jellyfin / Subsonic: the per-user settings store plus the two gates the
 // Local Library union reads. The credential glue itself is in `source_wiring`.
 mod media_servers_qt;
+mod media_connection_qt;
 // Profile-scoped metadata overlays for Plex/Jellyfin/Subsonic. Physical files
 // keep using `.qbz.json`; this module is the read-through cache for servers
 // that have no local directory to put that document beside.

@@ -549,6 +549,7 @@ pub fn normalize_base_url(input: &str) -> String {
 
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
         .timeout(HTTP_TIMEOUT)
         .build()
         .map_err(|e| transport_error(&e))
