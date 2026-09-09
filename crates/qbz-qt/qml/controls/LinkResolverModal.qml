@@ -3,6 +3,7 @@
 // opened it.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../theme"
 
@@ -17,9 +18,29 @@ Item {
         event.accepted = true
     }
 
+    Connections {
+        target: QbzLink
+        function onFocusRequested() { urlInput.focusField() }
+    }
+
     onVisibleChanged: {
-        if (visible)
+        if (visible) {
             urlInput.focusField()
+        } else {
+            // Return focus only if it still belongs to this modal. A search
+            // shortcut may already have focused the header before close arrives.
+            var window = root.Window.window
+            var item = window ? window.activeFocusItem : null
+            while (item && item !== root)
+                item = item.parent
+            if (item === root) {
+                var shell = root.parent
+                while (shell && shell.isQbzShellRoot !== true)
+                    shell = shell.parent
+                if (shell)
+                    shell.forceActiveFocus()
+            }
+        }
     }
 
     Rectangle {

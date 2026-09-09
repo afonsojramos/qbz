@@ -360,7 +360,21 @@ impl qbz_hotkeys::QbzHotkeys {
         // QML per §1.4.4 and passed in. Null activeFocusItem passes (the
         // semantically right case).
         if text_input_focused {
-            return false;
+            // Keep ordinary typing off the preferences-on-disk lookup path.
+            if !crate::hotkeys_qt::mods_from_qt(modifiers).0 {
+                return false;
+            }
+            let overrides = crate::hotkeys_qt::load_overrides();
+            return crate::hotkeys_qt::action_for_text_input(
+                crate::hotkeys_qt::active_keymap(),
+                &overrides,
+                key,
+                modifiers,
+                &text,
+                crate::immersive_bridge::is_open(),
+            )
+            .map(|action| self.as_mut().run_action(action.id))
+            .unwrap_or(false);
         }
 
         // (C2) Ctrl+A select-all — separate NON-REBINDABLE branch (§4.6,
@@ -400,8 +414,18 @@ impl qbz_hotkeys::QbzHotkeys {
             "playback.prev" => crate::transport_previous(),
             "nav.back" => crate::nav_qt::back(),
             "nav.forward" => crate::nav_qt::forward(),
-            "nav.search" => self.as_mut().focus_search_requested(), // K6 QML seam
-            "nav.settings" => crate::navigate_to("settings"),
+            "nav.search" => {
+                if crate::link_resolver_bridge::is_open() {
+                    crate::link_resolver_bridge::close_modal();
+                }
+                self.as_mut().focus_search_requested();
+            }
+            "nav.settings" => {
+                if crate::link_resolver_bridge::is_open() {
+                    crate::link_resolver_bridge::close_modal();
+                }
+                crate::navigate_to("settings");
+            }
             "ui.sidebar" => crate::shell_bridge::ui(|s| s.cycle_sidebar()),
             "ui.focusMode" => crate::immersive_bridge::toggle(),
             "ui.queue" => crate::shell_bridge::ui(|s| s.toggle_queue()),
