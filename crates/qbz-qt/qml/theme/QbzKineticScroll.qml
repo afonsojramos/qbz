@@ -1,22 +1,14 @@
-// Shared touchpad kinetic tail for a Flickable/ListView/GridView.
-//
-// Qt 6.11 already owns the direct pixel-delta drag while the fingers are on
-// the pad, including nested-axis arbitration and bounds. On Linux/Wayland the
-// gesture commonly ends with ScrollEnd and NO compositor momentum stream, so
-// Qt stops the content on the same frame the fingers lift. This component only
-// observes that native gesture and hands its final vertical velocity back to
-// Flickable.flick(). It never writes contentY and never owns an animation.
-//
-// RESOURCE CONTRACT (GPU-COST-INVESTIGATION.md): WheelHandler is event-driven;
-// there is no Timer, Behavior or permanent clock. The one callLater crosses
-// Qt's ScrollEnd cleanup, then Flickable's bounded native timeline owns motion
-// and stops itself. At rest this item writes nothing and schedules no frame.
+// Shared scrolling for the house scrollbar. Mouse-wheel steps accumulate a
+// destination and finish with a short easing; touchpad pixel gestures keep
+// their native handling and existing missing-momentum fallback.
+// Animation runs only while consuming wheel input, never while idle.
 
 import QtQuick
 
 Item {
     id: root
 
+    objectName: "qbzWheelScroll"
     required property Flickable target
     /// User-originated wheel/touchpad takeover. Consumers with an opt-in
     /// auto-follow mode use this to yield immediately; programmatic
@@ -29,6 +21,93 @@ Item {
     parent: target
     anchors.fill: parent
     z: 2147483646
+
+    property real _destination: 0
+    property real _position: 0
+    property int _direction: 0
+    property bool _writing: false
+    readonly property bool wheelScrolling: wheelAnimation.running
+
+    function stopWheel() {
+        wheelAnimation.stop();
+        root._direction = 0;
+    }
+
+    // Let nested vertical views consume their own wheel. Horizontal rails keep
+    // tilt/shift gestures; an ordinary vertical wheel still scrolls the page.
+    function _nestedVerticalAt(x, y, angleY) {
+        let item = root.target.contentItem;
+        let point = root.mapToItem(item, x, y);
+        while (item) {
+            const child = item.childAt(point.x, point.y);
+            if (!child)
+                return false;
+            const flickable = child as Flickable;
+            if (flickable && flickable.interactive) {
+                const minimum = flickable.originY - flickable.topMargin;
+                const maximum = flickable.originY + flickable.contentHeight
+                        - flickable.height + flickable.bottomMargin;
+                if (angleY > 0 ? flickable.contentY > minimum : flickable.contentY < maximum)
+                    return true;
+            }
+            point = item.mapToItem(child, point.x, point.y);
+            item = child;
+        }
+        return false;
+    }
+
+    function _scrollWheel(delta) {
+        const direction = delta > 0 ? 1 : -1;
+        const base = wheelAnimation.running && root._direction === direction
+                ? root._destination : root.target.contentY;
+        const minimum = root.target.originY - root.target.topMargin;
+        const maximum = Math.max(minimum, root.target.originY + root.target.contentHeight
+                - root.target.height + root.target.bottomMargin);
+        const destination = Math.max(minimum, Math.min(maximum, base + delta));
+        root.stopWheel();
+        root.target.cancelFlick();
+        if (Math.abs(destination - root.target.contentY) < 0.01)
+            return;
+        root._position = root.target.contentY;
+        root._direction = direction;
+        root._destination = destination;
+        wheelAnimation.from = root._position;
+        wheelAnimation.to = destination;
+        wheelAnimation.start();
+    }
+
+    NumberAnimation {
+        id: wheelAnimation
+        target: root
+        property: "_position"
+        duration: 150
+        easing.type: Easing.OutCubic
+    }
+    on_PositionChanged: {
+        if (!wheelAnimation.running)
+            return;
+        root._writing = true;
+        root.target.contentY = root._position;
+        root._writing = false;
+    }
+    Connections {
+        target: root.target
+        function onContentYChanged() { if (!root._writing) root.stopWheel(); }
+        function onContentHeightChanged() {
+            // Virtualized delegates refine contentHeight during a scroll.
+            // Keep the destination unless it has actually left the new bounds.
+            if (root.wheelScrolling && root._destination > root.target.originY
+                    + root.target.contentHeight - root.target.height + root.target.bottomMargin) {
+                root.stopWheel();
+                root.target.returnToBounds();
+            }
+        }
+        function onOriginYChanged() { root.stopWheel(); }
+        function onHeightChanged() { root.stopWheel(); }
+        function onVisibleChanged() { if (!root.target.visible) root.stopWheel(); }
+        function onInteractiveChanged() { if (!root.target.interactive) root.stopWheel(); }
+        function onDraggingChanged() { if (root.target.dragging) root.stopWheel(); }
+    }
 
     property real _sumX: 0
     property real _sumY: 0
@@ -105,9 +184,22 @@ Item {
         enabled: root.target.interactive
 
         onWheel: function (event) {
-            // Observer only. Native Flickable still applies the direct delta,
-            // arbitrates nested axes and owns bounds/overshoot.
+            // Pixel gestures and horizontal input remain with native Qt.
             event.accepted = false;
+
+            if (event.phase === Qt.NoScrollPhase && event.pixelDelta.x === 0
+                    && event.pixelDelta.y === 0 && event.angleDelta.y !== 0
+                    && Math.abs(event.angleDelta.y) > Math.abs(event.angleDelta.x)
+                    && !(event.modifiers & (Qt.ShiftModifier | Qt.ControlModifier | Qt.MetaModifier))
+                    && !root._nestedVerticalAt(event.x, event.y, event.angleDelta.y)) {
+                root.userScrollStarted();
+                // Honor system scroll lines and high-resolution fractional
+                // notches. Natural-scroll direction is already in Qt's delta.
+                root._scrollWheel(-event.angleDelta.y / 120 * Qt.styleHints.wheelScrollLines * 24);
+                event.accepted = true;
+                return;
+            }
+            root.stopWheel();
 
             if (event.phase === Qt.ScrollBegin) {
                 root.userScrollStarted();
@@ -135,9 +227,7 @@ Item {
                 return;
             }
 
-            // A physical wheel normally has angleDelta only and is handled by
-            // Qt's process-wide wheel-deceleration path (main.rs). This half is
-            // deliberately limited to high-resolution pixel gestures.
+            // Only high-resolution pixel gestures need the touchpad sampler.
             root.userScrollStarted();
             const dx = event.pixelDelta.x;
             const dy = event.pixelDelta.y;
