@@ -507,6 +507,16 @@ pub fn token_from_qt_key(key: i32, modifiers: i32, text: &str) -> Option<String>
         let base = (b'0' + (key - QT_KEY_0) as u8) as char;
         return Some(base.to_string());
     }
+    // Some platforms provide no text for Ctrl/Cmd+punctuation (notably
+    // Settings: Ctrl+,). Keep shifted symbols on the text/layout path.
+    if mods_from_qt(modifiers).0
+        && modifiers & QT_SHIFT == 0
+        && (text.is_empty() || text.chars().all(char::is_control))
+    {
+        if let Some(c) = char::from_u32(key as u32).filter(char::is_ascii_punctuation) {
+            return Some(c.to_string());
+        }
+    }
     // The text fallback: exactly one char, printable (non-control). This is
     // where the shifted symbols come from (`Shift+/` delivers "?").
     let mut chars = text.chars();
@@ -919,6 +929,23 @@ pub fn action_for_key(
     }
 }
 
+/// Focus-taking commands remain available while editing. Plain Vim keys
+/// and standard clipboard/edit shortcuts continue to belong to the field.
+pub fn action_for_text_input(
+    keymap: Keymap,
+    overrides: &BTreeMap<String, String>,
+    key: i32,
+    modifiers: i32,
+    text: &str,
+    immersive_open: bool,
+) -> Option<&'static ActionDef> {
+    if !mods_from_qt(modifiers).0 || matches!(key, 0x41 | 0x43 | 0x56 | 0x58 | 0x59 | 0x5a) {
+        return None;
+    }
+    action_for_key(keymap, overrides, key, modifiers, text, immersive_open)
+        .filter(|action| matches!(action.id, "nav.search" | "nav.settings" | "ui.openLink"))
+}
+
 /// Resolve a key event over the MINI window's context — a SIBLING of
 /// `action_for_key`, never a widening of it (2026-08-03 miniplayer/tray
 /// contract A-16, §4.9).
@@ -1045,6 +1072,58 @@ mod tests {
 
     fn no_overrides() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn focus_commands_work_while_editing_without_stealing_text_keys() {
+        for modifiers in [QT_CONTROL, QT_META] {
+            for (key, id) in [
+                (0x46, "nav.search"),
+                (0x4c, "ui.openLink"),
+                (0x2c, "nav.settings"),
+            ] {
+                for _ in 0..3 {
+                    assert_eq!(
+                        action_for_text_input(
+                            Keymap::Default,
+                            &no_overrides(),
+                            key,
+                            modifiers,
+                            "",
+                            false
+                        )
+                        .map(|a| a.id),
+                        Some(id)
+                    );
+                }
+            }
+        }
+        for keymap in [Keymap::Default, Keymap::Vim] {
+            for key in [0x41, 0x43, 0x56, 0x58, 0x59, 0x5a, QT_KEY_SPACE, 0x2f] {
+                for modifiers in [0, QT_SHIFT, QT_CONTROL] {
+                    assert!(action_for_text_input(
+                        keymap,
+                        &no_overrides(),
+                        key,
+                        modifiers,
+                        "",
+                        false
+                    )
+                    .is_none());
+                }
+            }
+        }
+        let mut overrides = no_overrides();
+        overrides.insert("nav.search".into(), "Ctrl+g".into());
+        assert_eq!(
+            action_for_text_input(Keymap::Default, &overrides, 0x47, QT_CONTROL, "", false)
+                .map(|a| a.id),
+            Some("nav.search")
+        );
+        assert!(
+            action_for_text_input(Keymap::Default, &overrides, 0x46, QT_CONTROL, "", false)
+                .is_none()
+        );
     }
 
     // --- Grammar round-trips (§3.5) ---------------------------------------

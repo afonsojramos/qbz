@@ -152,6 +152,12 @@ Rectangle {
     // only what it owns. Shared controls accept their Space/Enter events
     // before they bubble here; in particular a focused Settings toggle owns
     // Space, so toggling it cannot also trigger global play/pause (§4.1).
+    InputFocusDismiss { id: inputFocusDismiss }
+    Connections {
+        target: QbzShell
+        function onCurrentViewChanged() { inputFocusDismiss.dismiss() }
+    }
+
     Keys.onPressed: function (event) {
         var w = root.Window.window
         var afi = w !== null ? w.activeFocusItem : null

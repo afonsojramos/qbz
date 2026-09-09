@@ -575,6 +575,7 @@ fn main() {
                 "qml/controls/QbzEmptyState.qml",
                 "qml/controls/QbzIconButton.qml",
                 "qml/controls/QbzLineEdit.qml",
+                "qml/controls/InputFocusDismiss.qml",
                 "qml/controls/QbzLoadingDots.qml",
                 "qml/controls/QbzLoadMore.qml",
                 "qml/controls/QbzMultiSelectBar.qml",
