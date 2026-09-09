@@ -6933,3 +6933,76 @@ msgstr "Date de modification"
 
 msgid "Track count"
 msgstr "Nombre de pistes"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "Vérification du serveur…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "Connexion en cours…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "Vérification de l’accès à la bibliothèque…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "Serveur accessible. Connectez-vous pour continuer."
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "Serveur accessible. Les identifiants n’ont pas été vérifiés."
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "Connecté. Synchronisation de la bibliothèque…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "Connecté. La bibliothèque est à jour."
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "Connecté. Le serveur actualise sa bibliothèque."
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "Connexion enregistrée. Synchronisez pour vérifier l’accès."
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "Délai de connexion dépassé. Vérifiez l’adresse du serveur et réessayez."
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "Échec de la connexion : {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "Connecté, mais l’accès à la bibliothèque a échoué : {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "Échec de la synchronisation de la bibliothèque : {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Demande du code Quick Connect…"
+
+msgid "Waiting for authorization…"
+msgstr "En attente d’autorisation…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "Quick Connect est désactivé sur ce serveur."
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Quick Connect a expiré. Demandez un nouveau code."
+
+msgid "Quick Connect failed: {}"
+msgstr "Échec de Quick Connect : {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "Saisissez ce code dans Paramètres > Quick Connect depuis un client Jellyfin déjà connecté. QBZ attend jusqu’à 5 minutes."

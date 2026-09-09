@@ -86,6 +86,10 @@ pub enum JellyfinError {
     Transport(String),
     /// 401/403 — the token is gone or the user was disabled.
     Unauthorized,
+    /// The password sign-in endpoint rejected the attempt.
+    AuthenticationRejected,
+    QuickConnectDisabled,
+    QuickConnectExpired,
     /// Any other non-success status.
     Status(u16),
     /// The body was not the shape this client expects.
@@ -98,7 +102,19 @@ impl std::fmt::Display for JellyfinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             JellyfinError::Transport(e) => write!(f, "jellyfin request failed: {e}"),
-            JellyfinError::Unauthorized => write!(f, "jellyfin rejected the credentials"),
+            JellyfinError::Unauthorized => write!(
+                f,
+                "jellyfin rejected access to this resource (HTTP 401/403)"
+            ),
+            JellyfinError::AuthenticationRejected => {
+                write!(f, "jellyfin rejected the sign-in (HTTP 401/403)")
+            }
+            JellyfinError::QuickConnectDisabled => {
+                write!(f, "Quick Connect is disabled on this server.")
+            }
+            JellyfinError::QuickConnectExpired => {
+                write!(f, "Quick Connect expired. Request a new code.")
+            }
             JellyfinError::Status(s) => write!(f, "jellyfin answered {s}"),
             JellyfinError::Decode(e) => write!(f, "jellyfin response not understood: {e}"),
             JellyfinError::NotFound(what) => write!(f, "jellyfin has no {what}"),
@@ -486,6 +502,7 @@ fn auth_header(device_id: &str, token: Option<&str>) -> String {
 
 fn client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
         .timeout(HTTP_TIMEOUT)
         .build()
         .map_err(|e| JellyfinError::Transport(e.to_string()))
@@ -551,7 +568,10 @@ pub async fn authenticate(
         .send()
         .await
         .map_err(|e| transport_error(&e))?;
-    check(resp.status())?;
+    check(resp.status()).map_err(|e| match e {
+        JellyfinError::Unauthorized => JellyfinError::AuthenticationRejected,
+        other => other,
+    })?;
     let dto: AuthDto = resp
         .json()
         .await
@@ -562,6 +582,137 @@ pub async fn authenticate(
         user_name: dto.user.name,
         server_id: dto.server_id,
     })
+}
+
+/// A pending pairing request. The secret stays private and is never formatted.
+pub struct QuickConnect {
+    http: reqwest::Client,
+    base: String,
+    device_id: String,
+    secret: String,
+    code: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct QuickConnectDto {
+    authenticated: bool,
+    #[serde(default)]
+    secret: String,
+    #[serde(default)]
+    code: String,
+}
+impl QuickConnect {
+    pub async fn start(base_url: &str, device_id: &str) -> Result<Self> {
+        let http = client()?;
+        let base = normalize_base_url(base_url);
+        let response = http
+            .get(format!("{base}/QuickConnect/Enabled"))
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        check(response.status())?;
+        let enabled: bool = response
+            .json()
+            .await
+            .map_err(|_| JellyfinError::Decode("invalid Quick Connect availability".into()))?;
+        if !enabled {
+            return Err(JellyfinError::QuickConnectDisabled);
+        }
+        let response = http
+            .post(format!("{base}/QuickConnect/Initiate"))
+            .header("Authorization", auth_header(device_id, None))
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        quick_connect_check(response.status())?;
+        let dto: QuickConnectDto = response
+            .json()
+            .await
+            .map_err(|_| JellyfinError::Decode("invalid Quick Connect response".into()))?;
+        if dto.secret.is_empty() || dto.code.is_empty() {
+            return Err(JellyfinError::Decode(
+                "missing Quick Connect secret or code".into(),
+            ));
+        }
+        Ok(Self {
+            http,
+            base,
+            device_id: device_id.into(),
+            secret: dto.secret,
+            code: dto.code,
+        })
+    }
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+    pub async fn authorized(&self) -> Result<bool> {
+        let response = self
+            .http
+            .get(format!("{}/QuickConnect/Connect", self.base))
+            .query(&[("secret", &self.secret)])
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        quick_connect_check(response.status())?;
+        let dto: QuickConnectDto = response
+            .json()
+            .await
+            .map_err(|_| JellyfinError::Decode("invalid Quick Connect status".into()))?;
+        Ok(dto.authenticated)
+    }
+    /// Sequential polling: no overlapping requests, bounded even if the server
+    /// keeps returning pending forever. Dropping this future cancels polling.
+    pub async fn wait_for_authorization(&self, limit: Duration) -> Result<Session> {
+        tokio::time::timeout(limit, async {
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if self.authorized().await? {
+                    return self.authenticate().await;
+                }
+            }
+        })
+        .await
+        .map_err(|_| JellyfinError::QuickConnectExpired)?
+    }
+    pub async fn authenticate(&self) -> Result<Session> {
+        let response = self
+            .http
+            .post(format!("{}/Users/AuthenticateWithQuickConnect", self.base))
+            .header("Authorization", auth_header(&self.device_id, None))
+            .json(&serde_json::json!({"Secret": self.secret}))
+            .send()
+            .await
+            .map_err(|e| transport_error(&e))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(JellyfinError::QuickConnectExpired);
+        }
+        check(response.status()).map_err(|error| match error {
+            JellyfinError::Unauthorized => JellyfinError::AuthenticationRejected,
+            other => other,
+        })?;
+        let dto: AuthDto = response
+            .json()
+            .await
+            .map_err(|_| JellyfinError::Decode("invalid Quick Connect session".into()))?;
+        if dto.access_token.is_empty() || dto.user.id.is_empty() {
+            return Err(JellyfinError::Decode(
+                "missing Quick Connect session credentials".into(),
+            ));
+        }
+        Ok(Session {
+            access_token: dto.access_token,
+            user_id: dto.user.id,
+            user_name: dto.user.name,
+            server_id: dto.server_id,
+        })
+    }
+}
+fn quick_connect_check(status: reqwest::StatusCode) -> Result<()> {
+    match status.as_u16() {
+        401 => Err(JellyfinError::QuickConnectDisabled),
+        404 => Err(JellyfinError::QuickConnectExpired),
+        _ => check(status),
+    }
 }
 
 impl JellyfinClient {

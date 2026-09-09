@@ -1,3 +1,6 @@
 module com.blitzfc.qbz
 singleton QbzShell 1.0 QbzShell.qml
 singleton QbzPlayer 1.0 QbzPlayer.qml
+singleton QbzLocal 1.0 QbzLocal.qml
+singleton QbzSession 1.0 QbzSession.qml
+singleton QbzBridge 1.0 QbzBridge.qml

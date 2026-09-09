@@ -6916,3 +6916,76 @@ msgstr "更新日"
 
 msgid "Track count"
 msgstr "曲数"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "サーバーを確認中…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "サインイン中…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "ライブラリへのアクセスを確認中…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "サーバーに到達できました。接続するにはサインインしてください。"
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "サーバーに到達できました。認証情報は未確認です。"
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "接続済み。ライブラリを同期中…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "接続済み。ライブラリは最新です。"
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "接続済み。サーバーがライブラリを更新中です。"
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "接続情報は保存済みです。同期してアクセスを確認してください。"
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "接続がタイムアウトしました。サーバーのアドレスを確認して再試行してください。"
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "サインインに失敗しました: {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "サインインしましたが、ライブラリへのアクセスに失敗しました: {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "ライブラリの同期に失敗しました: {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Quick Connect コードを取得中…"
+
+msgid "Waiting for authorization…"
+msgstr "認証を待っています…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "このサーバーでは Quick Connect が無効です。"
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Quick Connect の有効期限が切れました。新しいコードを取得してください。"
+
+msgid "Quick Connect failed: {}"
+msgstr "Quick Connect に失敗しました: {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "ログイン済みの Jellyfin クライアントで「設定 > Quick Connect」にこのコードを入力してください。QBZ は最大5分間待機します。"

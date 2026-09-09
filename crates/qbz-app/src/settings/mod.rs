@@ -23,3 +23,5 @@ pub mod search_ranking;
 pub mod search_service;
 pub mod subscription;
 pub mod tray;
+
+pub mod media_connection;

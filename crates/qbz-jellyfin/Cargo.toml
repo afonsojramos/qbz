@@ -14,8 +14,9 @@ reqwest = { workspace = true, features = ["json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-[dev-dependencies]
 tokio = { workspace = true }
+
+[dev-dependencies]
 # reqwest is built with `rustls-tls-webpki-roots-no-provider`, so a
 # `reqwest::Client` cannot be CONSTRUCTED until a process-level CryptoProvider
 # is installed. The app does that in `qbz_app::install_crypto_provider`; a test
