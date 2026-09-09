@@ -3649,30 +3649,6 @@ fn apply_renderer_preference() {
     }
 }
 
-/// Enable Qt 6's native accumulated mouse-wheel flicks.
-///
-/// Qt 6.11 ships `wheelDeceleration = 15000`, exactly one unit above its
-/// `_q_MaximumWheelDeceleration = 14999` switch. That selects proportional
-/// scrolling: every notch travels the same distance and a rapid wheel spin
-/// cannot build velocity. A value below the switch enables the already-built
-/// Flickable wheel timeline. 1500 matches this platform's ordinary touch-flick
-/// deceleration, so one isolated notch keeps Qt's 72px distance while a rapid
-/// burst earns a bounded kinetic tail.
-///
-/// This is read when each QQuickFlickable is constructed, hence before the
-/// QGuiApplication/QML engine. Respect an explicit environment value for
-/// diagnostics and owner tuning; no hidden QBZ setting existed in the Slint or
-/// retired web frontend to migrate.
-fn apply_scroll_physics() {
-    const QT_WHEEL_DECELERATION: &str = "QT_QUICK_FLICKABLE_WHEEL_DECELERATION";
-    if std::env::var_os(QT_WHEEL_DECELERATION).is_none() {
-        std::env::set_var(QT_WHEEL_DECELERATION, "1500");
-        log::info!("[qbz-qt] native kinetic wheel enabled (deceleration=1500)");
-    } else {
-        log::info!("[qbz-qt] explicit {QT_WHEEL_DECELERATION} preserved");
-    }
-}
-
 /// Cap glibc's malloc arenas before the first thread exists. Every thread
 /// that first touches malloc gets its own 64 MB arena, and with ~50 threads
 /// (tokio workers, Qt, PipeWire, zbus) the process held 82 of them: measured
@@ -3950,7 +3926,6 @@ fn main() {
     // before the first QQuickWindow/QRhi is constructed.
     #[cfg(not(target_os = "linux"))]
     apply_renderer_preference();
-    apply_scroll_physics();
 
     // FONT ENGINE (Windows). Qt's default rasteriser on Windows renders the
     // lyric text thin and jagged - the owner's words were "como fuente de
