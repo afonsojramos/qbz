@@ -42,12 +42,16 @@ pub mod qbz_library_bridge {
         // favorites_ui.json the shipping Slint build writes). Seeded in
         // `boot`, written back one key at a time through `set_library_pref`.
         #[qproperty(QString, library_prefs_json)]
-        // Process/session-only All-tab filters. They intentionally do not
+        // Process/session-only source filters, stored separately per tab. They do not
         // enter favorites_ui.json, but the singleton outlives LibraryView so
         // navigation cannot reset them with the component.
         #[qproperty(bool, session_show_purchases)]
         #[qproperty(bool, session_show_favorites)]
         #[qproperty(bool, session_show_following)]
+        #[qproperty(bool, session_albums_show_purchases)]
+        #[qproperty(bool, session_albums_show_favorites)]
+        #[qproperty(bool, session_tracks_show_purchases)]
+        #[qproperty(bool, session_tracks_show_favorites)]
         // Artists SIDEPANEL: the selected artist's release sections
         // (library_sidepanel.rs). Its own document, never folded into
         // `library_json`: a selection must not re-serialize a 10k-row feed.
@@ -173,6 +177,10 @@ pub struct QbzLibraryRust {
     session_show_purchases: bool,
     session_show_favorites: bool,
     session_show_following: bool,
+    session_albums_show_purchases: bool,
+    session_albums_show_favorites: bool,
+    session_tracks_show_purchases: bool,
+    session_tracks_show_favorites: bool,
     sidepanel_json: QString,
 }
 
@@ -189,6 +197,10 @@ impl Default for QbzLibraryRust {
             session_show_purchases: true,
             session_show_favorites: true,
             session_show_following: true,
+            session_albums_show_purchases: true,
+            session_albums_show_favorites: true,
+            session_tracks_show_purchases: true,
+            session_tracks_show_favorites: true,
             sidepanel_json: QString::from("{}"),
         }
     }

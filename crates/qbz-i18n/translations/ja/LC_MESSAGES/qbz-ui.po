@@ -6830,3 +6830,12 @@ msgstr "SACDイメージはサイドカーファイルにメタデータを保�
 
 msgid "SACD track numbers cannot be changed."
 msgstr "SACDのトラック番号は変更できません。"
+
+msgid "Group: Year"
+msgstr "グループ: 年"
+
+msgid "Group: Decade"
+msgstr "グループ: 年代"
+
+msgid "Popularity"
+msgstr "人気順"

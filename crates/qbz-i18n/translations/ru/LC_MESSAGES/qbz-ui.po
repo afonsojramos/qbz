@@ -6868,3 +6868,12 @@ msgstr "Образы SACD используют метаданные в отде�
 
 msgid "SACD track numbers cannot be changed."
 msgstr "Номера дорожек SACD нельзя изменить."
+
+msgid "Group: Year"
+msgstr "Группа: Год"
+
+msgid "Group: Decade"
+msgstr "Группа: Десятилетие"
+
+msgid "Popularity"
+msgstr "Популярность"

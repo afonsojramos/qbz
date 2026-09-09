@@ -3539,6 +3539,13 @@ impl QtQconnectService {
     /// Toggle play/pause on the active PEER renderer. Mirrors the Tauri
     /// `toggle_remote_renderer_playback_if_active`.
     pub async fn toggle_remote_renderer_playback_if_active(&self) -> Result<bool, String> {
+        self.request_remote_renderer_playback_if_active(None).await
+    }
+
+    pub(crate) async fn request_remote_renderer_playback_if_active(
+        &self,
+        requested: Option<bool>,
+    ) -> Result<bool, String> {
         let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
             return Ok(false);
         };
@@ -3566,9 +3573,11 @@ impl QtQconnectService {
             return Ok(false);
         };
 
-        let next_playing_state = match renderer.playing_state {
-            Some(PLAYING_STATE_PLAYING) => PLAYING_STATE_PAUSED,
-            _ => PLAYING_STATE_PLAYING,
+        let playing = renderer.playing_state == Some(PLAYING_STATE_PLAYING);
+        let next_playing_state = if requested.unwrap_or(!playing) {
+            PLAYING_STATE_PLAYING
+        } else {
+            PLAYING_STATE_PAUSED
         };
         // BARE play/pause: send ONLY `playing_state` — no `current_position`, no
         // `current_queue_item`. Evidence (controller-of-iOS log 2026-06-05,

@@ -6855,3 +6855,12 @@ msgstr "Las imágenes SACD usan metadatos en un archivo sidecar."
 
 msgid "SACD track numbers cannot be changed."
 msgstr "No se pueden cambiar los números de pista de un SACD."
+
+msgid "Group: Year"
+msgstr "Agrupar: Año"
+
+msgid "Group: Decade"
+msgstr "Agrupar: Década"
+
+msgid "Popularity"
+msgstr "Popularidad"

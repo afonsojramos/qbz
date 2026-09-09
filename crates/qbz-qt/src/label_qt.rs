@@ -925,13 +925,23 @@ fn derive_releases(s: &LabelState) -> (Vec<HomeCard>, Vec<GroupedSection>, u32, 
     (Vec::new(), sections, shown, hires_count)
 }
 
-/// `album_map::sort_album_items`. `year` on these cards is the PLAIN 4-digit
-/// year (`home_qt::map_flat_album` slices `release_date_original`), so the
-/// lexicographic compare is a chronological one.
+/// Sort on original release dates, never the localized card label.
 fn sort_cards(items: &mut [HomeCard], sort: &str) {
     match sort {
-        "oldest" | "year-asc" => items.sort_by(|a, b| a.year.cmp(&b.year)),
-        "newest" | "year-desc" => items.sort_by(|a, b| b.year.cmp(&a.year)),
+        "oldest" | "year-asc" => items.sort_by(|a, b| {
+            qbz_text_utils::dates::compare_release_dates(
+                a.release_sort_key,
+                b.release_sort_key,
+                false,
+            )
+        }),
+        "newest" | "year-desc" => items.sort_by(|a, b| {
+            qbz_text_utils::dates::compare_release_dates(
+                a.release_sort_key,
+                b.release_sort_key,
+                true,
+            )
+        }),
         "title-asc" => items.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase())),
         "title-desc" => items.sort_by(|a, b| b.title.to_lowercase().cmp(&a.title.to_lowercase())),
         "artist-asc" => items.sort_by(|a, b| a.artist.to_lowercase().cmp(&b.artist.to_lowercase())),
@@ -941,6 +951,7 @@ fn sort_cards(items: &mut [HomeCard], sort: &str) {
         _ => {}
     }
 }
+
 
 // ===========================================================================
 //  Live language switch
@@ -1485,6 +1496,7 @@ mod tests {
             title: title.to_string(),
             artist: artist.to_string(),
             year: year.to_string(),
+            release_sort_key: qbz_text_utils::dates::release_sort_key(Some(year)),
             quality_tier: tier.to_string(),
             ..HomeCard::default()
         }

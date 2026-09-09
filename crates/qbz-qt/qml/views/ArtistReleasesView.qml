@@ -85,11 +85,12 @@ Rectangle {
         QbzSession.tr("Oldest", QbzSession.trRev),
         QbzSession.tr("A–Z", QbzSession.trRev),
         QbzSession.tr("Z–A", QbzSession.trRev),
+        QbzSession.tr("Popularity", QbzSession.trRev),
     ]
     // These five strings are BOTH what gets persisted (artist_prefs.rs, the
     // store the artist page's per-section picker shares) and what the sort
     // functions switch on, on either side of the bridge.
-    readonly property var sortKeys: ["default", "newest", "oldest", "title-asc", "title-desc"]
+    readonly property var sortKeys: ["default", "newest", "oldest", "title-asc", "title-desc", "relevant"]
     // .slint:24-28. A BINDING, never an assignment: QbzSelect does not
     // self-assign currentIndex (QbzSelect.qml:299-300), and this is what seats
     // the picker on the sort the page opened with — which is the user's

@@ -1483,7 +1483,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
         )
         .await
         {
-            Ok((cards, has_more)) => {
+            Ok(Some((cards, has_more, request))) => {
                 // The user may have opened ANOTHER artist while this page was
                 // in flight. `merge_release_page` already dropped the stash
                 // merge in that case (its id guard), but the signal carries no
@@ -1492,7 +1492,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 // page onto the new artist's same-named bucket. Same test the
                 // merge used (artist_qt::stash_is_for), applied to the second
                 // leg of the same delivery.
-                if !artist_qt::stash_is_for(&artist_id) {
+                if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) {
                     log::info!(
                         "[qbz-qt] dropping stale release page ({release_type}): artist changed"
                     );
@@ -1500,6 +1500,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 }
                 let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
                 artist_bridge::ui(move |mut b| {
+                    if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) { return; }
                     b.as_mut().release_section_ready(
                         QString::from(release_type.as_str()),
                         QString::from(json.as_str()),
@@ -1507,6 +1508,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                     );
                 });
             }
+            Ok(None) => {},
             Err(e) => log::warn!("[qbz-qt] release page load failed: {e}"),
         }
     });
@@ -2529,6 +2531,11 @@ pub(crate) fn play_album(album_id: String) {
             log::error!("[qbz-qt] play_album failed: {e}");
         }
     });
+}
+
+pub(crate) fn transport_set_playing(playing: bool) {
+    let runtime = app();
+    spawn(async move { playback_qt::request_playing(&runtime, Some(playing)).await });
 }
 
 pub(crate) fn transport_toggle_play() {

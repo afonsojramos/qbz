@@ -6849,3 +6849,12 @@ msgstr "SACD-Abbilder verwenden Metadaten in einer Sidecar-Datei."
 
 msgid "SACD track numbers cannot be changed."
 msgstr "SACD-Titelnummern können nicht geändert werden."
+
+msgid "Group: Year"
+msgstr "Gruppe: Jahr"
+
+msgid "Group: Decade"
+msgstr "Gruppe: Jahrzehnt"
+
+msgid "Popularity"
+msgstr "Beliebtheit"
