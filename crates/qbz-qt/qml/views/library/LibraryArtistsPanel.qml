@@ -63,20 +63,23 @@ Item {
         var artists = []
         for (var i = 0; i < rows.length; i++)
             if (rows[i].kind === "artist") artists.push(rows[i])
-        // The sidepanel rail is ALWAYS A-Z grouped (the reference reads
-        // `artists-grouped` unconditionally at :2038, which is why its
-        // Group select is hidden in this mode).
-        artists.sort(function (a, b) {
-            var av = (a.title || "").toLowerCase(), bv = (b.title || "").toLowerCase()
-            return av < bv ? -1 : av > bv ? 1 : 0
-        })
+        // Preserve the chosen sort; only alphabetical modes need letter headers.
+        var mode = root.view.artistsSort
+        var grouped = mode === "default" || mode === "default-reverse"
+            || mode.indexOf("title-") === 0
+        if (mode === "default" || mode === "default-reverse") {
+            artists.sort(function(a, b) {
+                var result = (a.title || "").localeCompare(b.title || "")
+                return mode === "default-reverse" ? -result : result
+            })
+        }
         var out = []
         var flat = []
         var jumps = []
         var last = null
         for (i = 0; i < artists.length; i++) {
             var key = root.view.alphaKey(artists[i].title)
-            if (key !== last) {
+            if (grouped && key !== last) {
                 jumps.push({ "letter": key, "index": out.length })
                 out.push({ "t": 0, "label": key })
                 flat.push(root.headerRow)

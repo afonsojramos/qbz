@@ -6877,3 +6877,80 @@ msgstr "Группа: Десятилетие"
 
 msgid "Popularity"
 msgstr "Популярность"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Только покупки"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Только подписки"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Только Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Скрыть локальные альбомы в библиотеке"
+
+#: library toolbar
+msgid "By you"
+msgstr "Ваши"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "От Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "От других"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Поиск по вашим трекам"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Поиск по вашим релизам"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Поиск по вашим плейлистам"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Поиск по вашим исполнителям"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Поиск по вашим лейблам"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Показывать только покупки. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Показывать только избранное. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Показывать только подписки. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Показывать только Hi-Res. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Скрыть здесь локальные альбомы. Они останутся доступны в локальной библиотеке."
+
+msgid "Alphabetical"
+msgstr "По алфавиту"
+
+msgid "Date updated"
+msgstr "Дата обновления"
+
+msgid "Track count"
+msgstr "Количество треков"

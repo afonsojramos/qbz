@@ -33,6 +33,8 @@ Rectangle {
     // NO outline (it matches the favorites toolbar buttons), 12px label and a
     // 14px chevron, and 40px narrower because toolbar selects were needlessly
     // wide (QbzSelect.slint:86-88,102-105,118-119,126,147-148,299).
+    // Optional sort selector: reselecting an option still emits selected.
+    property string sortDirection: ""
     property bool sm: false
     signal selected(int index)
 
@@ -205,7 +207,9 @@ Rectangle {
             }
         }
         QbzIcon {
-            name: selectRoot.popupPlacement === "left" ? "chevron-left" : "chevron-down"
+            name: selectRoot.sortDirection !== ""
+                ? (selectRoot.sortDirection === "asc" ? "chevron-up" : "chevron-down")
+                : (selectRoot.popupPlacement === "left" ? "chevron-left" : "chevron-down")
             width: selectRoot.sm ? 14 : 16
             height: selectRoot.sm ? 14 : 16
             anchors.verticalCenter: parent.verticalCenter
@@ -409,6 +413,7 @@ Rectangle {
                             Item {
                                 id: rowBadge
                                 visible: selectRoot.optHasBadges()
+                                    || (selectRoot.sortDirection !== "" && optRow.index === selectRoot.currentIndex)
                                 width: visible ? 20 : 0
                                 height: parent.height
                                 Text {
@@ -422,7 +427,9 @@ Rectangle {
                                 }
                                 QbzIcon {
                                     visible: !selectRoot.optBp(optRow.index)
-                                    name: "volume-2"
+                                    name: selectRoot.sortDirection !== ""
+                                        ? (selectRoot.sortDirection === "asc" ? "chevron-up" : "chevron-down")
+                                        : "volume-2"
                                     width: 14
                                     height: 14
                                     anchors.centerIn: parent

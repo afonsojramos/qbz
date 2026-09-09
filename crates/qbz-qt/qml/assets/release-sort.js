@@ -29,27 +29,66 @@ function textCompare(a, b) {
 }
 
 function sortAlbums(rows, sort, group) {
+    sort = normalizedMode(sort)
+    if (group === "off") return sortRows(rows, sort)
     return rows.slice().sort(function (a, b) {
         var grouped = 0
         if (group === "year" || group === "decade") {
             var x = groupNumber(a, group), y = groupNumber(b, group)
             if (!x || !y) grouped = !x && !y ? 0 : (!x ? 1 : -1)
-            else grouped = sort === "newest" ? y - x : x - y
+            else grouped = sort === "release-date-desc" ? y - x : x - y
         } else if (group === "artist") {
             grouped = textCompare(a.artist, b.artist)
         } else if (group === "alpha") {
             grouped = textCompare(String(a.title || "").charAt(0), String(b.title || "").charAt(0))
         }
         if (grouped) return grouped
-        if (sort === "oldest" || sort === "newest")
-            return compareDates(a, b, sort === "newest")
-        if (sort === "artist-asc") return textCompare(a.artist, b.artist)
-        if (sort === "title-asc" || sort === "title-desc") {
-            var title = textCompare(a.title, b.title)
-            return sort === "title-desc" ? -title : title
-        }
+        if (sort !== "default") return compareItems(a, b, sort)
         // Default retains server/feed order; alphabetical groups keep their
         // established alphabetical order within each group.
         return group === "artist" || group === "alpha" ? textCompare(a.title, b.title) : 0
     })
+}
+
+function normalizedMode(mode) {
+    if (mode === "oldest") return "release-date-asc"
+    if (mode === "newest") return "release-date-desc"
+    return mode || "default"
+}
+function fieldOf(mode) {
+    return normalizedMode(mode).replace(/-(asc|desc|reverse)$/, "")
+}
+function ascending(mode) {
+    return mode === "default-reverse" || /-asc$/.test(normalizedMode(mode))
+}
+function compareItems(a, b, mode) {
+    mode = normalizedMode(mode)
+    if (mode === "default") return 0
+    if (mode === "default-reverse") return Number(b._feedOrder || 0) - Number(a._feedOrder || 0)
+    var field = fieldOf(mode), asc = ascending(mode)
+    if (field === "release-date") return compareDates(a, b, !asc)
+    if (field === "date") {
+        // Existing library feed recency proxy: lower rank is more recent.
+        var ar = a.added_rank === undefined ? a._feedOrder : a.added_rank
+        var br = b.added_rank === undefined ? b._feedOrder : b.added_rank
+        return (Number(ar || 0) - Number(br || 0)) * (asc ? -1 : 1)
+    }
+    var key = field === "release" ? "album" : field === "duration" ? "durationSecs"
+        : field === "track-count" ? "trackCount" : field === "updated" ? "updatedAt" : field
+    var x = a[key], y = b[key]
+    // An empty playlist has a known zero duration even though zero-valued
+    // durationSecs is omitted by the compact feed serializer.
+    var emptyA = field === "duration" && a.kind === "playlist" && a.trackCount === 0
+    var emptyB = field === "duration" && b.kind === "playlist" && b.trackCount === 0
+    if (emptyA) x = 0
+    if (emptyB) y = 0
+    var numeric = field === "duration" || field === "track-count" || field === "updated"
+    var missingX = x === undefined || x === null || x === "" || (field === "duration" && !x && !emptyA)
+    var missingY = y === undefined || y === null || y === "" || (field === "duration" && !y && !emptyB)
+    if (missingX || missingY) return missingX === missingY ? 0 : (missingX ? 1 : -1)
+    return (numeric ? Number(x) - Number(y) : textCompare(x, y)) * (asc ? 1 : -1)
+}
+function sortRows(rows, mode) {
+    if (mode === "default-reverse") return rows.slice().reverse()
+    return rows.slice().sort(function (a, b) { return compareItems(a, b, mode) })
 }

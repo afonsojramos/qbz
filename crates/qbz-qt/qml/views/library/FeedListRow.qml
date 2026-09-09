@@ -340,7 +340,7 @@ Rectangle {
         // Col — source glyph (only when local/Plex can appear).
         Rectangle {
             id: srcCol
-            visible: feedRow.view.showLocal
+            visible: feedRow.view.showSourceBadges
             width: 44
             height: parent.height
             color: "transparent"

@@ -6856,3 +6856,80 @@ msgstr "Grouper : Décennie"
 
 msgid "Popularity"
 msgstr "Popularité"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Achats uniquement"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Éléments suivis uniquement"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Hi-Res uniquement"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Masquer les albums locaux de la bibliothèque"
+
+#: library toolbar
+msgid "By you"
+msgstr "Par vous"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Par Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Par les autres"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Rechercher dans vos titres"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Rechercher dans vos sorties"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Rechercher dans vos playlists"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Rechercher dans vos artistes"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Rechercher dans vos labels"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Afficher uniquement les achats. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Afficher uniquement les favoris. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Afficher uniquement les éléments suivis. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Afficher uniquement le contenu Hi-Res. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Masquer les albums locaux ici. Ils restent disponibles dans la bibliothèque locale."
+
+msgid "Alphabetical"
+msgstr "Alphabétique"
+
+msgid "Date updated"
+msgstr "Date de modification"
+
+msgid "Track count"
+msgstr "Nombre de pistes"

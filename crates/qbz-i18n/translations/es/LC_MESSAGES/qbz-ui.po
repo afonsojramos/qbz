@@ -6864,3 +6864,80 @@ msgstr "Agrupar: Década"
 
 msgid "Popularity"
 msgstr "Popularidad"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Solo compras"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Solo seguidos"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Solo Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Ocultar álbumes locales de la biblioteca"
+
+#: library toolbar
+msgid "By you"
+msgstr "Por ti"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Por Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Por otros"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Buscar en tus pistas"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Buscar en tus lanzamientos"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Buscar en tus playlists"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Buscar en tus artistas"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Buscar en tus sellos"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Mostrar solo compras. Se combina con los demás filtros activos."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Mostrar solo favoritos. Se combina con los demás filtros activos."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Mostrar solo elementos seguidos. Se combina con los demás filtros activos."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Mostrar solo contenido Hi-Res. Se combina con los demás filtros activos."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Ocultar aquí los álbumes locales. Seguirán disponibles en Biblioteca local."
+
+msgid "Alphabetical"
+msgstr "Alfabético"
+
+msgid "Date updated"
+msgstr "Fecha de actualización"
+
+msgid "Track count"
+msgstr "Número de pistas"
