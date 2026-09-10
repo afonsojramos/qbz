@@ -7036,3 +7036,6 @@ msgstr "Das kann einige Minuten dauern, wenn MusicBrainz ausgelastet ist."
 
 msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
 msgstr "Das dauert länger als gewöhnlich — MusicBrainz ist möglicherweise ausgelastet. Versuche es gleich noch einmal."
+
+msgid "Remove from Mixtape"
+msgstr "Aus Mixtape entfernen"

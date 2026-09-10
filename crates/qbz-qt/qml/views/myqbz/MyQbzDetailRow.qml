@@ -92,7 +92,15 @@ Rectangle {
     readonly property string rowSubtitle: root.rev >= 0 ? (root.item.subtitle || "") : ""
     readonly property bool subtitleIsLink: root.rev >= 0 && root.item.subtitleIsLink === true
     readonly property string artistId: root.rev >= 0 ? (root.item.artistId || "") : ""
+    readonly property string albumId: root.rev >= 0 ? (root.item.albumId || "") : ""
+    // The parent collection kind ("mixtape" | "collection" | "artist_collection"),
+    // passed from the view so the menu says "Remove from Mixtape" vs "…collection".
+    property string detailKind: ""
+    // Fix #766: a playlist inside a MIXTAPE has varied per-track quality, so its
+    // quality cell is hidden there (collections keep it).
+    readonly property bool hideQuality: root.detailKind === "mixtape" && root.itemType === "playlist"
     readonly property string sourceKind: root.rev >= 0 ? (root.item.sourceKind || "") : ""
+    readonly property var sourceKinds: root.rev >= 0 ? (root.item.sourceKinds || []) : []
     readonly property string typeLabel: root.rev >= 0 ? (root.item.typeLabel || "") : ""
     readonly property string qualityTier: root.rev >= 0 ? (root.item.qualityTier || "") : ""
     readonly property string qualityDetail: root.rev >= 0 ? (root.item.qualityDetail || "") : ""
@@ -164,7 +172,7 @@ Rectangle {
         onClicked: function (mouse) {
             if (mouse.button !== Qt.LeftButton) return
             if (root.selectMode) QbzMyQbz.detailToggleItemSelect(root.itemPosition)
-            else QbzMyQbz.openItem(root.itemSource, root.itemType, root.sourceItemId)
+            else root.openThis()
         }
     }
 
@@ -315,7 +323,7 @@ Rectangle {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: QbzMyQbz.openItem(root.itemSource, root.itemType, root.sourceItemId)
+                        onClicked: root.openThis()
                     }
                 }
                 // Subtitle — 16px hit area, pointer only when it is a link.
@@ -376,21 +384,25 @@ Rectangle {
         Item {
             width: 80
             height: parent.height
-            SourceIcon {
-                visible: root.sourceKind !== ""
-                x: 0
+            // #766: a playlist can mix Qobuz + local/media-server tracks, so the
+            // source column shows one glyph per DISTINCT source. Falls back to
+            // the single resolved kind while the list is empty (pre-resolve).
+            Row {
                 anchors.verticalCenter: parent.verticalCenter
-                kind: root.sourceKind
-                // A dense ROW: the media marks draw monochrome and tinted, like the
-                // hard-drive beside them. Colour logos are for cards — a list of
-                // them fights the text it labels.
-                mono: true
-                // Row glyph, so SourceGlyph.slint's numbers (:31 — 15px, the
-                // three Qobuz kinds 16px, muted local tint), not the version
-                // picker's flat-14 defaults.
-                glyphSize: 15
-                qobuzSize: 16
-                localTint: "muted"
+                spacing: 4
+                Repeater {
+                    model: root.sourceKinds.length > 0
+                           ? root.sourceKinds
+                           : (root.sourceKind !== "" ? [root.sourceKind] : [])
+                    SourceIcon {
+                        kind: modelData
+                        // Monochrome tinted marks (colour logos are for cards).
+                        mono: true
+                        glyphSize: 15
+                        qobuzSize: 16
+                        localTint: "muted"
+                    }
+                }
             }
         }
 
@@ -399,7 +411,7 @@ Rectangle {
             width: 160
             height: parent.height
             QualityBadgeFull {
-                visible: root.qualityTier !== ""
+                visible: root.qualityTier !== "" && !root.hideQuality
                 x: 0
                 anchors.verticalCenter: parent.verticalCenter
                 tier: root.qualityTier
@@ -409,7 +421,7 @@ Rectangle {
             // 160px cell and centres its dot row in it (LoadingDots.slint
             // :26-35) — hence `anchors.fill`, not `x: 0`.
             QbzLoadingDots {
-                visible: root.qualityTier === "" && root.qualityResolving
+                visible: root.qualityTier === "" && root.qualityResolving && !root.hideQuality
                 anchors.fill: parent
                 phase: root.dotPhase
             }
@@ -478,6 +490,20 @@ Rectangle {
         onPicked: function (a) { root.rowMenuAction(a) }
     }
 
+    // A track opens the ALBUM it is on (its resolved `albumId`), routed
+    // source-aware by `open_item("album", …)` (Qobuz vs local). An album or
+    // playlist opens itself. A track whose album has NOT resolved yet (empty id)
+    // is ignored — like the artist link — instead of sending "" and landing on a
+    // blank page (#766, problem 1).
+    function openThis() {
+        if (root.itemType === "track") {
+            if (root.albumId !== "")
+                QbzMyQbz.openItem(root.itemSource, "album", root.albumId)
+        } else {
+            QbzMyQbz.openItem(root.itemSource, root.itemType, root.sourceItemId)
+        }
+    }
+
     function rowMenuModel() {
         var t = QbzSession.tr
         var r = QbzSession.trRev
@@ -487,8 +513,9 @@ Rectangle {
             { "label": t("Play later", r), "icon": "list-plus", "action": "play-later" },
             { "label": t("Add to queue", r), "icon": "list-end", "action": "add-to-queue" },
             { "sep": true },
-            { "label": t("Remove from collection", r), "icon": "trash-2",
-              "action": "remove", "danger": true },
+            { "label": root.detailKind === "mixtape"
+                       ? t("Remove from Mixtape", r) : t("Remove from collection", r),
+              "icon": "trash-2", "action": "remove", "danger": true },
         ]
     }
 
