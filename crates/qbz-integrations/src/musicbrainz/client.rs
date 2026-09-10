@@ -4,7 +4,7 @@
 //! Uses Cloudflare Workers proxy for consistent rate limiting.
 
 use reqwest::Client;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -17,6 +17,13 @@ const MUSICBRAINZ_PROXY_URL: &str = "https://qbz-api-proxy.blitzkriegfc.workers.
 /// Direct MusicBrainz API URL (fallback)
 const MUSICBRAINZ_API_URL: &str = "https://musicbrainz.org/ws/2";
 
+/// The ONE direct-MusicBrainz limiter for this whole process (piece 2). Every
+/// `MusicBrainzClient` on the default direct path shares it, so several clients
+/// on one public IP (core, the tag editor, remote metadata) pace as a single
+/// 1.1s stream instead of each pacing itself and together exceeding MB's per-IP
+/// budget -- the funnel behind the 503s. The proxy path is unaffected.
+static SHARED_DIRECT: OnceLock<Arc<RateLimiter>> = OnceLock::new();
+
 /// Rate limiter for MusicBrainz API
 pub struct RateLimiter {
     last_request: Mutex<Instant>,
@@ -27,6 +34,14 @@ impl RateLimiter {
     /// Create rate limiter for direct MusicBrainz API (1 req/sec)
     pub fn new() -> Self {
         Self::with_interval(Duration::from_millis(1100))
+    }
+
+    /// The process-wide SHARED direct limiter (1.1s). See [`SHARED_DIRECT`].
+    /// Every direct client shares this one so they pace as a single stream.
+    pub fn shared() -> Arc<RateLimiter> {
+        SHARED_DIRECT
+            .get_or_init(|| Arc::new(RateLimiter::new()))
+            .clone()
     }
 
     /// Create rate limiter for proxy (faster, proxy handles actual rate limiting)
@@ -111,20 +126,21 @@ impl MusicBrainzClient {
 
         let client = Client::builder()
             .user_agent(&user_agent)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(6))
             .build()
             .unwrap_or_else(|_| Client::new());
 
-        // Use faster rate limiter when using proxy
+        // The direct-MusicBrainz limiter is process-wide and SHARED across
+        // every client (piece 2); the proxy path keeps its own faster one.
         let rate_limiter = if config.use_proxy {
-            RateLimiter::for_proxy()
+            Arc::new(RateLimiter::for_proxy())
         } else {
-            RateLimiter::new()
+            RateLimiter::shared()
         };
 
         Self {
             client,
-            rate_limiter: Arc::new(rate_limiter),
+            rate_limiter,
             config: Arc::new(Mutex::new(config)),
         }
     }
@@ -159,13 +175,11 @@ impl MusicBrainzClient {
             ));
         }
 
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let url = format!("{}/recording?query=isrc:{}&fmt=json", base, isrc);
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -181,7 +195,6 @@ impl MusicBrainzClient {
             ));
         }
 
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let encoded_name = urlencoding::encode(name);
@@ -190,8 +203,7 @@ impl MusicBrainzClient {
             base, encoded_name, limit
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -288,7 +300,6 @@ impl MusicBrainzClient {
         artist: &str,
     ) -> IntegrationResult<RecordingSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let query = format!(
@@ -302,9 +313,8 @@ impl MusicBrainzClient {
             urlencoding::encode(&query)
         );
 
-        let response = self.client.get(&url).send().await?;
+        let response = self.send_with_retry(&url).await?;
         self.check_response(&response).await;
-        let response = self.handle_response_status(response).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -314,28 +324,27 @@ impl MusicBrainzClient {
         mbid: &str,
     ) -> IntegrationResult<ArtistFullResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let url = format!("{}/artist/{}?inc=artist-rels+tags&fmt=json", base, mbid);
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
     /// Fetch artist tags only (lightweight, no relations)
     pub async fn get_artist_tags(&self, mbid: &str) -> IntegrationResult<Vec<String>> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
-
         let base = self.base_url().await;
         let url = format!("{}/artist/{}?inc=tags&fmt=json", base, mbid);
 
-        let response = self.client.get(&url).send().await?;
-        if !response.status().is_success() {
-            return Ok(Vec::new());
-        }
+        // A missing artist or no tags is normal, not an error: swallow any
+        // non-2xx (including an exhausted retry) as an empty list, but still go
+        // through the retrying sender so a transient 503 is retried first.
+        let response = match self.send_with_retry(&url).await {
+            Ok(response) => response,
+            Err(_) => return Ok(Vec::new()),
+        };
 
         let artist: ArtistFullResponse = response.json().await.map_err(|e| {
             IntegrationError::internal(format!("Failed to parse MusicBrainz response: {}", e))
@@ -359,13 +368,13 @@ impl MusicBrainzClient {
     /// Returns the ISRC list, or an EMPTY vec on any non-success/parse failure (a missing ISRC is normal, not an error).
     pub async fn get_recording_isrcs(&self, recording_mbid: &str) -> IntegrationResult<Vec<String>> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
         let base = self.base_url().await;
         let url = format!("{}/recording/{}?inc=isrcs&fmt=json", base, recording_mbid);
-        let response = self.client.get(&url).send().await?;
-        if !response.status().is_success() {
-            return Ok(Vec::new());
-        }
+        // Empty on any failure (a missing ISRC is normal); still retries 503.
+        let response = match self.send_with_retry(&url).await {
+            Ok(response) => response,
+            Err(_) => return Ok(Vec::new()),
+        };
         let parsed: RecordingLookupResponse = match response.json().await {
             Ok(p) => p,
             Err(_) => return Ok(Vec::new()),
@@ -380,7 +389,6 @@ impl MusicBrainzClient {
         limit: usize,
     ) -> IntegrationResult<ArtistSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let limit = limit.min(100).max(1);
@@ -392,8 +400,7 @@ impl MusicBrainzClient {
             limit
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -407,7 +414,6 @@ impl MusicBrainzClient {
         offset: usize,
     ) -> IntegrationResult<ArtistSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let limit = limit.min(100).max(1);
@@ -425,8 +431,7 @@ impl MusicBrainzClient {
             offset
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -436,7 +441,6 @@ impl MusicBrainzClient {
         barcode: &str,
     ) -> IntegrationResult<ReleaseSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let url = format!(
@@ -444,8 +448,7 @@ impl MusicBrainzClient {
             base, barcode
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -467,7 +470,6 @@ impl MusicBrainzClient {
         limit: usize,
     ) -> IntegrationResult<ReleaseSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let query = if let Some(catno) = catalog_number.filter(|s| !s.trim().is_empty()) {
@@ -492,8 +494,7 @@ impl MusicBrainzClient {
             limit
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -503,7 +504,6 @@ impl MusicBrainzClient {
         release_id: &str,
     ) -> IntegrationResult<ReleaseFullResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let url = format!(
@@ -511,8 +511,7 @@ impl MusicBrainzClient {
             base, release_id
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -524,7 +523,6 @@ impl MusicBrainzClient {
         offset: usize,
     ) -> IntegrationResult<ArtistBrowseResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let limit = limit.min(100).max(1);
@@ -533,8 +531,7 @@ impl MusicBrainzClient {
             base, area_id, limit, offset
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -545,7 +542,6 @@ impl MusicBrainzClient {
         area_type: Option<&str>,
     ) -> IntegrationResult<AreaSearchResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let query = if let Some(atype) = area_type {
@@ -564,8 +560,7 @@ impl MusicBrainzClient {
             urlencoding::encode(&query)
         );
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -575,13 +570,11 @@ impl MusicBrainzClient {
         area_id: &str,
     ) -> IntegrationResult<AreaDetailResponse> {
         self.check_enabled().await?;
-        self.rate_limiter.wait().await;
 
         let base = self.base_url().await;
         let url = format!("{}/area/{}?inc=area-rels&fmt=json", base, area_id);
 
-        let response = self.client.get(&url).send().await?;
-        let response = self.handle_response_status(response).await?;
+        let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
     }
 
@@ -749,6 +742,93 @@ impl MusicBrainzClient {
         // Placeholder for response logging/metrics
     }
 
+    /// GET `url` behind the shared rate limiter, retrying MusicBrainz's 503
+    /// (or the proxy's translated 429) with the server's `Retry-After` capped at
+    /// 8s, up to 3 total attempts. The limiter waits again before EVERY attempt,
+    /// so a retry never jumps the 1.1s spacing. Callers get exactly the response
+    /// or error `handle_response_status` produced; the only new behaviour is
+    /// that a transient rate-limit is absorbed here instead of surfacing on the
+    /// first try. This is the ONE path every endpoint GET goes through.
+    async fn send_with_retry(&self, url: &str) -> IntegrationResult<reqwest::Response> {
+        const MAX_ATTEMPTS: u32 = 3;
+        // Transport failures cost a full request timeout each, so cap them lower:
+        // 2 attempts * 6s timeout + 1 backoff = ~13s worst case (owner's target),
+        // while a hang that clears still recovers on the second try.
+        const TRANSPORT_MAX_ATTEMPTS: u32 = 2;
+        const BACKOFF_CAP_SECS: u64 = 8;
+        const TRANSPORT_BACKOFF_SECS: u64 = 1;
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            self.rate_limiter.wait().await;
+            let response = match self.client.get(url).send().await {
+                Ok(response) => response,
+                // A `send()` failure means NO response arrived: MusicBrainz
+                // hanging until our request timeout, or the connection dropped /
+                // refused under load. That is the 503's quieter cousin (the
+                // owner hit exactly this -- "error sending request for url" on
+                // `artist?query=`), so retry it on the same budget. A builder
+                // error (a malformed URL) is not transient and is surfaced.
+                Err(e) if attempt < TRANSPORT_MAX_ATTEMPTS && !e.is_builder() => {
+                    log::warn!(
+                        "[musicbrainz] transport error (attempt {attempt}/{MAX_ATTEMPTS}, \
+                         timeout={}, connect={}), retrying in {TRANSPORT_BACKOFF_SECS}s: {e}",
+                        e.is_timeout(),
+                        e.is_connect()
+                    );
+                    tokio::time::sleep(Duration::from_secs(TRANSPORT_BACKOFF_SECS)).await;
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
+            Self::log_rate_headers(&response);
+            match self.handle_response_status(response).await {
+                Ok(ok) => return Ok(ok),
+                Err(IntegrationError::RateLimited(secs)) if attempt < MAX_ATTEMPTS => {
+                    let backoff = secs.min(BACKOFF_CAP_SECS);
+                    log::warn!(
+                        "[musicbrainz] rate limited (attempt {attempt}/{MAX_ATTEMPTS}), \
+                         backing off {backoff}s then retrying: {url}"
+                    );
+                    tokio::time::sleep(Duration::from_secs(backoff)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Log MusicBrainz's `x-ratelimit-*` budget headers — `debug` on success,
+    /// `warn` alongside a 429/503 — because they are the only signal that says
+    /// whether the exhausted bucket was our own IP or MB's global pool.
+    /// Diagnostics only; no metrics.
+    fn log_rate_headers(response: &reqwest::Response) {
+        let status = response.status();
+        if !status.is_success() && !matches!(status.as_u16(), 429 | 503) {
+            return;
+        }
+        let headers = response.headers();
+        let value = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("-")
+        };
+        let limit = value("x-ratelimit-limit");
+        let remaining = value("x-ratelimit-remaining");
+        let reset = value("x-ratelimit-reset");
+        if status.is_success() {
+            log::debug!(
+                "[musicbrainz] {} x-ratelimit limit={limit} remaining={remaining} reset={reset}",
+                status.as_u16()
+            );
+        } else {
+            log::warn!(
+                "[musicbrainz] {} rate limited -- x-ratelimit limit={limit} remaining={remaining} reset={reset}",
+                status.as_u16()
+            );
+        }
+    }
+
     async fn handle_response_status(
         &self,
         response: reqwest::Response,
@@ -805,5 +885,111 @@ impl MusicBrainzClient {
             .replace('-', "\\-")
             .replace('&', "\\&")
             .replace('|', "\\|")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// reqwest is built with `rustls-no-provider`; the app installs
+    /// aws-lc-rs at startup (qbz_app::ensure_crypto_provider). Mirror it,
+    /// idempotently, for any test that builds a client.
+    fn ensure_provider() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    }
+
+    /// Piece 1: a 503 carrying `Retry-After: 1` followed by a 200 must be
+    /// absorbed inside `send_with_retry` — a single caller `await` returns Ok,
+    /// never the RateLimited error.
+    #[tokio::test]
+    async fn send_with_retry_absorbs_a_503_then_succeeds() {
+        ensure_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let body = "{\"ok\":true}";
+            let replies = [
+                "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string(),
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                ),
+            ];
+            for reply in replies {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = socket.read(&mut buf).await.unwrap();
+                socket.write_all(reply.as_bytes()).await.unwrap();
+                socket.flush().await.unwrap();
+            }
+        });
+
+        let client = MusicBrainzClient::new();
+        let url = format!("http://{addr}/artist");
+        let response = client
+            .send_with_retry(&url)
+            .await
+            .expect("a 503 then 200 must resolve to Ok");
+        assert!(response.status().is_success());
+        let parsed: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(parsed["ok"], serde_json::json!(true));
+        server.await.unwrap();
+    }
+
+    /// Piece 2: every client shares ONE process-wide direct limiter, so two
+    /// clients issuing back-to-back waits serialize (>= the 1.1s interval). With
+    /// a per-client limiter both waits would be immediate.
+    #[tokio::test]
+    async fn clients_share_one_rate_limiter() {
+        ensure_provider();
+        let a = MusicBrainzClient::new();
+        let b = MusicBrainzClient::new();
+        let start = Instant::now();
+        a.rate_limiter.wait().await;
+        b.rate_limiter.wait().await;
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(1000),
+            "two clients on a shared limiter must serialize (>=~1.1s), took {}ms -- not shared?",
+            elapsed.as_millis()
+        );
+    }
+
+    /// Regression: MusicBrainz under load hangs the connection until our request
+    /// timeout, or drops it — reqwest returns a `send()` error, NOT a 503 status.
+    /// `send_with_retry` must absorb that transient transport failure too, not
+    /// just the rate-limit status. Here the first connection is accepted and
+    /// dropped (the client's send fails), the second answers 200.
+    #[tokio::test]
+    async fn send_with_retry_absorbs_a_dropped_connection() {
+        ensure_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            drop(socket); // accept then close -> the client's send() errors
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let _ = socket.read(&mut buf).await.unwrap();
+            let body = "{\"ok\":true}";
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+            socket.flush().await.unwrap();
+        });
+        let client = MusicBrainzClient::new();
+        let url = format!("http://{addr}/artist");
+        let response = client
+            .send_with_retry(&url)
+            .await
+            .expect("a dropped connection must be retried, not surfaced");
+        assert!(response.status().is_success());
+        server.await.unwrap();
     }
 }
