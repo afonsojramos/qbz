@@ -972,11 +972,15 @@ Rectangle {
                     onMoveDownRequested: QbzBridge.playlistMoveRow(String(item.id), 1)
                     onPlayRequested: QbzBridge.playlistPlayTrack(item.id)
                     onEnqueueRequested: function (m) { QbzBridge.playlistEnqueueTrack(item.id, m) }
-                    // The DISPLAY row id, as a string. For a Qobuz row it IS
-                    // the membership id (`playlist_qt.rs:363-364` sets both
-                    // from `track.id`); for a LOCAL row `playlistTrackId` is a
-                    // queue id — or 0 on an unresolved one — and the removal
-                    // has to be keyed on the id the position map knows.
+                    // The DISPLAY row id, as a string — for a Qobuz row the
+                    // CATALOG id, for a LOCAL row its library rowid / plex key.
+                    // Each Rust arm resolves it to the target it needs: the
+                    // Qobuz arm (`playlist_qt::remove_track`) looks up the row's
+                    // MEMBERSHIP id from it (the two differ since the
+                    // membership-id split), the local/sidecar arms key their
+                    // repo removal on it directly. Do NOT send `playlistTrackId`
+                    // here: on a LOCAL row it is a queue id (or 0 unresolved),
+                    // which the position map does not know.
                     onRemoveRequested: QbzBridge.playlistRemoveTrack(String(item.id))
                     // "Find available version" (contract §6.1) — the ONE
                     // surface that offers it, and the gate is the reference's:
