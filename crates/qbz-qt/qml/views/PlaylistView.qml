@@ -326,6 +326,7 @@ Rectangle {
               "enabled": playable },
             { "label": t("Add to queue", r), "icon": "list-end", "action": "queue",
               "enabled": playable },
+            { "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" },
             { "sep": true },
             { "label": root.headerPinned ? t("Unpin", r) : t("Pin", r),
               "icon": root.headerPinned ? "pin-filled" : "pin", "action": "pin" },
@@ -356,6 +357,15 @@ Rectangle {
             QbzPlaylistEdit.open(String(root.doc.id || ""))
         else if (action === "offline")
             QbzOffline.cachePlaylist(String(root.doc.id || ""))
+        else if (action === "mixtape")
+            // Same payload shape the cards use (QbzMyQbzAdd.open). Source-aware:
+            // a local playlist carries "local", a Qobuz one "qobuz".
+            QbzMyQbzAdd.open(JSON.stringify([{
+                "itemType": "playlist",
+                "source": root.isLocal ? "local" : "qobuz",
+                "sourceItemId": String(root.doc.id || ""),
+                "title": root.doc.name || ""
+            }]))
     }
 
     CardMenu {
