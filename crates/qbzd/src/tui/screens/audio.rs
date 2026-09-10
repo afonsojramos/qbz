@@ -202,12 +202,24 @@ pub fn cascade_on_toggle(a: &mut StagedAudio, field: AField) {
 /// Backend-switch cascades (items 4-7), fired when Backend changes. The device
 /// reset (item 7) means the caller must re-enumerate for the new backend.
 pub fn cascade_on_backend_change(a: &mut StagedAudio) {
+    cascade_on_backend_change_for(a, cfg!(target_os = "macos"))
+}
+
+/// `cascade_on_backend_change` with the platform as a parameter so the macOS
+/// arm of item 5 runs on the Linux gate.
+pub fn cascade_on_backend_change_for(a: &mut StagedAudio, macos: bool) {
     if a.backend != AudioBackendType::PipeWire {
         a.dac_passthrough = false; // item 4
         a.pw_force_bitperfect = false;
     }
-    if a.backend != AudioBackendType::Alsa {
-        a.exclusive_mode = false; // item 5
+    // Item 5: exclusive survives only onto a backend that honours it — ALSA,
+    // and on macOS System default, whose `exclusive_mode` is CoreAudio Hog
+    // Mode (PR #391). #748 parity with the Qt shell's cascade
+    // (`settings_qt::backend_switch_clears_exclusive`).
+    let honours_exclusive = a.backend == AudioBackendType::Alsa
+        || (macos && a.backend == AudioBackendType::SystemDefault);
+    if !honours_exclusive {
+        a.exclusive_mode = false;
     }
     if a.backend == AudioBackendType::Alsa {
         a.gapless_enabled = false; // item 6
@@ -1620,5 +1632,19 @@ mod tests {
         assert_eq!(keys[0].1, "D50 III,7");
         assert_eq!(keys[1].0, "audio.alsa_hardware_volume");
         assert_eq!(keys[1].1, "true");
+    }
+
+    #[test]
+    fn macos_system_default_keeps_exclusive_across_a_backend_change() {
+        // #748 parity with the Qt shell: System default on macOS honours
+        // exclusive_mode through CoreAudio Hog Mode, so the ALSA-only cascade
+        // must not clear it there. Off macOS the flag is inert and still resets.
+        let mut a = base();
+        a.exclusive_mode = true;
+        a.backend = AudioBackendType::SystemDefault;
+        cascade_on_backend_change_for(&mut a, true);
+        assert!(a.exclusive_mode, "macOS keeps exclusive on System default");
+        cascade_on_backend_change_for(&mut a, false);
+        assert!(!a.exclusive_mode, "off macOS the cascade still clears it");
     }
 }

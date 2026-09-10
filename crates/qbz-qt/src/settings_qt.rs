@@ -1943,6 +1943,12 @@ pub struct SettingsDoc {
     /// for why they are hidden rather than disabled.
     #[serde(rename = "backendIsWasapi")]
     pub backend_is_wasapi: bool,
+    /// True on macOS when the active backend is System default, i.e. the
+    /// CoreAudio path that honours `exclusive_mode` through Hog Mode
+    /// (PR #391). AudioSettings QML shows and enables the Exclusive-mode row
+    /// on it (#748). Never true off macOS, so `=== true` gates stay inert.
+    #[serde(rename = "backendIsCoreAudio")]
+    pub backend_is_coreaudio: bool,
     #[serde(rename = "backendIsPipewire")]
     pub backend_is_pipewire: bool,
     #[serde(rename = "backendIsJack")]
@@ -2493,6 +2499,8 @@ pub async fn publish_snapshot() {
             backend_index: backend_index as i32 + 1,
             backend_is_alsa: active_backend == AudioBackendType::Alsa,
             backend_is_wasapi: active_backend == AudioBackendType::WasapiExclusive,
+            backend_is_coreaudio: cfg!(target_os = "macos")
+                && active_backend == AudioBackendType::SystemDefault,
             backend_is_pipewire: active_backend == AudioBackendType::PipeWire,
             backend_is_jack: active_backend == AudioBackendType::Jack,
             devices,
@@ -3801,6 +3809,16 @@ async fn select_alsa_hardware_volume_control(
     publish_snapshot().await;
 }
 
+/// Backend-switch cascade for `exclusive_mode`: the flag survives a switch
+/// only onto a backend that honours it. That used to read "ALSA alone", which
+/// on macOS wiped the CoreAudio Hog Mode setting every time Auto / System
+/// default was re-selected — the #748 reporter's DB workaround died to
+/// exactly this. One predicate with the Settings row and the EXCL LED
+/// (`output_labels::backend_honours_exclusive`).
+fn backend_switch_clears_exclusive(backend: AudioBackendType) -> bool {
+    !crate::output_labels::backend_honours_exclusive(Some(backend), cfg!(target_os = "macos"))
+}
+
 pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str, index: usize) {
     match key {
         "alsa-hardware-volume-control" => {
@@ -3859,7 +3877,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 let _ = with_audio(|s| s.set_dac_passthrough(false));
                 let _ = with_audio(|s| s.set_pw_force_bitperfect(false));
             }
-            if backend != AudioBackendType::Alsa {
+            if backend_switch_clears_exclusive(backend) {
                 let _ = with_audio(|s| s.set_exclusive_mode(false));
             }
             // GAPLESS IS DELIBERATELY NOT CASCADED — owner decision, 2026-07-31:
@@ -4556,5 +4574,34 @@ mod local_tab_order_tests {
         audio.backend_type = Some(AudioBackendType::PipeWire);
         audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
         assert!(!requires_alsa_direct_unity(&audio));
+    }
+}
+
+#[cfg(test)]
+mod exclusive_gate_tests {
+    use super::*;
+
+    #[test]
+    fn settings_doc_publishes_backend_is_coreaudio_under_the_name_qml_reads() {
+        // AudioSettings.qml gates the Exclusive-mode row on
+        // `root.doc.backendIsCoreAudio === true`; the serde rename is the
+        // contract between the two files.
+        let doc = SettingsDoc {
+            backend_is_coreaudio: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&doc).expect("SettingsDoc serialises");
+        assert_eq!(json["backendIsCoreAudio"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn backend_switch_clears_exclusive_unless_the_backend_honours_it() {
+        assert!(!backend_switch_clears_exclusive(AudioBackendType::Alsa));
+        assert!(backend_switch_clears_exclusive(AudioBackendType::PipeWire));
+        // #748: System default is CoreAudio exclusive on macOS and inert elsewhere.
+        assert_eq!(
+            backend_switch_clears_exclusive(AudioBackendType::SystemDefault),
+            !cfg!(target_os = "macos")
+        );
     }
 }
