@@ -54,11 +54,11 @@
 //     placeholder is still fully opaque on the frame the art appears.
 //   - `coverSource` — the art path, for hosts whose image is sealed inside a
 //     component they do not own (AlbumCard, PlaylistCard, SlimCard, …). This
-//     instance then loads the SAME path through its own hidden probe; because
-//     QQuickPixmapCache is shared and process-wide, that is the SAME cache
-//     entry the card is loading, so it costs no second decode and no second
-//     copy in memory — it only tells us WHEN the decode finished. The card's
-//     canvas paints on the next frame, which the 180ms fade below covers.
+//     instance loads the path through a hidden probe. Cache sharing depends
+//     on the resolved URL AND decode size: a card using a scaled derivative
+//     does not share this original-image decode. Prefer coverReady whenever
+//     the card exposes it, to avoid retaining both images. The default fade
+//     allows the card to paint after the probe becomes ready.
 // `pending` is the third input: "this cell wants a cover at all". A row with
 // no artwork slot passes false and gets no placeholder.
 //
@@ -167,7 +167,8 @@ Item {
     /// "This cell wants a cover." false retires the placeholder at once.
     property bool pending: true
     /// Host-driven readiness — bind to `RoundedImage.ready`.
-    property bool coverReady: false
+    property var artworkItem: null
+    property bool coverReady: artworkItem ? artworkItem.artworkReady : false
     /// Self-probing readiness — the art path, when the image is sealed inside
     /// a component the host does not own. "" disarms the probe entirely.
     property string coverSource: ""
@@ -214,8 +215,15 @@ Item {
     // the canvas paints on the next frame (~16ms in), while this is still at
     // ~91% opacity, so the placeholder dissolves INTO the art.
     readonly property bool retired: root.settled || root.handedOver || !root.pending
-    opacity: root.retired ? 0.0 : 1.0
-    Behavior on opacity { NumberAnimation { duration: 180 } }
+    property int handoverFadeMs: artworkItem && artworkItem.artworkImmediate ? 0 : 180
+    property real retirementOpacity: root.retired ? 0.0 : 1.0
+    // Immediate handover cannot inherit a Behavior already fading the old
+    // placeholder. Artless settling still uses its original 180ms fade.
+    opacity: root.handedOver && root.handoverFadeMs <= 0 ? 0.0 : root.retirementOpacity
+    Behavior on retirementOpacity {
+        enabled: root.handoverFadeMs > 0 || root.settled
+        NumberAnimation { duration: root.handedOver ? root.handoverFadeMs : 180 }
+    }
     // Default only — a call site that assigns `visible` replaces this and
     // keeps its own gate (see the block comment).
     visible: root.opacity > 0.004

@@ -446,7 +446,12 @@ Column {
 
     /// Snapshot what is on screen NOW. Call it BEFORE the bridge call: the
     /// bridge may republish synchronously.
+    readonly property bool immediateArtwork: QbzLocal.artworkImmediateEnabled()
+        && root._dpr <= 1
+    onImmediateArtworkChanged: if (immediateArtwork) { tailFade.stop(); clearTailFade() }
+
     function armTailFade() {
+        if (root.immediateArtwork) { root.clearTailFade(); return }
         var seen = {}
         root._addIds(seen, root.albums)
         for (var g = 0; g < root.grouped.length; g++)

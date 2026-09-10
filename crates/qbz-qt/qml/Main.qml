@@ -100,7 +100,8 @@ ApplicationWindow {
     // whenever the setting is off or nothing is loaded. Reactive: the
     // binding re-evaluates on every track change and on the toggle itself
     // (settings_qt pushes `windowTitleShow` live).
-    title: QbzShell.windowTitleShow && QbzPlayer.npHasTrack
+    title: QbzShell.isMacos && !QbzShell.systemTitleBar ? ""
+        : QbzShell.windowTitleShow && QbzPlayer.npHasTrack
         ? QbzPlayer.npTitle + " - " + QbzPlayer.npArtist + " | qbz"
         : "QBZ"
     // Custom chrome (phase 7/12): frameless but OPAQUE — the phase-7
@@ -905,7 +906,11 @@ ApplicationWindow {
     // `closeEvent` is the QQuickCloseEvent on the one path that carries one and
     // null on the other four.
     function closeOrHide(closeEvent) {
-        var hide = QbzTray.trayLive && QbzTray.closeToTray
+        if (closeEvent)
+            closeEvent.accepted = false
+        if (quitConfirmation.opened)
+            return
+        var hide = QbzTray.trayLive && (QbzShell.isMacos || QbzTray.closeToTray)
         // The evidence line (2026-08-04): logged RUST-side so it lands in
         // qbz.log — console.log only reaches stderr, which owner reports
         // never carry. It prints both operands and the arm taken, which is
@@ -929,11 +934,51 @@ ApplicationWindow {
         // still alive 25s later). Qt.exit() stops the event loops directly:
         // no close events, no veto. Geometry is flushed explicitly below,
         // and onAboutToQuit still runs when exec() returns.
-        if (closeEvent)
-            closeEvent.accepted = true
+        requestQuit()
+    }
+
+    property bool quitAccepted: false
+    function requestQuit() {
+        if (quitAccepted || quitConfirmation.opened)
+            return
+        if (!QbzTray.confirmQuitEnabled()) {
+            finishQuit()
+            return
+        }
+        if (!window.visible || window.visibility === Window.Minimized)
+            window.showFromTray()
+        window.raise()
+        window.requestActivate()
+        quitConfirmation.checkboxChecked = false
+        quitConfirmation.open()
+    }
+
+    function finishQuit() {
+        if (quitAccepted)
+            return
+        quitAccepted = true
         QbzTray.armQuitWatchdog()
         window.persistWindowGeometryOnExit()
         Qt.exit(0)
+    }
+
+    QbzConfirmModal {
+        id: quitConfirmation
+        anchors.fill: parent
+        title: QbzSession.tr("Close QBZ?", QbzSession.trRev)
+        cancelLabel: QbzSession.tr("No", QbzSession.trRev)
+        confirmLabel: QbzSession.tr("Yes", QbzSession.trRev)
+        checkboxLabel: QbzSession.tr("Don't show again", QbzSession.trRev)
+        danger: false
+        onCancelled: {
+            if (screenLoader.item)
+                screenLoader.item.forceActiveFocus()
+        }
+        onConfirmed: {
+            if (checkboxChecked)
+                QbzTray.disableQuitConfirmation()
+            window.finishQuit()
+        }
     }
 
     // The tray's four signals (src/tray_bridge.rs:87-100). Rust owns no window
@@ -948,6 +993,7 @@ ApplicationWindow {
     // the ambiguity that cost a diagnosis on 2026-08-04.
     Connections {
         target: QbzTray
+        function onCloseRequested() { window.closeOrHide(null) }
         function onWindowShowRequested() {
             console.log("[qml] tray -> showFromTray")
             window.showFromTray()
@@ -969,17 +1015,7 @@ ApplicationWindow {
             }
         }
         function onQuitRequested() {
-            console.log("[qml] tray -> quit: persisting geometry")
-            window.persistWindowGeometryOnExit()
-            console.log("[qml] tray -> quit: calling Qt.exit(0)")
-            // Qt.exit(0), NEVER Qt.quit() — see closeOrHide's quit arm: a
-            // Qt.quit() here is vetoable by any window's onClosing (the
-            // close-to-tray arm, the mini's unconditional refuse), and that
-            // veto is exactly how the tray Quit hid the window and left the
-            // process alive (2026-08-04, three owner reports). The hard-exit
-            // watchdog for this path was armed Rust-side in tray_qt::quit(),
-            // before the signal was even emitted.
-            Qt.exit(0)
+            window.requestQuit()
         }
     }
 

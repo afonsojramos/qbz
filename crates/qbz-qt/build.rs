@@ -399,6 +399,8 @@ fn build_rhi_items() {
     cc.file("cxx/qt_vulkan_probe.cpp");
     println!("cargo:rerun-if-changed=cxx/win_shell.cpp");
     cc.file("cxx/win_shell.cpp");
+    println!("cargo:rerun-if-changed=cxx/app_lifecycle.cpp");
+    cc.file("cxx/app_lifecycle.cpp");
     // Shell_NotifyIconW tray. No Q_OBJECT, so no moc; the body is inside
     // `#ifdef _WIN32` and compiles to nothing on Linux and macOS.
     println!("cargo:rerun-if-changed=cxx/win_tray.cpp");

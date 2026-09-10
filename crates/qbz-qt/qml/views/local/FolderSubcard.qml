@@ -46,6 +46,7 @@ Rectangle {
                 tintName: "muted"
             }
             RoundedImage {
+                gridArtwork: true
                 id: subcardArt
                 anchors.fill: parent
                 source: root.artSource

@@ -44,6 +44,9 @@ import "../theme"
 
 Rectangle {
     id: root
+    readonly property bool artworkReady: portraitLoader.item ? portraitLoader.item.ready : false
+    readonly property bool artworkImmediate: !root.kioskHost && portraitLoader.item
+        ? portraitLoader.item.immediateGridArtwork : false
     property bool kioskHost: false
 
     property var item: ({})
@@ -182,6 +185,7 @@ Rectangle {
                     tintName: "muted"
                 }
                 Loader {
+                    id: portraitLoader
                     anchors.fill: parent
                     sourceComponent: root.kioskHost ? kioskCover : desktopCover
                     Component {
@@ -190,7 +194,12 @@ Rectangle {
                     }
                     Component {
                         id: desktopCover
-                        RoundedImage { anchors.fill: parent; source: root.artSource; radius: 95 }
+                        RoundedImage {
+                            gridArtwork: true
+                            anchors.fill: parent
+                            source: root.artSource
+                            radius: 95
+                        }
                     }
                 }
                 // Hover scrim (clipped to the circle by the parent's clip).

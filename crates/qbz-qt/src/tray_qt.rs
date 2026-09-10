@@ -673,7 +673,7 @@ pub(crate) fn set_window_shown(shown: bool) {
 /// without this path owing anything beyond the geometry flush (§5.7).
 pub(crate) fn quit() {
     log::info!("[tray] quit requested");
-    crate::arm_hard_exit_watchdog("tray quit");
+    // QML confirms first; only the accepted exit arms the watchdog.
     crate::tray_bridge::ui(|mut t| {
         t.as_mut().quit_requested();
     });

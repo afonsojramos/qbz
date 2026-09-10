@@ -57,6 +57,10 @@ Rectangle {
     property string ribbonKind: ""
     // Artwork image source (file://… or "") — the host's cache lookup.
     property string artSource: ""
+    property int artFadeMs: coverImage.immediateGridArtwork ? 0 : 200
+    readonly property bool artworkReady: coverImage.ready
+    readonly property bool artworkImmediate: coverImage.immediateGridArtwork
+    readonly property bool artworkRevealed: coverImage.revealed
     // REMOTE cover url, for the pin payload only (the AlbumCard.slint pin
     // TouchArea passes `album.artwork-url`). The pinned store keeps a
     // denormalized display snapshot taken at pin time, so a host that
@@ -468,9 +472,12 @@ Rectangle {
             // Texts above are now bounded. One batch root per grid card.
 
             RoundedImage {
+                gridArtwork: true
+                id: coverImage
                 anchors.fill: parent
                 source: root.artSource
                 radius: theme.radiusSm
+                fadeMs: root.artFadeMs
             }
 
             // Empty-well glyph — opt-in, see `placeholderIcon`. Declared

@@ -73,6 +73,7 @@ Rectangle {
             spacing: 8
 
             CollectionMosaic {
+                gridArtwork: true
                 size: 184
                 urls: root.item.cellUrls || []
                 paths: root.item.cellPaths || []
@@ -115,6 +116,7 @@ Rectangle {
             spacing: 12
 
             CollectionMosaic {
+                gridArtwork: true
                 anchors.verticalCenter: parent.verticalCenter
                 size: 48
                 urls: root.item.cellUrls || []

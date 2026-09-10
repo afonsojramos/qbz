@@ -583,7 +583,7 @@ Item {
             width: pane.gridW
             height: parent.height
             clip: true
-            cacheBuffer: root.cardH
+            cacheBuffer: 2 * root.cardH
             boundsBehavior: Flickable.StopAtBounds
             model: root.albumEntries
 
@@ -741,11 +741,9 @@ Item {
             first = 0
         if (last < 0)
             last = Math.min(root.albumEntries.length - 1, first + 3)
-        // One screen of buffer either side, which is what keeps a fast scroll
-        // from showing placeholders — and the cap above is what keeps a fast
-        // scroll from queueing the whole discography.
-        first = Math.max(0, first - 1)
-        last = Math.min(root.albumEntries.length - 1, last + 1)
+        // Match the two buffered grid rows, not a whole extra screen.
+        first = Math.max(0, first - 2)
+        last = Math.min(root.albumEntries.length - 1, last + 2)
         var urls = []
         for (var i = first; i <= last; i++) {
             var e = root.albumEntries[i]

@@ -892,10 +892,12 @@ Rectangle {
 
     // --------------------- windowed artwork -----------------------------
     // Report the mounted window as artKeys; prune far-away covers.
-    function reportWindow(visibleArray, first, last) {
+    property var _artSent: ({})
+    function reportWindow(visibleArray, first, last, visibleFirst) {
         if (visibleArray.length === 0) {
             root._artKeep = ({})
             root._artRequested = ({})
+            root._artSent = ({})
             root._artInbox = ({})
             root.artPending = 0
             if (Object.keys(root.artMap).length > 0)
@@ -917,13 +919,25 @@ Rectangle {
         var m = artMap
         var inbox = root._artInbox
         var pending = 0
-        for (i = first; i <= last; i++) {
+        var now = Date.now()
+        // Visible and forward rows enter the existing worker queue first.
+        var start = Math.max(first, Math.min(last, visibleFirst === undefined ? first : visibleFirst))
+        for (var offset = 0; offset <= last - first; offset++) {
+            i = start + offset
+            if (i > last) i = first + i - last - 1
             if (visibleArray[i].kind === "group-header") continue
             var k = visibleArray[i].artKey
             if (visibleArray[i].imageUrl !== "") {
-                keys.push(k)
                 requested[k] = true
-                if (!m[k] && !inbox[k]) pending++
+                if (!m[k] && !inbox[k]) {
+                    pending++
+                    // Scrolling must not launch the same pending download
+                    // again every 180 ms. Permit a later retry after failure.
+                    if (!root._artSent[k] || now - root._artSent[k] >= 30000) {
+                        root._artSent[k] = now
+                        keys.push(k)
+                    }
+                }
             }
         }
         root._artKeep = keep
@@ -941,8 +955,11 @@ Rectangle {
         for (key in inbox) {
             if (!keep[key]) delete inbox[key]
         }
+        for (key in root._artSent) {
+            if (!keep[key]) delete root._artSent[key]
+        }
         if (changed) artMap = Object.assign({}, m)
-        QbzLibrary.libraryArtworkWindow(JSON.stringify(keys))
+        if (keys.length > 0) QbzLibrary.libraryArtworkWindow(JSON.stringify(keys))
     }
 
     Connections {
@@ -1041,17 +1058,21 @@ Rectangle {
         id: windowDebounce
         interval: 180
         onTriggered: root.reportWindow(
-            pendingRows ? pendingRows : root.visibleRows, pendingFirst, pendingLast)
+            pendingRows ? pendingRows : root.visibleRows, pendingFirst, pendingLast, pendingVisibleFirst)
         property int pendingFirst: 0
         property int pendingLast: 0
+        property int pendingVisibleFirst: 0
         property var pendingRows: null
     }
     /// `rows` is optional — omit it and the band is read off `visibleRows`.
-    function queueWindowReport(first, last, rows) {
+    function queueWindowReport(first, last, rows, visibleFirst) {
         windowDebounce.pendingFirst = first
         windowDebounce.pendingLast = last
+        windowDebounce.pendingVisibleFirst = visibleFirst === undefined ? first : visibleFirst
         windowDebounce.pendingRows = rows === undefined ? null : rows
-        windowDebounce.restart()
+        // Coalesce to the latest window without postponing it until scrolling
+        // stops. The existing 180 ms cap still bounds bridge traffic.
+        if (!windowDebounce.running) windowDebounce.start()
     }
 
     // All-tab search settle -> re-report the first window so the filtered
@@ -1362,7 +1383,7 @@ Rectangle {
                 boundsBehavior: Flickable.StopAtBounds
                 model: root.visibleRows
 
-                onContentYChanged: root.gridWindowReport()
+                onContentYChanged: root.gridWindowReport(true)
                 onModelChanged: root.gridWindowReport()
                 onWidthChanged: root.gridWindowReport()
                 onVisibleChanged: root.gridWindowReport()
@@ -1705,13 +1726,26 @@ Rectangle {
     // rail above all, since it is the one body whose band is NOT a
     // `visibleRows` band. `onVisibleChanged` keeps the gate from swallowing
     // the first report of a body that becomes visible after its model landed.
-    function gridWindowReport() {
+    property string _gridMotionBand: ""
+    property double _gridMotionReportedAt: 0
+    function gridWindowReport(motionOnly) {
         if (!grid.visible) return
         var cols = Math.max(1, Math.floor(grid.width / grid.cellWidth))
-        var firstRow = Math.max(0, Math.floor(grid.contentY / grid.cellHeight) - 1)
-        var lastRow = Math.ceil((grid.contentY + grid.height) / grid.cellHeight) + 1
+        var visibleFirst = Math.max(0, Math.floor(grid.contentY / grid.cellHeight))
+        // Match the two rows of delegates already held by cacheBuffer.
+        var firstRow = Math.max(0, visibleFirst - 2)
+        var lastRow = Math.ceil((grid.contentY + grid.height) / grid.cellHeight) + 2
         var m = root.visibleRows
-        queueWindowReport(firstRow * cols, Math.min(m.length - 1, lastRow * cols - 1))
+        var band = firstRow + ":" + lastRow + ":" + visibleFirst + ":" + cols
+        var now = Date.now()
+        // Do not restart the bridge timer for every pixel in the same band.
+        // Non-motion notifications bypass this guard; a periodic motion
+        // refresh also preserves the existing failed-request retry behavior.
+        if (motionOnly === true && root._gridMotionBand === band
+                && now - root._gridMotionReportedAt < 1000) return
+        root._gridMotionBand = band
+        root._gridMotionReportedAt = now
+        queueWindowReport(firstRow * cols, Math.min(m.length - 1, lastRow * cols - 1), undefined, visibleFirst * cols)
     }
     function listWindowReport() {
         if (!list.visible) return

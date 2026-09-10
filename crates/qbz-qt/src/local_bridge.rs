@@ -674,6 +674,12 @@ pub mod qbz_local {
         /// emits `localArtworkReady` per hit.
         #[qinvokable]
         fn artwork_window(self: Pin<&mut QbzLocal>, keys_json: QString);
+        #[qinvokable]
+        fn artwork_timing_enabled(self: &QbzLocal) -> bool;
+        #[qinvokable]
+        fn artwork_immediate_enabled(self: &QbzLocal) -> bool;
+        #[qinvokable]
+        fn artwork_timing(self: &QbzLocal, stage: QString, key: QString, window: QString);
         /// Derive the same flat tint + blurred atmosphere used by Qobuz
         /// AlbumView from an already-resolved local cover. Decode work stays
         /// off the Qt thread; key/path return with the result as generation
@@ -1633,6 +1639,31 @@ impl qbz_local::QbzLocal {
     }
 
     // --- Artwork -----------------------------------------------------------
+
+    pub fn artwork_timing_enabled(&self) -> bool {
+        log::log_enabled!(target: "qbz.nav.timing", log::Level::Debug)
+    }
+
+    pub fn artwork_immediate_enabled(&self) -> bool {
+        // Diagnostic A/B switch: the same binary can exercise the previous
+        // reveal path without changing its compiler, backend or dependencies.
+        std::env::var("QBZ_GRID_IMMEDIATE_ART").as_deref() != Ok("0")
+    }
+
+    pub fn artwork_timing(&self, stage: QString, key: QString, window: QString) {
+        if !self.artwork_timing_enabled() {
+            return;
+        }
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let elapsed = START
+            .get_or_init(std::time::Instant::now)
+            .elapsed()
+            .as_secs_f64()
+            * 1000.0;
+        log::debug!(target: "qbz.nav.timing",
+            "art ms={elapsed:.3} stage={} window={} key={}",
+            stage.to_string(), window.to_string(), key.to_string());
+    }
 
     pub fn artwork_window(self: Pin<&mut Self>, keys_json: QString) {
         let keys: Vec<String> = serde_json::from_str(&keys_json.to_string()).unwrap_or_default();

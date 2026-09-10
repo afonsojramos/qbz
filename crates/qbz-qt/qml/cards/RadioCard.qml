@@ -30,6 +30,8 @@ import "../theme"
 
 Item {
     id: root
+    readonly property bool artworkReady: coverImage.ready
+    readonly property bool artworkImmediate: coverImage.immediateGridArtwork
 
     /// The line under the panel (the seed's name).
     property string seedTitle: ""
@@ -84,6 +86,8 @@ Item {
                 // No clip: RoundedImage confines itself on both arms; a clip is an
                 // unconditional batch root, one per visible card.
                 RoundedImage {
+                    id: coverImage
+                    gridArtwork: true
                     anchors.fill: parent
                     source: root.artSource
                     radius: 4

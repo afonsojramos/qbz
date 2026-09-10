@@ -537,6 +537,41 @@ Rectangle {
 
     // Decoded-cover map {artKey: "file://…"} — fed by the id-keyed signal.
     property var artMap: ({})
+    property var _artKeep: ({})
+    // Keep the high-density path unchanged until it passes the CPU budget.
+    // This remains reactive when the window moves between displays.
+    readonly property bool immediateArtwork: QbzLocal.artworkImmediateEnabled()
+        && Screen.devicePixelRatio <= 1
+    readonly property bool artTimingEnabled: QbzLocal.artworkTimingEnabled()
+    property var _artTraceWindows: ({})
+    property int _artTraceSequence: 0
+
+    function traceArtReport(rows, first, last, surface) {
+        if (!root.artTimingEnabled) return
+        var keys = []
+        for (var i = Math.max(0, first); i <= Math.min(last, rows.length - 1); i++)
+            if (rows[i] && rows[i].artKey) keys.push(rows[i].artKey)
+        var signature = keys.join("|")
+        var old = root._artTraceWindows[surface]
+        if (old && old.signature === signature) return
+        if (old) {
+            for (var j = 0; j < old.keys.length; j++)
+                QbzLocal.artworkTiming("window-end", old.keys[j], old.id)
+        }
+        var id = surface + ":" + (++root._artTraceSequence)
+        root._artTraceWindows[surface] = {id: id, keys: keys, signature: signature}
+        for (var k = 0; k < keys.length; k++)
+            QbzLocal.artworkTiming("report", keys[k], id)
+    }
+
+    function traceArt(stage, key) {
+        if (!root.artTimingEnabled) return
+        for (var surface in root._artTraceWindows) {
+            var w = root._artTraceWindows[surface]
+            if (w.keys.indexOf(key) >= 0)
+                QbzLocal.artworkTiming(stage, key, w.id)
+        }
+    }
 
     // Covers arrive ONE AT A TIME (src/local_artwork.rs phase 2 streams each
     // thumbnail through the id-keyed signal the moment it resolves). Rebinding
@@ -577,6 +612,13 @@ Rectangle {
         interval: 16
         repeat: false
         onTriggered: {
+            if (root.immediateArtwork) {
+                // One rebind for this batch, with no decorative reveal front.
+                root.artMap = Object.assign({}, root.artMap, root._artHeld, root._artInbox)
+                root._artHeld = ({})
+                root._artInbox = ({})
+                return
+            }
             var k
             // Everything that arrived this tick joins whatever is still held.
             for (k in root._artInbox) root._artHeld[k] = root._artInbox[k]
@@ -611,10 +653,12 @@ Rectangle {
     Connections {
         target: QbzLocal
         function onLocalArtworkReady(key, path) {
+            root.traceArt("path", key)
             root.nativeTracksModel.setArtwork(key, path)
             root.nativeAlbumsModel.setArtwork(key, path)
             root.nativeArtistsModel.setArtwork(key, path)
             root.nativeArtistAlbumsModel.setArtwork(key, path)
+            if (root.immediateArtwork && !root._artKeep[key]) return
             root._artInbox[key] = path
             if (!artFlush.running) artFlush.start()
             // An arrival is live evidence that the pass is still running, so
@@ -1269,6 +1313,12 @@ Rectangle {
     /// covers. Cheap no-op when the surface was never registered.
     function releaseWindow(key) {
         var k = key || "default"
+        if (root.artTimingEnabled && root._artTraceWindows[k]) {
+            var traced = root._artTraceWindows[k]
+            for (var i = 0; i < traced.keys.length; i++)
+                QbzLocal.artworkTiming("window-end", traced.keys[i], traced.id)
+            delete root._artTraceWindows[k]
+        }
         if (root._windows[k] === undefined && root._pending[k] === undefined) return
         delete root._windows[k]
         delete root._pending[k]
@@ -1294,6 +1344,7 @@ Rectangle {
             }
         }
         var m = root.artMap
+        root._artKeep = keep
         var changed = false
         for (k in m) if (!keep[k]) { delete m[k]; changed = true }
         // The not-yet-flushed arrivals are evicted too, or a cover that landed
@@ -1318,7 +1369,7 @@ Rectangle {
                 ak = rows[i] ? rows[i].artKey : ""
                 if (!ak || seen[ak]) continue
                 seen[ak] = true
-                if (order[ak] === undefined) order[ak] = ord++
+                if (!root.immediateArtwork && order[ak] === undefined) order[ak] = ord++
                 if (m[ak] !== undefined || root._artInbox[ak] !== undefined) continue
                 keys.push(ak)
             }
@@ -1326,7 +1377,11 @@ Rectangle {
         // Restart the wipe at the top of what is on screen NOW.
         root._artOrder = order
         root._artFront = 0
-        if (keys.length > 0) QbzLocal.artworkWindow(JSON.stringify(keys))
+        if (keys.length > 0) {
+            if (root.artTimingEnabled)
+                for (var n = 0; n < keys.length; n++) root.traceArt("request", keys[n])
+            QbzLocal.artworkWindow(JSON.stringify(keys))
+        }
     }
 
     /// Immediate single-surface report — the leading edge and the rate-limit
@@ -1444,6 +1499,7 @@ Rectangle {
     property real _lastReportMs: 0
     function queueWindowReport(rows, first, last, key) {
         var k = key || "default"
+        if (rows && root.artTimingEnabled) root.traceArtReport(rows, first, last, k)
         if (!windowDebounce.running
             && Date.now() - root._lastReportMs >= windowDebounce.interval) {
             root._lastReportMs = Date.now()

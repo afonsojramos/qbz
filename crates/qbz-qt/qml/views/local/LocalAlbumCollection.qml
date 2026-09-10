@@ -17,6 +17,7 @@
 // via the host's windowing helpers.
 
 import QtQuick
+import QtQuick.Window
 import com.blitzfc.qbz
 import "../../cards"
 import "../../controls"
@@ -264,10 +265,15 @@ Item {
     // moved the list by a pixel. Every state change that can alter the
     // mounted band now reports: mount, becoming visible, the model rebuild,
     // a viewport resize, and the scroll.
-    function report() {
+    // Only wheel/motion reports can be skipped. Model, layout and artwork
+    // notifications always refresh the window, including late native pages.
+    property string _motionBand: ""
+    property double _motionReportedAt: 0
+    function report(motionOnly) {
         if (!view || !list) return
         var count = nativeActive && nativeModel ? nativeModel.totalCount : entries.length
         if (!list.visible || count === 0 || width <= 0) {
+            root._motionBand = ""
             view.releaseWindow(root.surface)
             return
         }
@@ -275,9 +281,24 @@ Item {
         var last = list.indexAt(4, list.contentY + Math.max(1, list.height) - 1)
         if (first < 0) first = 0
         if (last < 0) last = Math.min(count - 1, first + 8)
+        var visibleFirst = first
+        // These delegates already exist in cacheBuffer. Resolve their covers
+        // too, so Qt can decode them before the next wheel step reveals them.
+        if (root.viewMode === "grid") {
+            first = Math.max(0, first - 2)
+            last = Math.min(count - 1, last + 2)
+        }
+        var band = first + ":" + last + ":" + visibleFirst
+        var now = Date.now()
+        if (motionOnly === true && root._motionBand === band
+                && now - root._motionReportedAt < 1000) return
+        root._motionBand = band
+        root._motionReportedAt = now
         if (nativeActive && nativeModel) {
             var resident = []
-            for (var entryIndex = first; entryIndex <= last; entryIndex++) {
+            for (var offset = 0; offset <= last - first; offset++) {
+                var entryIndex = visibleFirst + offset
+                if (entryIndex > last) entryIndex = first + entryIndex - last - 1
                 var entry = nativeModel.rowAt(entryIndex)
                 if (!entry || entry.loading || !entry.items) continue
                 for (var itemIndex = 0; itemIndex < entry.items.length; itemIndex++)
@@ -344,7 +365,7 @@ Item {
         // lazy FIRST. In the other order this would install that bug.
         reuseItems: true
         model: root.nativeActive && root.nativeModel ? root.nativeModel : root.entries
-        onContentYChanged: root.report()
+        onContentYChanged: root.report(true)
         onModelChanged: root.report()
         onHeightChanged: root.report()
         onVisibleChanged: if (visible) root.reportSoon()
@@ -432,6 +453,16 @@ Item {
                             /// slot is filled, `root.emptySlot` when it is not.
                             readonly property var slot:
                                 cardCell.modelData || root.emptySlot
+                            property string artTracePendingKey: ""
+                            Connections {
+                                target: root.view && root.view.artTimingEnabled
+                                    && cardCell.artTracePendingKey !== "" ? root.Window.window : null
+                                function onFrameSwapped() {
+                                    if (cardCell.slot.artKey === cardCell.artTracePendingKey)
+                                        root.view.traceArt("frame", cardCell.artTracePendingKey)
+                                    cardCell.artTracePendingKey = ""
+                                }
+                            }
                             visible: cardCell.modelData !== null
                             width: 200
                             height: 246
@@ -494,6 +525,18 @@ Item {
                                 qualityDetail: cardCell.slot.qualityDetail || ""
                                 artSource: cardCell.slot.artPath || (root.view
                                     ? (root.view.artMap[cardCell.slot.artKey] || "") : "")
+                                artFadeMs: root.view && root.view.immediateArtwork ? 0 : 200
+                                onArtworkReadyChanged: {
+                                    if (root.view && root.view.artTimingEnabled && artworkReady) {
+                                        root.view.traceArt("ready", cardCell.slot.artKey)
+                                    }
+                                }
+                                onArtworkRevealedChanged: {
+                                    if (root.view && root.view.artTimingEnabled && artworkRevealed) {
+                                        root.view.traceArt("revealed", cardCell.slot.artKey)
+                                        cardCell.artTracePendingKey = cardCell.slot.artKey
+                                    }
+                                }
                                 pinArtworkUrl: artSource
                                 isPinned: QbzLibrary.pinState("album", albumId)
                                 // LocalLibraryView.slint:1267 `show-source-badge`
@@ -565,15 +608,10 @@ Item {
                                     root.enqueueRequested(cardCell.slot.id, m)
                                 }
                             }
-                            // Per-item cover placeholder, handed over to the
-                            // art itself: AlbumCard seals its RoundedImage
-                            // away, so this uses QbzSkeleton's probe arm —
-                            // `coverSource` loads the SAME pixmap-cache entry
-                            // the card is loading and retires the placeholder
-                            // when that decode completes, not when the path
-                            // appears. A bare Rectangle, so it does not take
-                            // pointer events and the card's own areas keep
-                            // working underneath.
+                            // Observe the card's actual derivative, so the placeholder
+                            // neither decodes the original again nor retires before
+                            // the displayed image is ready. The source probe remains
+                            // only for the diagnostic baseline comparison.
                             // settleMs is mandatory here: local artwork
                             // resolution drops keys with no cover, so an
                             // artless album would otherwise shimmer forever
@@ -584,7 +622,10 @@ Item {
                                 height: 200
                                 pending: root.view
                                     ? root.view.artWanted(cardCell.slot.artKey) : false
-                                coverSource: root.view
+                                coverReady: root.view && root.view.immediateArtwork
+                                    ? albumCard.artworkReady : false
+                                handoverFadeMs: root.view && root.view.immediateArtwork ? 0 : 180
+                                coverSource: root.view && !root.view.immediateArtwork
                                     ? root.view.artPathOf(cardCell.slot.artKey) : ""
                                 phase: root.view ? root.view.skelPhase : false
                                 settleMs: root.view ? root.view.artSettleMs : 0

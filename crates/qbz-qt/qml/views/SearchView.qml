@@ -268,7 +268,7 @@ Rectangle {
         // that decode finishes. Gating on `artPath !== ""` (what this used to
         // do) drops the placeholder while the card's canvas is still blank.
         pending: (card.artUrl || "") !== ""
-        coverSource: resolvedSource
+        coverSource: artworkItem && artworkItem.artworkImmediate ? "" : resolvedSource
         // A cover whose download fails republishes the document with an
         // empty artPath — without this the tile would shimmer forever.
         settleMs: 6000
@@ -438,6 +438,7 @@ Rectangle {
                     onLoaded: resultCell.restoreMutableBindings()
                 }
                 CardArtSkeleton {
+                    artworkItem: cardLoader.item && cardLoader.item.artworkImmediate ? cardLoader.item : null
                     visible: resultGrid.kind !== "artist"
                     card: resultCell.cardData
                     resolvedSource: resultGrid.artOf(resultCell.cardData)
@@ -929,6 +930,7 @@ Rectangle {
                                 width: 200
                                 height: 246
                                 AlbumCard {
+                                    id: searchAlbumCard
                                     albumId: modelData.id
                                     title: modelData.title
                                     artist: modelData.artist
@@ -946,6 +948,7 @@ Rectangle {
                                     artworkUrl: modelData.artUrl || ""
                                 }
                                 CardArtSkeleton {
+                                    artworkItem: searchAlbumCard.artworkImmediate ? searchAlbumCard : null
                                     card: modelData
                                     phase: root.skelPhase
                                     cellIndex: index
@@ -1163,6 +1166,7 @@ Rectangle {
                                 width: 200
                                 height: 246
                                 PlaylistCard {
+                                    id: searchPlaylistCard
                                     // artworkUrl is not passed: the card
                                     // defaults it to `item.artUrl`, which is
                                     // this row's remote cover.
@@ -1171,6 +1175,7 @@ Rectangle {
                                     isPinned: modelData.isPinned === true
                                 }
                                 CardArtSkeleton {
+                                    artworkItem: searchPlaylistCard.artworkImmediate ? searchPlaylistCard : null
                                     card: modelData
                                     phase: root.skelPhase
                                     cellIndex: index
