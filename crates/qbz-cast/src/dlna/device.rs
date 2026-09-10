@@ -1,6 +1,6 @@
 //! DLNA device connection and playback via AVTransport SOAP
 
-use rupnp::http::Uri;
+use http::Uri;
 use rupnp::{Device, Service};
 use serde::{Deserialize, Serialize};
 

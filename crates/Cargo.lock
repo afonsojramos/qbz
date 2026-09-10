@@ -4128,6 +4128,7 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "getrandom 0.4.3",
+ "http",
  "log",
  "mdns-sd",
  "rupnp",
@@ -4322,6 +4323,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "env_logger",
+ "libc",
  "log",
  "regex",
 ]
@@ -5239,8 +5241,6 @@ checksum = "fae8ee26b0371a29a77d2b2d6b3ae13aa81def6f9bf1b1b92a32d279a5e709b7"
 [[package]]
 name = "rupnp"
 version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adade717fef50ae742ee4341495dfb1f78b2bc39e50ad8a6d485ffb81c1edbf6"
 dependencies = [
  "bytes",
  "futures-core",

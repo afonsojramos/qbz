@@ -87,17 +87,16 @@ impl Log for TeeLogger {
             target: record.target().to_owned(),
             message: msg,
         };
-        let [summary, first] = output.consecutive.push(line, Instant::now());
-        let summarized = summary.is_some();
+        let now = Instant::now();
+        let [summary, first] = output.consecutive.push(line, now);
         for line in [summary, first].into_iter().flatten() {
             output.write(line);
         }
-        // Compaction may no longer fill BufWriter for minutes. Make periodic
-        // summaries visible to a live file tail as well as stderr/the ring.
-        if summarized {
-            if let Some(writer) = &mut output.file {
-                let _ = writer.flush();
-            }
+        // Flush each emitted batch before returning, including the last INFO
+        // before a hang. A time check on the next record cannot bound an idle
+        // buffer. Duplicate compaction still avoids writes for repeated lines.
+        if let Some(writer) = &mut output.file {
+            let _ = writer.flush();
         }
     }
 
@@ -118,6 +117,43 @@ impl Log for TeeLogger {
 mod tests {
     use super::*;
     use log::Level;
+
+    #[test]
+    fn last_info_is_visible_without_another_record_or_explicit_flush() {
+        // The real logger writes to the process-global ring. Isolate this
+        // exercise from the ring unit test, which checks exact FIFO contents.
+        const MARKER: &str = "QBZ_LOG_LAST_INFO_TEST_CHILD";
+        if std::env::var_os(MARKER).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "tee::tests::last_info_is_visible_without_another_record_or_explicit_flush",
+                    "--exact",
+                ])
+                .env(MARKER, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("qbz-log-last-info-{}", std::process::id()));
+        let file = File::create(&path).unwrap();
+        let inner = env_logger::Builder::new()
+            .filter_level(log::LevelFilter::Info)
+            .build();
+        let logger = TeeLogger::new(inner, Some(BufWriter::new(file)));
+        logger.log(
+            &Record::builder()
+                .level(Level::Info)
+                .target("test")
+                .args(format_args!("last startup message"))
+                .build(),
+        );
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("last startup message"));
+        drop(logger);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn format_line_includes_redacted_message_not_raw() {

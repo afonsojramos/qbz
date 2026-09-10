@@ -243,6 +243,9 @@ jobs:
       # Hide the SDK and use a fresh profile/private bus; early exit (even 0)
       # fails. The helper reaps the launcher and its private process group.
       - name: Offscreen smoke (the AppDir that ships)
+        env:
+          # Explicitly opt into best-effort, non-signal-safe unwinding in CI.
+          QBZ_FATAL_BACKTRACE: "1"
         run: |
           python3 scripts/packaging/smoke_release.py ./AppDir/AppRun \
             --hide-qt "$QT_ROOT_DIR" --seconds 60 --log smoke.log
@@ -265,6 +268,7 @@ jobs:
           retention-days: ${{ startsWith(github.ref, 'refs/tags/v') && 90 || 7 }}
 
       - name: Upload unstripped binary (symbolication)
+        if: ${{ !cancelled() && hashFiles('qbz-unstripped') != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: qbz-linux-${{ inputs.arch }}-unstripped
