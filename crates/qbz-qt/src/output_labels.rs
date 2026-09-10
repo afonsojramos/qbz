@@ -62,9 +62,37 @@ impl Default for OutputLabels {
     }
 }
 
+/// Whether `exclusive_mode` means anything on this backend — the ONE
+/// predicate behind the Settings row's enabled state, the backend-switch
+/// cascade and the EXCL LED. It mirrors the engine, which is the authority:
+/// ALSA hw honours it everywhere (`alsa_backend.rs`); on macOS the System
+/// default backend takes CoreAudio Hog Mode when it is set (PR #391,
+/// `qbz-audio backend.rs::create_output_stream_with_exclusive_guard`), and
+/// `None` (Auto) resolves to System default there exactly as qbz-player's
+/// `using_coreaudio_exclusive` reads it. PipeWire / Pulse / JACK are
+/// multiplexed servers; WASAPI's exclusive path is the backend choice itself
+/// (5ba49a739), so the toggle is inert there and stays hidden.
+///
+/// `macos` is a parameter rather than `cfg!` so both arms run on the Linux
+/// gate; callers pass `cfg!(target_os = "macos")`. #748.
+pub fn backend_honours_exclusive(backend: Option<AudioBackendType>, macos: bool) -> bool {
+    match backend {
+        Some(AudioBackendType::Alsa) => true,
+        Some(AudioBackendType::SystemDefault) | None => macos,
+        Some(_) => false,
+    }
+}
+
 /// `settings.rs::output_labels`, ported verbatim — this mapping IS the
-/// contract for the two LEDs; do not "improve" it.
+/// contract for the two LEDs; do not "improve" it. The single addition since
+/// the port is the macOS arm of System default (#748), documented inline.
 pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
+    output_labels_for(audio, cfg!(target_os = "macos"))
+}
+
+/// `output_labels` with the platform as a parameter so the macOS arm is
+/// covered by the Linux gate.
+pub fn output_labels_for(audio: &AudioSettings, macos: bool) -> OutputLabels {
     let (backend, backend_active) = match audio.backend_type {
         Some(AudioBackendType::PipeWire) => ("PIPEWIRE", true),
         Some(AudioBackendType::Alsa) => ("ALSA", true),
@@ -112,7 +140,17 @@ pub fn output_labels(audio: &AudioSettings) -> OutputLabels {
                 ("SHARED", false)
             }
         }
-        Some(AudioBackendType::SystemDefault) | None => ("DEFAULT", false),
+        // #748: on macOS, System default + `exclusive_mode` IS CoreAudio Hog
+        // Mode — the device is claimed and its nominal rate follows the track
+        // — so the LED lights EXCL exactly when the engine takes the guard.
+        // Off macOS the flag is inert on this backend and nothing lights.
+        Some(AudioBackendType::SystemDefault) | None => {
+            if macos && audio.exclusive_mode {
+                ("EXCL", true)
+            } else {
+                ("DEFAULT", false)
+            }
+        }
     };
     OutputLabels {
         backend,
@@ -322,5 +360,69 @@ mod tests {
         let l = output_labels(&settings(Some(AudioBackendType::SystemDefault)));
         assert_eq!((l.backend, l.mode), ("SYST", "DEFAULT"));
         assert!(!l.backend_active && !l.mode_active);
+    }
+
+    #[test]
+    fn alsa_honours_the_exclusive_toggle_on_every_platform() {
+        for macos in [false, true] {
+            assert!(backend_honours_exclusive(Some(AudioBackendType::Alsa), macos));
+        }
+    }
+
+    #[test]
+    fn coreaudio_system_default_honours_the_toggle_only_on_macos() {
+        // #748: on macOS the System default backend takes CoreAudio Hog Mode
+        // when `exclusive_mode` is set (PR #391). `None` (Auto) resolves to
+        // System default there, exactly as qbz-player's
+        // `using_coreaudio_exclusive` reads it.
+        for backend in [Some(AudioBackendType::SystemDefault), None] {
+            assert!(backend_honours_exclusive(backend, true), "{backend:?} on macOS");
+            assert!(!backend_honours_exclusive(backend, false), "{backend:?} off macOS");
+        }
+    }
+
+    #[test]
+    fn shared_servers_and_wasapi_never_honour_the_toggle() {
+        // WASAPI: the exclusive path is the backend choice itself; the toggle
+        // is hidden there (5ba49a739) and the cascade keeps clearing it.
+        for backend in [
+            AudioBackendType::PipeWire,
+            AudioBackendType::Pulse,
+            AudioBackendType::Jack,
+            AudioBackendType::WasapiExclusive,
+        ] {
+            for macos in [false, true] {
+                assert!(!backend_honours_exclusive(Some(backend), macos), "{backend:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn coreaudio_exclusive_lights_excl_only_on_macos() {
+        let mut s = settings(Some(AudioBackendType::SystemDefault));
+        s.exclusive_mode = true;
+        let mac = output_labels_for(&s, true);
+        assert_eq!((mac.backend, mac.mode), ("SYST", "EXCL"));
+        assert!(mac.mode_active && !mac.backend_active);
+        // Auto on macOS resolves to System default in the player: same LED.
+        s.backend_type = None;
+        assert_eq!(output_labels_for(&s, true).mode, "EXCL");
+        // Off macOS the flag is inert on System default: nothing lights up.
+        s.backend_type = Some(AudioBackendType::SystemDefault);
+        let linux = output_labels_for(&s, false);
+        assert_eq!(linux.mode, "DEFAULT");
+        assert!(!linux.mode_active);
+        // Without the flag macOS stays on the unlit default.
+        s.exclusive_mode = false;
+        assert_eq!(output_labels_for(&s, true).mode, "DEFAULT");
+    }
+
+    #[test]
+    fn coreaudio_exclusive_keeps_the_software_slider_live() {
+        // Pin: exclusive on macOS drives the DAC's hardware volume and falls
+        // back to software on knob-only DACs, so the slider is never inert.
+        let mut s = settings(Some(AudioBackendType::SystemDefault));
+        s.exclusive_mode = true;
+        assert!(!volume_locked(&s));
     }
 }
