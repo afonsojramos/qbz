@@ -333,8 +333,12 @@ const LIBRARY_LOCAL_TABLES: &[&str] = &[
     "library_kv",
     "local_playlists",
     "local_playlist_tracks",
-    "mixtape_collections",
-    "mixtape_collection_items",
+    // Mixtapes and collections are intentionally NOT imported yet: their items
+    // reference playlist/album ids that change during import, so copying them
+    // verbatim leaves garbage rows pointing at ids that no longer exist.
+    // Re-enable once the importer remaps ids (import the elements first, note
+    // the new ids, then import + update mixtapes/collections). The destination
+    // app creates the empty schema itself via its own mixtape migrations.
 ];
 
 /// The ACCOUNT half of `library.db`: tables keyed by `qobuz_playlist_id`.
@@ -369,9 +373,10 @@ const COLLECTION_STORES: &[(&str, &[&str])] = &[
 const JSON_IF_ABSENT: &[&str] = &[
     "lyrics_prefs.json",
     "reco_dismiss.json",
-    "collection_view_prefs.json",
     "myqbz_branding.json",
-    "collection_open_rows.json",
+    // collection_view_prefs.json / collection_open_rows.json omitted while
+    // mixtapes/collections are not imported: they key per-collection UI state
+    // by ids that would not exist in the destination.
 ];
 
 fn library_folder_count(conn: &Connection) -> usize {
@@ -445,13 +450,10 @@ fn copy_library(
             )?;
             report.add("library.db/library_folders", n);
         }
-        for table in [
-            "album_settings",
-            "custom_album_covers",
-            "artist_images",
-            "mixtape_collections",
-            "mixtape_collection_items",
-        ] {
+        // mixtape_collections / mixtape_collection_items are intentionally
+        // excluded here too (see LIBRARY_LOCAL_TABLES): their id references
+        // break under import until the remap lands.
+        for table in ["album_settings", "custom_album_covers", "artist_images"] {
             if src_tables.contains(table) {
                 let n = copy_table(&src, &dst, table, Conflict::Ignore, None, &mut unmapped)?;
                 report.add(format!("library.db/{table}"), n);
