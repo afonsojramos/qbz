@@ -492,6 +492,10 @@ Rectangle {
         // lets this one reset to 0 without touching the shared clock.
         property int ms: 0
         property int lastPulse: 0
+        // Derived from the pulse-driven `ms`, so no extra Timer: a busy-
+        // connection heads-up after ~10s, and a 5-minute safety net.
+        readonly property bool longWait: loadingLayer.ms > 10000 && !loadingLayer.timedOut
+        readonly property bool timedOut: loadingLayer.ms > 300000
 
         // S:1551-1554 — `@keyframes pulse`, 2s ease-in-out, 0%/100% scale(1)
         // opacity .8, 50% scale(1.06) opacity 1. A raised cosine is that curve.
@@ -505,7 +509,7 @@ Rectangle {
         Connections {
             target: QbzShell
             function onPulseMsChanged() {
-                if (!root.isLoading)
+                if (!root.isLoading || loadingLayer.timedOut)
                     return          // a handler that writes nothing costs no frame
                 var d = QbzShell.pulseMs - loadingLayer.lastPulse
                 if (d < 0 || d > 500)
@@ -522,6 +526,7 @@ Rectangle {
         }
 
         Column {
+            visible: !loadingLayer.timedOut
             anchors.centerIn: parent
             spacing: 24                                     // S:1511-1517
 
@@ -597,6 +602,64 @@ Rectangle {
                     text: Math.round(root.progress.pct || 0) + "%"
                     color: theme.textMuted
                     font.pixelSize: 12
+                }
+            }
+
+            // Busy-connection heads-up after the first ~10s so a slow
+            // MusicBrainz reads as expected, not as a hang.
+            Text {
+                visible: loadingLayer.longWait
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.tr("This can take a few minutes when MusicBrainz is busy.")
+                color: theme.textMuted
+                font.pixelSize: 12
+                width: 320
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+        }
+
+        // 5-minute safety net: if discovery is still running this long,
+        // MusicBrainz is throttling us hard. Offer Retry instead of an endless
+        // spinner; a late success still swaps in the grid on its own.
+        Column {
+            visible: loadingLayer.timedOut
+            anchors.centerIn: parent
+            spacing: 16
+            width: 360
+            Text {
+                width: parent.width
+                text: root.tr("This is taking longer than usual — MusicBrainz may be busy. Try again in a moment.")
+                color: theme.textSecondary
+                font.pixelSize: 14
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: sceneTimeoutLabel.implicitWidth + 40
+                height: root.kioskHost ? 64 : sceneTimeoutLabel.implicitHeight + 16
+                radius: 8
+                color: sceneTimeoutArea.containsMouse ? theme.surfaceElevated : theme.surfaceCard
+                Text {
+                    id: sceneTimeoutLabel
+                    anchors.centerIn: parent
+                    text: root.tr("Retry")
+                    color: theme.textPrimary
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    id: sceneTimeoutArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // Reset the pulse clock too: the loading layer never went
+                    // invisible, so onVisibleChanged would not re-arm `ms`.
+                    onClicked: {
+                        QbzScene.retry()
+                        loadingLayer.ms = 0
+                        loadingLayer.lastPulse = QbzShell.pulseMs
+                    }
                 }
             }
         }
