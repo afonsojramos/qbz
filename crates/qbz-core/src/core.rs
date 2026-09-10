@@ -2384,10 +2384,35 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         &self,
         name: &str,
     ) -> Result<Option<ResolvedArtist>, CoreError> {
-        self.musicbrainz
+        // Cache-first (piece 3): a resolved artist is stable, so every
+        // ArtistPage open re-searched `artist?query=` live otherwise. Same
+        // shape as `musicbrainz_get_artist_metadata` (cache-first, write-after).
+        if let Ok(guard) = self.musicbrainz_cache.lock() {
+            if let Some(cache) = guard.as_ref() {
+                if let Ok(Some(cached)) = cache.get_artist(name) {
+                    return Ok(Some(cached));
+                }
+            }
+        }
+
+        let resolved = self
+            .musicbrainz
             .resolve_artist(name)
             .await
-            .map_err(|e| CoreError::Internal(e.to_string()))
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+
+        // Write-after, but NEVER cache a negative: a "not found" pinned for 30
+        // days is worse than re-searching (handoff policy). Expiry stays with
+        // the existing `cleanup(ttl_days)`; no new TTL here.
+        if let Some(ref artist) = resolved {
+            if let Ok(guard) = self.musicbrainz_cache.lock() {
+                if let Some(cache) = guard.as_ref() {
+                    let _ = cache.put_artist(artist);
+                }
+            }
+        }
+
+        Ok(resolved)
     }
 
     /// Generate playlist "Suggested Songs" via the artist_vectors engine.
@@ -2904,25 +2929,6 @@ fn scene_fatal_qobuz(err: &CoreError) -> Option<SceneDiscoveryError> {
     }
 }
 
-/// Longest we will honour a `Retry-After` before giving up on that request.
-/// MusicBrainz's per-IP limiter recovers in ~1 s; anything asking for more
-/// than this is an outage, not a hiccup, and the user is staring at a bar.
-const SCENE_MAX_BACKOFF_SECS: u64 = 10;
-
-/// Sleep `secs` (capped), waking every 250 ms so a cancellation lands promptly
-/// instead of after a ten-second nap. Returns `false` when cancelled.
-async fn scene_backoff(secs: u64, cancel: &CancelToken) -> bool {
-    let total = secs.min(SCENE_MAX_BACKOFF_SECS);
-    let slices = total * 4;
-    for _ in 0..slices {
-        if cancel.is_cancelled() {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
-    !cancel.is_cancelled()
-}
-
 /// Drop blacklisted rows from a scene response and keep `total_candidates`
 /// honest. Returns how many were removed.
 ///
@@ -3182,31 +3188,13 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 genre.clone(),
             );
 
-            let mut result = self
+            // The client already retries 503/429 with the server's Retry-After
+            // (send_with_retry, up to 3 attempts), so the scene no longer stacks
+            // a one-shot backoff on top -- that could pile waits past ~10s.
+            let result = self
                 .musicbrainz
                 .search_artists_by_tag_and_area(genre, &search_name, country, per_genre_limit, 0)
                 .await;
-
-            // Honour the server's Retry-After once. MusicBrainz answers 503
-            // (and the proxy 429) with a whole-second header; the client has
-            // already parsed it into RateLimited(secs).
-            if let Err(qbz_integrations::IntegrationError::RateLimited(secs)) = &result {
-                let secs = *secs;
-                log::info!("[scene] MusicBrainz rate-limited on {genre:?}, backing off {secs}s");
-                if !scene_backoff(secs, cancel).await {
-                    return Err(SceneDiscoveryError::Cancelled);
-                }
-                result = self
-                    .musicbrainz
-                    .search_artists_by_tag_and_area(
-                        genre,
-                        &search_name,
-                        country,
-                        per_genre_limit,
-                        0,
-                    )
-                    .await;
-            }
 
             let response = match result {
                 Ok(response) => response,
