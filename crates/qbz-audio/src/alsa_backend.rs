@@ -1411,9 +1411,8 @@ impl AudioBackend for AlsaBackend {
             })?
             .with_supported_config(&supported_config)
             .with_buffer_size(stream_config.buffer_size)
-            .with_error_callback(move |err| {
-                log::warn!("[ALSA Backend] Stream error at {}Hz: {}", effective_rate, err);
-            })
+            // #660: shared rate-limited callback + wedge latch (see stream_health).
+            .with_error_callback(crate::stream_health::error_callback("ALSA Backend"))
             .open_stream()
             .map_err(|e| {
                 if config.exclusive_mode {

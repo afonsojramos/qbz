@@ -565,16 +565,35 @@ fn create_output_stream_with_config(
             // a PlaybackError. Rate-limited: ALSA can repeat EPIPE every
             // period on a wedged device, and each recorded message is one
             // bus event (and one forked hook script) after the drain.
-            let mut last_reported: Option<std::time::Instant> = None;
+            //
+            // #660: the same limiter also caps the LOG line (cpal fires the
+            // POLLERR error ~1.7 M times per second on a wedged PCM), and a
+            // wedge is latched once for the audio thread to rebuild the
+            // stream — see qbz_audio::stream_health.
+            let mut limiter = qbz_audio::stream_health::FloodLimiter::new(
+                qbz_audio::stream_health::LOG_WINDOW,
+            );
+            let mut wedge_latched = false;
             match builder
                 .with_supported_config(&supported_config)
                 .with_buffer_size(cpal_buffer_size)
                 .with_error_callback(move |err| {
-                    log::error!("Audio stream error: {err}");
-                    let now = std::time::Instant::now();
-                    if last_reported.map_or(true, |t| now.duration_since(t).as_secs() >= 5) {
-                        last_reported = Some(now);
+                    let fault = qbz_audio::stream_health::classify(&err);
+                    if let Some(suppressed) = limiter.admit(std::time::Instant::now()) {
+                        if suppressed == 0 {
+                            log::error!("Audio stream error: {err}");
+                        } else {
+                            log::error!(
+                                "Audio stream error: {err} ({suppressed} more suppressed)"
+                            );
+                        }
                         state.record_stream_error(format!("Audio stream error: {err}"));
+                    }
+                    if let qbz_audio::stream_health::StreamFault::Wedged(reason) = fault {
+                        if !wedge_latched {
+                            wedge_latched = true;
+                            qbz_audio::stream_health::raise_wedged(format!("CPAL: {reason}"));
+                        }
                     }
                 })
                 .open_stream()
@@ -873,6 +892,28 @@ fn coreaudio_shared_rate_mismatch(
     let nominal_rate = coreaudio_nominal_rate(settings)?;
 
     (stream_rate != nominal_rate).then_some((stream_rate, nominal_rate))
+}
+
+/// How the audio thread answers a wedged output stream (#660): cpal's ALSA
+/// worker spins on `alsa::poll() returned POLLERR` (a PCM left in XRUN /
+/// SUSPENDED / DISCONNECTED state after CPU starvation, a suspend, or a
+/// device that went away) and never recovers; dropping the stream is the only
+/// exit. The first wedge is rebuilt at once; a second one inside the backoff
+/// window means the device itself is broken, so the thread releases it and
+/// stops instead of rebuilding in a loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WedgeRecovery {
+    Rebuild,
+    Stop,
+}
+
+const WEDGE_REBUILD_BACKOFF: Duration = Duration::from_secs(10);
+
+fn wedge_recovery(last_rebuild: Option<Instant>, now: Instant) -> WedgeRecovery {
+    match last_rebuild {
+        Some(last) if now.duration_since(last) < WEDGE_REBUILD_BACKOFF => WedgeRecovery::Stop,
+        _ => WedgeRecovery::Rebuild,
+    }
 }
 
 /// Inputs needed by both `Play` and `Stream` handlers to decide whether the
@@ -2305,6 +2346,8 @@ impl Player {
             const PAUSE_SUSPEND_DELAY_MS: u64 = 2000;
             let mut pause_suspend_deadline: Option<Instant> = None;
             let mut last_empty_check = Instant::now();
+            // #660: when the last wedged-stream rebuild happened (backoff input).
+            let mut last_wedge_rebuild: Option<Instant> = None;
             // Latch so the low-memory oversized-track promotion skip logs
             // once per track instead of on every 500 ms idle tick. Reset
             // whenever the streaming source is absent or still downloading
@@ -4867,6 +4910,85 @@ impl Player {
                 };
 
             loop {
+                // #660: observe a wedged output stream at the TOP of every loop
+                // iteration, before the command wait. Under QConnect the
+                // renderer-state command flow keeps recv_timeout returning
+                // Ok(...), so the Timeout arm (where this used to live) never
+                // fired — on the Pi a wedged cpal worker spun a core for 20+ s
+                // until an unrelated command arrived. Here it runs regardless of
+                // command flow and of is_playing. The stream is always dropped
+                // (that joins cpal's spinning worker); we only rebuild when we
+                // were actually playing.
+                if let Some(reason) = qbz_audio::stream_health::take_wedged() {
+                    let now = Instant::now();
+                    let was_playing = thread_state.is_playing.load(Ordering::SeqCst);
+                    let resume_at = thread_state.current_position();
+                    if let Some(engine) = current_engine.take() {
+                        engine.stop();
+                    }
+                    drop(stream_opt.take());
+                    qbz_audio::stream_health::clear_wedged();
+                    gapless_pending = None;
+                    gapless_request_armed = false;
+                    if !was_playing {
+                        log::warn!(
+                            "Audio thread: output stream wedged while stopped ({reason}); released it"
+                        );
+                    } else {
+                        match wedge_recovery(last_wedge_rebuild, now) {
+                            WedgeRecovery::Rebuild => {
+                                last_wedge_rebuild = Some(now);
+                                log::warn!(
+                                    "Audio thread: output stream wedged ({reason}); rebuilding it and resuming at {resume_at}s"
+                                );
+                                let sr = current_track_sample_rate.unwrap_or(48000);
+                                let ch = current_track_channels.unwrap_or(2);
+                                stream_opt =
+                                    init_device(&current_device_name, &thread_state, sr, ch);
+                                if stream_opt.is_some() {
+                                    consecutive_sink_failures = 0;
+                                    handle_command(
+                                        AudioCommand::Seek(resume_at),
+                                        &mut current_engine,
+                                        &mut current_audio_data,
+                                        &mut current_streaming_source,
+                                        &mut current_direct_dsd,
+                                        &mut stream_opt,
+                                        &mut current_device_name,
+                                        &mut consecutive_sink_failures,
+                                        &mut pause_suspend_deadline,
+                                        &mut current_track_sample_rate,
+                                        &mut current_track_channels,
+                                        &mut current_normalization_gain,
+                                        &mut current_gain_atomic,
+                                        &mut gapless_pending,
+                                        &mut gapless_request_armed,
+                                    );
+                                }
+                                if current_engine.is_none() {
+                                    log::error!(
+                                        "Audio thread: could not rebuild the output stream after it wedged ({reason})"
+                                    );
+                                    thread_state
+                                        .record_stream_error(format!("Audio output stopped: {reason}"));
+                                    thread_state.pause_playback_timer();
+                                    thread_state.is_playing.store(false, Ordering::SeqCst);
+                                }
+                            }
+                            WedgeRecovery::Stop => {
+                                last_wedge_rebuild = Some(now);
+                                log::error!(
+                                    "Audio thread: output stream wedged again within {}s ({reason}); releasing the device and stopping",
+                                    WEDGE_REBUILD_BACKOFF.as_secs()
+                                );
+                                thread_state
+                                    .record_stream_error(format!("Audio output stopped: {reason}"));
+                                thread_state.pause_playback_timer();
+                                thread_state.is_playing.store(false, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
                 thread_state.publish_output_stream_format(stream_opt.as_ref());
                 if thread_state.is_playing.load(Ordering::SeqCst) {
                     match rx.recv_timeout(Duration::from_millis(100)) {
@@ -5291,7 +5413,11 @@ impl Player {
                         pause_suspend_deadline = None;
                     }
 
-                    match rx.recv() {
+                    // #660: a bounded wait (not a blocking recv) so the loop
+                    // keeps iterating and the top-of-loop wedge check runs even
+                    // while stopped — a stream can wedge with is_playing already
+                    // false and cpal's worker would otherwise spin unseen.
+                    match rx.recv_timeout(Duration::from_millis(250)) {
                         Ok(command) => handle_command(
                             command,
                             &mut current_engine,
@@ -5309,7 +5435,8 @@ impl Player {
                             &mut gapless_pending,
                             &mut gapless_request_armed,
                         ),
-                        Err(_) => {
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => {
                             log::info!("Audio thread: channel closed, exiting");
                             break;
                         }
@@ -7194,6 +7321,7 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::compute_needs_new_stream;
+    use super::{wedge_recovery, WedgeRecovery, WEDGE_REBUILD_BACKOFF};
     use super::external_content_type;
     #[cfg(target_os = "linux")]
     use super::{hardware_volume_event_callback, reported_volume_after_command};
@@ -7453,6 +7581,24 @@ mod tests {
         fn io_error(&self) -> Option<&str> {
             self.error.as_deref()
         }
+    }
+
+    #[test]
+    fn wedge_recovery_rebuilds_once_then_backs_off() {
+        // #660: a wedged CPAL stream (POLLERR loop) is rebuilt at once; a
+        // second wedge inside the backoff window means the device itself is
+        // gone or broken, so the thread releases it and stops instead of
+        // rebuilding in a loop.
+        let t0 = std::time::Instant::now();
+        assert_eq!(wedge_recovery(None, t0), WedgeRecovery::Rebuild);
+        assert_eq!(
+            wedge_recovery(Some(t0), t0 + std::time::Duration::from_secs(3)),
+            WedgeRecovery::Stop
+        );
+        assert_eq!(
+            wedge_recovery(Some(t0), t0 + WEDGE_REBUILD_BACKOFF),
+            WedgeRecovery::Rebuild
+        );
     }
 
     #[test]

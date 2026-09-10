@@ -60,6 +60,7 @@ pub mod pipewire_backend;
 pub mod pulse_backend;
 pub mod seek_waveform;
 pub mod settings;
+pub mod stream_health;
 pub mod visualizer;
 
 // Re-export commonly used types
