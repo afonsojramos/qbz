@@ -7005,3 +7005,9 @@ msgstr "いいえ"
 #: qbz-qt/qml/Main.qml
 msgid "Don't show again"
 msgstr "今後表示しない"
+
+msgid "Quit"
+msgstr "終了"
+
+msgid "Close Window"
+msgstr "ウィンドウを閉じる"

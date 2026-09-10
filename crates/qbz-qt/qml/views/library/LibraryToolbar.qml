@@ -22,7 +22,9 @@ Item {
         var tab = view.activeTab
         var options = []
         function add(value, label) { options.push({value: value, label: label}) }
-        if (tab !== "all") add("default", QbzSession.tr("Default", QbzSession.trRev))
+        // Every tab now leads with an explicit Default (the resting order),
+        // so there is always a clear way back to the un-sorted state.
+        add("default", QbzSession.tr("Default", QbzSession.trRev))
         add("date", QbzSession.tr("Date added", QbzSession.trRev))
         if (tab === "playlists") add("updated", QbzSession.tr("Date updated", QbzSession.trRev))
         add("title", QbzSession.tr("Alphabetical", QbzSession.trRev))
@@ -44,6 +46,24 @@ Item {
     property var view: null
 
     QbzTheme { id: theme }
+
+    // The active sort differs from the tab's resting default → the sort select
+    // highlights its outline and names the sort in a tooltip. "all" rests at
+    // date-added descending; every other tab rests at its "default" option.
+    readonly property bool sortIsNonDefault: {
+        if (view.activeTab === "all")
+            return !(view.sortBy === "date" && !view.sortAsc)
+        return ReleaseSort.fieldOf(view.activeSort) !== "default"
+    }
+    readonly property string sortActiveTooltip: {
+        if (!root.sortIsNonDefault) return ""
+        var field = ReleaseSort.fieldOf(view.activeSort)
+        var lbl = ""
+        for (var i = 0; i < root.sortOptions.length; i++)
+            if (root.sortOptions[i].value === field) { lbl = root.sortOptions[i].label; break }
+        if (lbl === "") return ""
+        return lbl + (ReleaseSort.ascending(view.activeSort) ? "  ↑" : "  ↓")
+    }
 
     readonly property bool singleRow: view.activeTab === "labels" || view.activeTab === "playlists"
         || view.activeTab === "artists"
@@ -89,8 +109,14 @@ Item {
         width: gtbRow.implicitWidth
         height: 30
         radius: 6
-        color: gtb.active ? theme.accent
-             : gtbArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
+        // Homologated with the selects (QbzSelect): the same ambient-aware
+        // rest fill and, when a genre is applied, the SAME accent OUTLINE —
+        // not an accent fill — so the three toolbar controls read identically
+        // in their modified state.
+        color: gtbArea.containsMouse ? theme.surfaceHover
+             : (theme.ambientOn ? theme.surfaceElevatedA50 : theme.surfaceElevated)
+        border.width: gtb.active ? 1 : 0
+        border.color: gtb.active ? theme.accent : "transparent"
         Row {
             id: gtbRow
             anchors.centerIn: parent
@@ -112,7 +138,7 @@ Item {
                 // on ikari, 1.82 on wcag-dark and under 2.6:1 on 16 of the
                 // 35 palettes — deliberate divergence from both lines.
                 // theme/QbzTheme.qml, "ON AN ACCENT FILL".
-                tintName: gtb.active ? theme.accentGlyphTint : "secondary"
+                tintName: gtb.active ? "accent" : "secondary"
             }
             Text {
                 visible: true
@@ -125,7 +151,7 @@ Item {
                             .replace("{}", root.view.genreCount)
                 // The colour twin of the glyph's tint above — accent-text on
                 // 34 of the 35 palettes.
-                color: gtb.active ? theme.accentGlyphColor : theme.textSecondary
+                color: gtb.active ? theme.accent : theme.textSecondary
                 font.pixelSize: 12
             }
         }
@@ -168,79 +194,27 @@ Item {
     // own pref. The reference draws a QbzSelect per tab; this is the same menu
     // shape the sort popups beside it already use, so the toolbar stays
     // visually of a piece.
-    component GroupSelect: Rectangle {
+    // Now a QbzSelect (sm) like the sort control beside it: one select style,
+    // ambient-aware, with the same popup. `options` are {value,label} — the
+    // primitive reads `.label`; the value maps back through the picked index.
+    // The outline highlights once a real grouping (not the resting "off") is on.
+    component GroupSelect: QbzSelect {
         id: gsRoot
-        property var options: []      // [{value, label}]
         property string current: "off"
         signal picked(string value)
         visible: false
-        width: gsRow.width
-        height: 30
-        radius: 6
-        color: gsArea.containsMouse ? theme.surfaceHover : theme.surfaceElevated
-        readonly property string currentLabel: {
-            for (var i = 0; i < options.length; i++)
-                if (options[i].value === current) return options[i].label
-            return ""
+        sm: true
+        menuWidth: 180
+        popupWidth: 180
+        currentIndex: {
+            for (var i = 0; i < gsRoot.options.length; i++)
+                if (gsRoot.options[i].value === gsRoot.current) return i
+            return 0
         }
-        Row {
-            id: gsRow
-            height: parent.height
-            leftPadding: 10
-            rightPadding: 10
-            spacing: 6
-            Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: gsRoot.currentLabel
-                color: theme.textSecondary
-                font.pixelSize: 12
-            }
-            QbzIcon {
-                name: "chevron-down"
-                width: 12
-                height: 12
-                anchors.verticalCenter: parent.verticalCenter
-                tintName: "secondary"
-            }
-        }
-        MouseArea {
-            id: gsArea
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: gsMenu.openBelowRight(gsArea)
-        }
-        QbzContextMenu {
-            id: gsMenu
-            menuWidth: 156
-            Repeater {
-                model: gsRoot.options
-                delegate: Rectangle {
-                    required property var modelData
-                    width: parent ? parent.width : 0
-                    height: 33
-                    radius: 5
-                    color: gsOptArea.containsMouse ? theme.surfaceHover : "transparent"
-                    Text {
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        text: modelData.label
-                        color: theme.textSecondary
-                        font.pixelSize: 13
-                        font.weight: gsRoot.current === modelData.value
-                            ? theme.weightSemibold : theme.weightRegular
-                        verticalAlignment: Text.AlignVCenter
-                        elide: Text.ElideRight
-                    }
-                    MouseArea {
-                        id: gsOptArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: { gsRoot.picked(modelData.value); gsMenu.close() }
-                    }
-                }
-            }
+        outlineActive: gsRoot.current !== "off"
+        onSelected: function (index) {
+            if (index >= 0 && index < gsRoot.options.length)
+                gsRoot.picked(gsRoot.options[index].value)
         }
     }
 
@@ -340,11 +314,26 @@ Item {
         QbzSelect {
             id: sortSelect
             sm: true
-            menuWidth: 190
+            // Collapsed control is a compact "Sort" pill; the list stays wide.
+            menuWidth: 140
             popupWidth: 200
+            leadingIcon: "arrow-down-up"
+            placeholderText: QbzSession.tr("Sort", QbzSession.trRev)
+            outlineActive: root.sortIsNonDefault
+            tooltipHost: libTips
+            tooltipText: root.sortActiveTooltip
+            tooltipKey: "library-sort"
             options: root.sortOptions
             searchable: options.length > 8
             currentIndex: {
+                // On "all" the resting order is date-desc; map that to the
+                // explicit Default row so the list highlights it (and the
+                // outline stays off) at the default.
+                if (root.view.activeTab === "all"
+                        && root.view.sortBy === "date" && !root.view.sortAsc) {
+                    for (var j = 0; j < options.length; ++j)
+                        if (options[j].value === "default") return j
+                }
                 var field = ReleaseSort.fieldOf(root.view.activeSort)
                 for (var i = 0; i < options.length; ++i)
                     if (options[i].value === field) return i
@@ -357,6 +346,7 @@ Item {
             visible: root.view.activeTab === "playlists"
             sm: true
             menuWidth: 180
+            outlineActive: root.view.playlistsSubTab !== "all"
             options: [QbzSession.tr("All", QbzSession.trRev),
                 QbzSession.tr("By you", QbzSession.trRev),
                 QbzSession.tr("By Qobuz", QbzSession.trRev),
@@ -656,5 +646,14 @@ Item {
         searchBox.text = Qt.binding(function () {
             return root.view.activeTab === "all" ? root.view.search : root.view.tabSearch
         })
+    }
+
+    // Shared hover-tooltip overlay for this toolbar (the sort control names its
+    // active sort here when it differs from the tab default). Mounted last so
+    // it paints above the controls; QueueView uses the same pattern.
+    QbzTooltip {
+        id: libTips
+        anchors.fill: parent
+        z: 4000
     }
 }

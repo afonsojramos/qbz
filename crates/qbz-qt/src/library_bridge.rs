@@ -241,6 +241,26 @@ impl qbz_library_bridge::QbzLibrary {
         let prefs = crate::library_prefs::to_json();
         self.as_mut()
             .set_library_prefs_json(QString::from(prefs.as_str()));
+        // Seed the per-tab source filters from disk too (persisted now, so a
+        // chosen filter survives a restart — still independent per tab). These
+        // are separate qproperties from the toolbar json doc above; done once
+        // here rather than in the reactive QML applyPrefs so a later document
+        // republish can never re-seed over a live toggle.
+        let f = crate::library_prefs::read();
+        self.as_mut().set_session_show_purchases(f.all_show_purchases);
+        self.as_mut().set_session_show_favorites(f.all_show_favorites);
+        self.as_mut().set_session_show_following(f.all_show_following);
+        self.as_mut().set_session_hide_local_albums(f.all_hide_local);
+        self.as_mut()
+            .set_session_albums_show_purchases(f.albums_show_purchases);
+        self.as_mut()
+            .set_session_albums_show_favorites(f.albums_show_favorites);
+        self.as_mut().set_session_albums_hires_only(f.albums_hires_only);
+        self.as_mut()
+            .set_session_tracks_show_purchases(f.tracks_show_purchases);
+        self.as_mut()
+            .set_session_tracks_show_favorites(f.tracks_show_favorites);
+        self.as_mut().set_session_tracks_hires_only(f.tracks_hires_only);
     }
 
     pub fn set_library_pref(mut self: Pin<&mut Self>, key: QString, value: QString) {

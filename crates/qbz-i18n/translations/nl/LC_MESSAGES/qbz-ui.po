@@ -7012,3 +7012,9 @@ msgstr "Nee"
 #: qbz-qt/qml/Main.qml
 msgid "Don't show again"
 msgstr "Niet opnieuw tonen"
+
+msgid "Quit"
+msgstr "Afsluiten"
+
+msgid "Close Window"
+msgstr "Venster sluiten"

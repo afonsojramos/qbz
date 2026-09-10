@@ -380,6 +380,11 @@ pub mod qbz_local {
         fn close_media_info(self: Pin<&mut QbzLocal>);
         #[qinvokable]
         fn copy_media_info(self: Pin<&mut QbzLocal>, value: QString);
+        /// Open the local media-info modal for a now-playing local track by its
+        /// library row id (the NPB info button / song-card title, which have no
+        /// Local Library model row to act on).
+        #[qinvokable]
+        fn open_media_info_for_track(self: Pin<&mut QbzLocal>, id: i64);
         /// Row body: select a folder and load its detail pane.
         #[qinvokable]
         fn select_folder(self: Pin<&mut QbzLocal>, path: QString);
@@ -1766,6 +1771,10 @@ impl qbz_local::QbzLocal {
 
     pub fn copy_media_info(self: Pin<&mut Self>, value: QString) {
         crate::local_media_info_qt::copy(value.to_string());
+    }
+
+    pub fn open_media_info_for_track(self: Pin<&mut Self>, id: i64) {
+        crate::local_media_info_qt::open_track_by_row_id(id);
     }
 
     // --- Local album actions -------------------------------------------------

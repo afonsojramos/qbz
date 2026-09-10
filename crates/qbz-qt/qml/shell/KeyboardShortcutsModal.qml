@@ -309,21 +309,21 @@ Item {
         id: kbCol
         // The column model: an array of {label, rows} from groupsJson.
         property var groups: []
-        spacing: 24
+        spacing: 16
 
         Repeater {
             model: kbCol.groups
             delegate: Column {
                 id: kbGroup
                 width: kbCol.width
-                spacing: 12
+                spacing: 6
                 // `group` captured once: inside the nested rows Repeater,
                 // `modelData` rebinds to the ROW.
                 readonly property var group: modelData
 
                 Column {
                     width: parent.width
-                    spacing: 8
+                    spacing: 4
                     Text {
                         // VERBATIM label — NOT uppercased (trap 6).
                         text: kbGroup.group.label
@@ -342,10 +342,10 @@ Item {
                     model: kbGroup.group.rows
                     delegate: Rectangle {
                         width: kbGroup.width
-                        // Slint :38: entry-row.preferred-height + 16 — the
-                        // row content (the keycap is the tallest child) plus
-                        // the layout's 8+8 padding, plus a further 16.
-                        height: keycapLabel.implicitHeight + 40
+                        // Compact rows: the keycap chip plus a tight
+                        // vertical padding (was +40; owner asked for shorter,
+                        // denser rows).
+                        height: keycapLabel.implicitHeight + 20
                         radius: theme.radiusSm
                         color: theme.surfaceElevated
 
@@ -369,7 +369,7 @@ Item {
                             anchors.rightMargin: 12
                             anchors.verticalCenter: parent.verticalCenter
                             width: keycapLabel.implicitWidth + 16
-                            height: keycapLabel.implicitHeight + 8
+                            height: keycapLabel.implicitHeight + 6
                             radius: theme.radiusSm
                             color: theme.surfaceCard
                             border.width: 1

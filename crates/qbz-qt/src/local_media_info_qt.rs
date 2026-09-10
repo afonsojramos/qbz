@@ -337,6 +337,29 @@ pub fn open_empty(kind: &'static str) {
     publish(aggregate_doc(kind, &[]));
 }
 
+/// Open the media-info modal for a local track resolved from its library row
+/// id. The now-playing-bar info button and the song-card title only have the
+/// track id (not a Local Library model row), so they route here instead of the
+/// Qobuz Track Info modal — which, fed a local row id, rendered empty (#local
+/// track info). Opens the loading state at once, then fills it off the UI
+/// thread; a row that no longer resolves shows the empty "track" card rather
+/// than the wrong modal.
+pub fn open_track_by_row_id(row_id: i64) {
+    begin();
+    crate::spawn(async move {
+        let track = tokio::task::spawn_blocking(move || {
+            crate::local_playback::find_track_blocking(row_id)
+        })
+        .await
+        .ok()
+        .flatten();
+        match track {
+            Some(track) => open_track(track),
+            None => open_empty("track"),
+        }
+    });
+}
+
 pub fn close() {
     crate::local_bridge::ui(|mut bridge| {
         bridge.as_mut().set_local_media_info_open(false);

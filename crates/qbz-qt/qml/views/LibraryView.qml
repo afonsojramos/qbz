@@ -250,8 +250,13 @@ Rectangle {
         ? QbzLibrary.sessionAlbumsHiresOnly : activeTab === "tracks"
         ? QbzLibrary.sessionTracksHiresOnly : false
     function setHiresOnly(on) {
-        if (activeTab === "albums") QbzLibrary.sessionAlbumsHiresOnly = on
-        else if (activeTab === "tracks") QbzLibrary.sessionTracksHiresOnly = on
+        if (activeTab === "albums") {
+            QbzLibrary.sessionAlbumsHiresOnly = on
+            QbzLibrary.setLibraryPref("albumsHiresOnly", String(on))
+        } else if (activeTab === "tracks") {
+            QbzLibrary.sessionTracksHiresOnly = on
+            QbzLibrary.setLibraryPref("tracksHiresOnly", String(on))
+        }
     }
     // Only bumped when a live heart change can alter membership in the
     // current Tracks / Albums source filter. Kept separate from `feed` so the
@@ -263,16 +268,33 @@ Rectangle {
     property string artistsView: "grid"   // "grid" | "sidepanel"
 
     function setShowPurchases(on) {
-        if (activeTab === "albums") QbzLibrary.sessionAlbumsShowPurchases = on
-        else if (activeTab === "tracks") QbzLibrary.sessionTracksShowPurchases = on
-        else QbzLibrary.sessionShowPurchases = on
+        if (activeTab === "albums") {
+            QbzLibrary.sessionAlbumsShowPurchases = on
+            QbzLibrary.setLibraryPref("albumsShowPurchases", String(on))
+        } else if (activeTab === "tracks") {
+            QbzLibrary.sessionTracksShowPurchases = on
+            QbzLibrary.setLibraryPref("tracksShowPurchases", String(on))
+        } else {
+            QbzLibrary.sessionShowPurchases = on
+            QbzLibrary.setLibraryPref("allShowPurchases", String(on))
+        }
     }
     function setShowFavorites(on) {
-        if (activeTab === "albums") QbzLibrary.sessionAlbumsShowFavorites = on
-        else if (activeTab === "tracks") QbzLibrary.sessionTracksShowFavorites = on
-        else QbzLibrary.sessionShowFavorites = on
+        if (activeTab === "albums") {
+            QbzLibrary.sessionAlbumsShowFavorites = on
+            QbzLibrary.setLibraryPref("albumsShowFavorites", String(on))
+        } else if (activeTab === "tracks") {
+            QbzLibrary.sessionTracksShowFavorites = on
+            QbzLibrary.setLibraryPref("tracksShowFavorites", String(on))
+        } else {
+            QbzLibrary.sessionShowFavorites = on
+            QbzLibrary.setLibraryPref("allShowFavorites", String(on))
+        }
     }
-    function setShowFollowing(on) { QbzLibrary.sessionShowFollowing = on }
+    function setShowFollowing(on) {
+        QbzLibrary.sessionShowFollowing = on
+        QbzLibrary.setLibraryPref("allShowFollowing", String(on))
+    }
 
     // --- persisted toolbar choices (library_prefs.rs) --------------------
     // Seeded from the bridge document rather than BOUND to it: these are
@@ -332,6 +354,7 @@ Rectangle {
     /// Match the other session filters: false means no restriction.
     function setShowLocal(on) {
         QbzLibrary.sessionHideLocalAlbums = !on
+        QbzLibrary.setLibraryPref("allHideLocal", String(!on))
     }
 
     // Genre selections are independent for each Library tab, too.
@@ -394,8 +417,16 @@ Rectangle {
         var asc = same ? !ReleaseSort.ascending(activeSort)
             : ["default", "date", "updated", "duration", "track-count", "release-date"].indexOf(field) < 0
         if (activeTab === "all") {
-            sortBy = field
-            sortAsc = asc
+            // "all" has no server "default" sort key of its own — its resting
+            // order IS date-added descending, so the explicit Default row maps
+            // back to exactly that.
+            if (field === "default") {
+                sortBy = "date"
+                sortAsc = false
+            } else {
+                sortBy = field
+                sortAsc = asc
+            }
         } else {
             setPref(activeTab + "Sort", field === "default"
                 ? (asc ? "default-reverse" : "default") : field + (asc ? "-asc" : "-desc"))
