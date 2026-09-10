@@ -7049,3 +7049,9 @@ msgstr "Выход"
 
 msgid "Close Window"
 msgstr "Закрыть окно"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Это может занять несколько минут, когда MusicBrainz загружен."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Это занимает больше времени, чем обычно — MusicBrainz может быть загружен. Попробуйте ещё раз через минуту."

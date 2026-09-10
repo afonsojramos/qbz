@@ -7028,3 +7028,9 @@ msgstr "Quitter"
 
 msgid "Close Window"
 msgstr "Fermer la fenêtre"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Cela peut prendre quelques minutes lorsque MusicBrainz est occupé."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Cela prend plus de temps que d'habitude — MusicBrainz est peut-être occupé. Réessayez dans un instant."

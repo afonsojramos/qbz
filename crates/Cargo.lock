@@ -4263,6 +4263,7 @@ dependencies = [
  "log",
  "reqwest",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

@@ -7028,3 +7028,9 @@ msgstr "Sair"
 
 msgid "Close Window"
 msgstr "Fechar janela"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Isto pode levar alguns minutos quando o MusicBrainz está ocupado."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Isto está a demorar mais do que o normal — o MusicBrainz pode estar ocupado. Tente novamente daqui a pouco."
