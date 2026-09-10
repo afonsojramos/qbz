@@ -156,6 +156,7 @@ pub struct QbzIconTintRust {
 const MASTERS: &[(&str, &str)] = &[
     ("add-to-list", include_str!("../qml/assets/icons/primary/add-to-list.svg")),
     ("align-start-vertical", include_str!("../qml/assets/icons/primary/align-start-vertical.svg")),
+    ("arrow-down-up", include_str!("../qml/assets/icons/primary/arrow-down-up.svg")),
     ("arrow-up-down", include_str!("../qml/assets/icons/primary/arrow-up-down.svg")),
     ("audio-lines", include_str!("../qml/assets/icons/primary/audio-lines.svg")),
     ("award", include_str!("../qml/assets/icons/primary/award.svg")),
@@ -261,6 +262,7 @@ const MASTERS: &[(&str, &str)] = &[
     ("pin", include_str!("../qml/assets/icons/primary/pin.svg")),
     ("play-fill", include_str!("../qml/assets/icons/primary/play-fill.svg")),
     ("plus", include_str!("../qml/assets/icons/primary/plus.svg")),
+    ("power", include_str!("../qml/assets/icons/primary/power.svg")),
     ("qbz-symbolic", include_str!("../qml/assets/icons/primary/qbz-symbolic.svg")),
     ("radio", include_str!("../qml/assets/icons/primary/radio.svg")),
     ("refresh-cw", include_str!("../qml/assets/icons/primary/refresh-cw.svg")),

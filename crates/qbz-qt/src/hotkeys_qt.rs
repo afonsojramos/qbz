@@ -813,6 +813,21 @@ pub fn build_groups(keymap: Keymap, overrides: &BTreeMap<String, String>) -> Vec
                 contextual: a.context != Context::None,
             });
         }
+        // The window verbs (close/quit) are handled by the native lifecycle
+        // layer, not the hotkey dispatcher, but they belong in the cheatsheet's
+        // Navigation list. Display-only rows: not in ACTIONS, so `action_for_key`
+        // never claims them and the customize editor never offers a rebind.
+        if cat == Category::Navigation {
+            for (label_en, canonical) in [("Close Window", "Ctrl+W"), ("Quit", "Ctrl+Q")] {
+                rows.push(GroupRow {
+                    id: String::new(),
+                    label: qbz_i18n::t(label_en),
+                    shortcut: format_display(canonical),
+                    modified: false,
+                    contextual: false,
+                });
+            }
+        }
         groups.push(Group {
             label: qbz_i18n::t(cat.label_en()),
             rows,
@@ -839,9 +854,13 @@ pub fn modified_count_with(keymap: Keymap, overrides: &BTreeMap<String, String>)
 /// never "{}").
 pub fn groups_json(keymap: Keymap, overrides: &BTreeMap<String, String>) -> String {
     let groups = build_groups(keymap, overrides);
+    // Fill columns SEQUENTIALLY (ceil per column) rather than round-robin, so
+    // the blocks read in category order top-to-bottom, left-to-right — which is
+    // what puts Immersive directly under Interface.
+    let per = groups.len().div_ceil(3).max(1);
     let mut cols: [Vec<Group>; 3] = Default::default();
     for (i, g) in groups.into_iter().enumerate() {
-        cols[i % 3].push(g);
+        cols[(i / per).min(2)].push(g);
     }
     let [c0, c1, c2] = cols;
     serde_json::json!({ "col1": c0, "col2": c1, "col3": c2 }).to_string()
@@ -1324,7 +1343,7 @@ mod tests {
     // --- Round-robin split {Playback,Immersive}/{Navigation,Mini}/{Interface}
 
     #[test]
-    fn groups_split_round_robin_into_three_columns() {
+    fn groups_split_sequentially_into_three_columns() {
         let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let labels = |col: &str| -> Vec<String> {
             doc[col]
@@ -1334,9 +1353,9 @@ mod tests {
                 .map(|g| g["label"].as_str().unwrap().to_string())
                 .collect()
         };
-        assert_eq!(labels("col1"), vec!["Playback", "Immersive"]);
-        assert_eq!(labels("col2"), vec!["Navigation", "Mini Player"]);
-        assert_eq!(labels("col3"), vec!["Interface"]);
+        assert_eq!(labels("col1"), vec!["Playback", "Navigation"]);
+        assert_eq!(labels("col2"), vec!["Interface", "Immersive"]);
+        assert_eq!(labels("col3"), vec!["Mini Player"]);
     }
 
     #[test]
@@ -1348,8 +1367,9 @@ mod tests {
         assert_eq!(row["shortcut"], "Space");
         assert_eq!(row["modified"], false);
         assert_eq!(row["contextual"], false);
-        // The immersive seek rows are contextual.
-        let seek = &doc["col1"][1]["rows"][0];
+        // The immersive seek rows are contextual. Sequential fill puts the
+        // Immersive block second in column 2 (under Interface).
+        let seek = &doc["col2"][1]["rows"][0];
         assert_eq!(seek["id"], "focus.seekForward");
         assert_eq!(seek["contextual"], true);
         // Full shape, never "{}" (trap 15).

@@ -7030,3 +7030,9 @@ msgstr "No"
 #: qbz-qt/qml/Main.qml
 msgid "Don't show again"
 msgstr "No volver a mostrar"
+
+msgid "Quit"
+msgstr "Salir"
+
+msgid "Close Window"
+msgstr "Cerrar ventana"

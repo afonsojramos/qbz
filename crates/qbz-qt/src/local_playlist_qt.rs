@@ -866,6 +866,19 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                     _ => "local",
                 }
             };
+            // The SAME artwork ref the queue/NPB build (`local_queue_track` →
+            // `portable_artwork_ref`): a media-server row is namespaced
+            // (`jellyfin:<id>` / `subsonic:<id>`) so `classify` can hand it to
+            // the source registry to fetch; a local file / Plex thumb stays its
+            // own on-disk path. The old code fed the RAW `artwork_path` — an
+            // opaque token `cached_path` could not classify — which is why
+            // media rows were art-less in the TrackRow while the queue and NPB,
+            // going through this same ref, showed the cover fine.
+            let art_ref = crate::local_rows::portable_artwork_ref(
+                t,
+                crate::local_rows::ArtworkScope::Track,
+            )
+            .unwrap_or_default();
             let row = PlaylistTrackRow {
                 id: queue.id.to_string(),
                 playlist_track_id: queue.id,
@@ -894,16 +907,14 @@ pub(crate) fn row_to_display(item: &RowItem) -> (PlaylistTrackRow, Option<QueueT
                 } else {
                     t.sample_rate
                 }),
-                art_url: t.artwork_path.clone().unwrap_or_default(),
-                // `TrackRow.qml` renders `artPath`, never `artUrl` — the Qobuz
-                // arm fills it from the download cache, and a local row's
-                // cover is ALREADY on disk (or is a Plex thumb path), which
-                // `cached_path` classifies and turns into the `file://` url
-                // QML can decode. Without this the rows rendered art-less
-                // while the sidebar collage for the same playlist did not.
-                art_path: crate::artwork_qt::cached_path(
-                    t.artwork_path.as_deref().unwrap_or_default(),
-                ),
+                art_url: art_ref.clone(),
+                // `TrackRow.qml` renders `artPath`, never `artUrl`: a disk hit
+                // (local file / Plex thumb) resolves inline here; a media cover
+                // whose bytes are not cached yet fills in on the load's
+                // artwork-warm republish (`cached_path` re-run after
+                // `download_missing`). Without a resolvable ref the rows
+                // rendered art-less while the sidebar collage did not.
+                art_path: crate::artwork_qt::cached_path(&art_ref),
                 source: source.to_string(),
                 ..Default::default()
             };
@@ -1311,7 +1322,26 @@ pub async fn load(runtime: &Runtime, playlist_id: &str) -> bool {
             source: "local",
         },
     );
+    // Media-server sidecar covers (jellyfin/subsonic) are namespaced refs
+    // whose bytes may not be cached yet. Unlike the Qobuz loader this path has
+    // no inline artwork-warm, so a row keyed on such a ref rendered art-less
+    // until the track was played (the queue/NPB fetch on their own). Collect
+    // the unresolved refs BEFORE the doc is adopted, then fetch + republish;
+    // local files and Plex thumbs resolved inline in `row_to_display` and
+    // never reach this list, so a pure-local playlist spawns nothing.
+    let missing_art: Vec<String> = doc
+        .tracks
+        .iter()
+        .filter(|r| r.art_path.is_empty() && !r.art_url.is_empty())
+        .map(|r| r.art_url.clone())
+        .collect();
     crate::playlist_qt::adopt_doc(doc);
+    if !missing_art.is_empty() {
+        crate::spawn(async move {
+            crate::artwork_qt::download_missing(missing_art).await;
+            crate::playlist_qt::rewarm_row_art();
+        });
+    }
     true
 }
 

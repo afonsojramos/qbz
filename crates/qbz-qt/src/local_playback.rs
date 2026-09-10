@@ -739,7 +739,7 @@ pub async fn play_tracks_visible(runtime: &Runtime, visible_ids_json: String, cl
 /// Look up ONE raw row by id: the loaded Tracks page first, then the open
 /// detail pane, then `library.db` (Plex ids never reach the DB — they are
 /// namespaced and only ever live in the cached documents).
-fn find_track_blocking(row_id: i64) -> Option<LocalTrack> {
+pub(crate) fn find_track_blocking(row_id: i64) -> Option<LocalTrack> {
     let cached = state(|s| {
         s.tracks_raw
             .iter()
