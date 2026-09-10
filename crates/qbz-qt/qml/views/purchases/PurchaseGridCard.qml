@@ -75,6 +75,7 @@ Item {
             // per cell, no scissor that rounds nothing).
 
             RoundedImage {
+                gridArtwork: true
                 id: art
                 anchors.fill: parent
                 source: root.artUrl

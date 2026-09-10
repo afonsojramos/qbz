@@ -58,6 +58,8 @@ Item {
     /// how a call site ends up setting a property that does not exist — which in
     /// QML is not an error, just a silently-ignored line.
     property bool danger: true
+    property string checkboxLabel: ""
+    property bool checkboxChecked: false
 
     readonly property bool opened: root._open
     property bool _open: false
@@ -183,6 +185,28 @@ Item {
                 color: theme.textSecondary
                 font.pixelSize: root.kioskHost ? (theme.fontBody) * 1.2 : (theme.fontBody)
                 wrapMode: Text.WordWrap
+            }
+            Row {
+                visible: root.checkboxLabel !== ""
+                width: parent.width
+                spacing: 10
+                QbzCheckbox {
+                    kioskHost: root.kioskHost
+                    checked: root.checkboxChecked
+                    Accessible.name: root.checkboxLabel
+                    onToggled: root.checkboxChecked = !root.checkboxChecked
+                }
+                Text {
+                    width: parent.width - 54
+                    text: root.checkboxLabel
+                    color: theme.textSecondary
+                    font.pixelSize: theme.fontBody
+                    wrapMode: Text.WordWrap
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: root.checkboxChecked = !root.checkboxChecked
+                    }
+                }
             }
             Item {
                 width: parent.width

@@ -9,8 +9,7 @@
 //
 // From the Slint reference, kept verbatim:
 //  - no logo  -> indigo(#6366f1)->violet(#8b5cf6) gradient + disc-3 glyph;
-//  - a logo   -> surface-elevated behind a CONTAIN-fit logo, never cropped
-//    (label logos have varied/transparent backgrounds, unlike album art);
+//  - a logo   -> surface-elevated behind a cover-fit, circular-masked logo;
 //  - "a label is opened, not played" — the ONLY action a label exposes
 //    anywhere in the Slint is open ("Go to label", disc-3 icon,
 //    FavoritesActions.open-label). There is NO play, NO favorite, NO pin
@@ -41,6 +40,8 @@ import "../theme"
 
 Rectangle {
     id: root
+    readonly property bool artworkReady: coverImage.ready
+    readonly property bool artworkImmediate: coverImage.immediateGridArtwork
 
     property var item: ({})
     // Host-resolved artwork path (the AlbumCard artSource pattern).
@@ -94,9 +95,7 @@ Rectangle {
                 radius: 95
                 // No clip. It never clipped to the circle — QML's clip is a
                 // rectangular scissor and ignores `radius`; the round shape is
-                // each child's own `radius: 95` / RoundedImage mask. The logo
-                // is inset 28px with fit "contain" and the overlay row ends at
-                // y=157 < 190, so nothing overflows.
+                // each child's own `radius: 95` / RoundedImage mask.
                 // Logo arm background (the Slint Theme.surface-elevated).
                 color: theme.surfaceElevated
 
@@ -121,21 +120,18 @@ Rectangle {
                     }
                 }
 
-                // The logo itself — contain-fit inside the square INSCRIBED
-                // in the circle (190 / sqrt(2) ~= 134, so margin 28), which
-                // is what keeps a wide wordmark from being cut by the round
-                // container. radius 0: the inset box never reaches the edge,
-                // so it needs no clip of its own.
+                // Fill the disc edge to edge and crop through the circular
+                // mask, without an inset rectangular logo.
                 RoundedImage {
+                    id: coverImage
+                    gridArtwork: true
                     anchors.fill: parent
-                    anchors.margins: 28
                     source: root.artSource
-                    radius: 0
-                    // Logos are contain-fit, never cropped (LabelCard).
-                    fit: "contain"
+                    radius: parent.radius
+                    fit: "crop"
                 }
 
-                // Hover scrim (clipped to the circle by the parent's clip).
+                // Hover scrim with the same circular silhouette.
                 // 0.55, not the Slint's 0.25: the reference has no buttons
                 // over it, this one does and 0.25 leaves them unreadable
                 // over a light logo.

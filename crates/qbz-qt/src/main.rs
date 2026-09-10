@@ -1378,14 +1378,7 @@ pub(crate) fn sidebar_artwork_window(urls_json: String) {
         return;
     }
     spawn(async move {
-        let urls = missing;
-        artwork_qt::download_missing(urls.clone()).await;
-        for url in urls {
-            let path = artwork_qt::cached_path(&url);
-            if !path.is_empty() {
-                emit_library_artwork(url, path);
-            }
-        }
+        artwork_qt::download_missing_progressive(missing, emit_library_artwork).await;
     });
 }
 
@@ -3163,14 +3156,19 @@ pub(crate) fn library_artwork_window_at_px(keys_json: String, pixels: Option<i32
         return;
     }
     spawn(async move {
-        let urls: Vec<String> = missing.iter().map(|(_, u)| u.clone()).collect();
-        artwork_qt::download_missing(urls).await;
+        let urls = missing.iter().map(|(_, url)| url.clone()).collect();
+        let mut keys_by_url = std::collections::HashMap::<String, Vec<String>>::new();
         for (key, url) in missing {
-            let path = artwork_qt::cached_path(&url);
-            if !path.is_empty() {
-                emit_library_artwork(key, path);
-            }
+            keys_by_url.entry(url).or_default().push(key);
         }
+        artwork_qt::download_missing_progressive(urls, move |url, path| {
+            if let Some(keys) = keys_by_url.get(&url) {
+                for key in keys {
+                    emit_library_artwork(key.clone(), path.clone());
+                }
+            }
+        })
+        .await;
     });
 }
 

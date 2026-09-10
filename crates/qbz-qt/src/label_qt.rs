@@ -406,6 +406,61 @@ fn fetch_label(generation: u64, id: u64) {
             crate::artwork_qt::download_missing(missing).await;
             refresh_label_art(generation);
         }
+
+        // Label summaries can omit artist portraits entirely. Enrich only
+        // those entries after publishing the page, one request at a time.
+        let missing_artists: std::collections::BTreeSet<u64> = {
+            let Ok(s) = LABEL.lock() else { return };
+            if s.generation != generation {
+                return;
+            }
+            s.doc
+                .artists
+                .iter()
+                .filter(|card| card.art_url.is_empty())
+                .filter_map(|card| card.id.parse().ok())
+                .collect()
+        };
+        for artist_id in missing_artists {
+            if !LABEL
+                .lock()
+                .map(|s| s.generation == generation)
+                .unwrap_or(false)
+            {
+                return;
+            }
+            let artist = match runtime.core().get_artist(artist_id).await {
+                Ok(artist) => artist,
+                Err(error) => {
+                    log::debug!(
+                        "[qbz-qt] label artist portrait lookup failed ({artist_id}): {error}"
+                    );
+                    continue;
+                }
+            };
+            let Some(url) = artist
+                .image
+                .as_ref()
+                .and_then(|image| image.for_px(400))
+                .filter(|url| !url.is_empty())
+                .cloned()
+            else {
+                continue;
+            };
+            {
+                let Ok(mut s) = LABEL.lock() else { return };
+                if s.generation != generation {
+                    return;
+                }
+                for card in &mut s.doc.artists {
+                    if card.id == artist_id.to_string() && card.art_url.is_empty() {
+                        card.art_url = url.clone();
+                    }
+                }
+            }
+            crate::artwork_qt::download_missing(vec![url]).await;
+            refresh_label_art(generation);
+        }
     });
 }
 
@@ -951,7 +1006,6 @@ fn sort_cards(items: &mut [HomeCard], sort: &str) {
         _ => {}
     }
 }
-
 
 // ===========================================================================
 //  Live language switch

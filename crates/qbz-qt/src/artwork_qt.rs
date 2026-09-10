@@ -430,11 +430,28 @@ pub fn attach_cached(sections: &mut [HomeSection]) -> Vec<String> {
 /// paths are tokenized first — neither is ever handed to reqwest. Returns
 /// when all downloads settled (failures are logged and skipped — the cards
 /// keep their placeholder).
+type ArtworkReady = Arc<dyn Fn(String, String) + Send + Sync>;
+
 pub async fn download_missing(urls: Vec<String>) {
+    download_missing_inner(urls, None).await;
+}
+
+/// Publish each resolved cover without waiting for the slowest sibling.
+/// Uses the same jobs and concurrency limit as the batch-only caller.
+pub async fn download_missing_progressive(
+    urls: Vec<String>,
+    ready: impl Fn(String, String) + Send + Sync + 'static,
+) {
+    download_missing_inner(urls, Some(Arc::new(ready))).await;
+}
+
+async fn download_missing_inner(urls: Vec<String>, ready: Option<ArtworkReady>) {
     // (memo key = the caller's raw url, http url to GET), deduped by the
     // fetch url so two rows sharing a cover download it once.
     let mut jobs: Vec<(String, String)> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut primary_by_fetch = std::collections::HashMap::<String, String>::new();
+    let mut aliases = std::collections::HashMap::<String, Vec<String>>::new();
     for url in urls {
         // Overridden art never needs a fetch — cached_path answers it.
         if !crate::cover_artwork_qt::override_for_url(&url).is_empty() {
@@ -442,6 +459,15 @@ pub async fn download_missing(urls: Vec<String>) {
         }
         match classify(&url) {
             ArtUrl::Http(fetch) | ArtUrl::Plex(fetch) => {
+                if ready.is_some() {
+                    let primary = primary_by_fetch
+                        .entry(fetch.clone())
+                        .or_insert_with(|| url.clone());
+                    let group = aliases.entry(primary.clone()).or_default();
+                    if !group.contains(&url) {
+                        group.push(url.clone());
+                    }
+                }
                 if seen.insert(fetch.clone()) {
                     jobs.push((url, fetch));
                 }
@@ -454,7 +480,16 @@ pub async fn download_missing(urls: Vec<String>) {
             ArtUrl::Empty => {}
         }
     }
-    fetch_jobs(jobs).await;
+    let ready = ready.map(|callback| {
+        Arc::new(move |key: String, path: String| {
+            if let Some(keys) = aliases.get(&key) {
+                for alias in keys {
+                    callback(alias.clone(), path.clone());
+                }
+            }
+        }) as ArtworkReady
+    });
+    fetch_jobs_with_ready(jobs, ready).await;
 }
 
 /// The shared download loop: `(cache_key, fetch url)` jobs, already deduped.
@@ -464,6 +499,10 @@ pub async fn download_missing(urls: Vec<String>) {
 /// bounded pool, the error-page guard and the cache store rather than growing
 /// a second copy of them.
 async fn fetch_jobs(jobs: Vec<(String, String)>) {
+    fetch_jobs_with_ready(jobs, None).await;
+}
+
+async fn fetch_jobs_with_ready(jobs: Vec<(String, String)>, ready: Option<ArtworkReady>) {
     if jobs.is_empty() {
         return;
     }
@@ -471,10 +510,14 @@ async fn fetch_jobs(jobs: Vec<(String, String)>) {
     let mut handles = Vec::with_capacity(jobs.len());
     for (key, url) in jobs {
         let sem = Arc::clone(&semaphore);
+        let ready = ready.clone();
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.expect("semaphore open");
             // A concurrent pass may have stored it while we queued.
-            if disk_path(&key, &url).is_some() {
+            if let Some(path) = disk_path(&key, &url) {
+                if let Some(ready) = &ready {
+                    ready(key, file_url(&path.to_string_lossy()));
+                }
                 return;
             }
             let response = match HTTP.get(&url).send().await {
@@ -520,7 +563,10 @@ async fn fetch_jobs(jobs: Vec<(String, String)>) {
             if let Some(path) = stored {
                 // Seed the memo so the republish that follows resolves from
                 // RAM instead of re-querying SQLite for every card.
-                memo_put(&key, path);
+                memo_put(&key, path.clone());
+                if let Some(ready) = &ready {
+                    ready(key, file_url(&path.to_string_lossy()));
+                }
             }
         }));
     }
@@ -861,6 +907,70 @@ async fn download_one(key: String, fetch: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Run with a temporary XDG_CACHE_HOME and QBZ_ARTWORK_TEST_ISOLATED=1.
+    /// The image cache is process-global, so this deliberately runs alone.
+    #[tokio::test]
+    #[ignore = "requires an isolated cache profile; run with --ignored --test-threads=1"]
+    async fn progressive_cover_is_published_before_slow_sibling() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        assert_eq!(
+            std::env::var("QBZ_ARTWORK_TEST_ISOLATED").as_deref(),
+            Ok("1")
+        );
+        qbz_app::ensure_crypto_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let release_slow = Arc::new(tokio::sync::Notify::new());
+        let gate = release_slow.clone();
+        let server = tokio::spawn(async move {
+            let mut peers = tokio::task::JoinSet::new();
+            for _ in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let gate = gate.clone();
+                peers.spawn(async move {
+                    let mut request = [0; 2048];
+                    let count = socket.read(&mut request).await.unwrap();
+                    if String::from_utf8_lossy(&request[..count]).contains("/slow ") {
+                        gate.notified().await;
+                    }
+                    let image = b"P6\n1 1\n255\n\xff\x00\x00";
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        image.len()
+                    );
+                    socket.write_all(headers.as_bytes()).await.unwrap();
+                    socket.write_all(image).await.unwrap();
+                });
+            }
+            while let Some(result) = peers.join_next().await {
+                result.unwrap();
+            }
+        });
+        let fast = format!("{base}/fast");
+        let slow = format!("{base}/slow");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let urls = vec![slow.clone(), fast.clone(), fast.clone()];
+        let download = tokio::spawn(download_missing_progressive(urls, move |key, path| {
+            tx.send((key, path)).unwrap();
+        }));
+        let first = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .expect("fast cover must not wait for slow cover")
+            .unwrap();
+        assert_eq!(first.0, fast);
+        assert!(!first.1.is_empty());
+        assert!(!download.is_finished());
+        release_slow.notify_one();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.0, slow);
+        download.await.unwrap();
+        server.await.unwrap();
+        assert!(rx.recv().await.is_none(), "duplicate URLs must emit once");
+    }
 
     #[test]
     fn http_urls_are_fetchable() {

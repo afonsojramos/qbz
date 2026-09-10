@@ -149,7 +149,6 @@ Rectangle {
     property var coverMap: ({})
     property var _coverInbox: ({})
     property var _asked: ({})
-    readonly property int coverBatchCap: 48
     // Batched on a 16 ms one-shot: `libraryArtworkReady` fires once PER COVER,
     // and assigning `coverMap` per signal would republish the whole map to
     // every delegate 48 times for one screenful. One dirty frame instead of
@@ -167,6 +166,7 @@ Rectangle {
     Connections {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
+            if (root._asked[key] !== true || root.coverMap[key] === path) return
             root._coverInbox[key] = path
             if (!coverFlush.running)
                 coverFlush.start()
@@ -174,7 +174,7 @@ Rectangle {
     }
     function requestCovers(urls) {
         var out = []
-        for (var i = 0; i < urls.length && out.length < root.coverBatchCap; i++) {
+        for (var i = 0; i < urls.length; i++) {
             var u = urls[i]
             if (u === "" || root._asked[u] === true || root.coverMap[u])
                 continue
@@ -184,17 +184,25 @@ Rectangle {
         if (out.length > 0)
             QbzShell.sidebarArtworkWindow(JSON.stringify(out))
     }
-    /// Ask for every portrait the current model wants, capped per call.
-    /// Driven by the document landing and by scrolling — `requestCovers`
-    /// self-dedupes, so an over-eager caller costs a loop, not a fetch.
-    function requestVisibleCovers() {
-        if (!root.isReady)
+    // The native ListView already mounts two rows around the viewport. Ask
+    // for that bounded range, including after scrolling past the first page.
+    function requestVisibleCovers(view) {
+        if (!root.isReady || !view || !view.visible || !root.visible)
             return
-        var urls = []
         var rows = root.rowModel
-        for (var i = 0; i < rows.length; i++) {
-            if (rows[i].type === "header")
-                continue
+        if (rows.length === 0) return
+        var first = view.indexAt(4, view.contentY + 1)
+        var last = view.indexAt(4, view.contentY + Math.max(1, view.height) - 1)
+        if (first < 0) first = 0
+        if (last < 0) last = Math.min(rows.length - 1,
+            first + Math.ceil(view.height / (root.cardH + root.rowGap)))
+        var start = first
+        first = Math.max(0, first - 2)
+        last = Math.min(rows.length - 1, last + 2)
+        var urls = []
+        for (var offset = 0; offset <= last - first; offset++) {
+            var i = start + offset
+            if (i > last) i = first + i - last - 1
             var arts = rows[i].artists || []
             for (var j = 0; j < arts.length; j++)
                 urls.push(String(arts[j].artUrl || ""))
@@ -380,17 +388,6 @@ Rectangle {
     // No media queries anywhere in the reference.
     readonly property int columns: Math.max(1,
         Math.floor((gridPane.width + root.cardGap) / (root.cardW + root.cardGap)))
-
-    // Ask for the portraits whenever the row model settles. `rowModel` is
-    // rebuilt by a new document, a page appended, a filter, a search keystroke
-    // and a resize — every one of which can bring artists into view that were
-    // not there before, and `requestCovers` self-dedupes, so a redundant call
-    // costs a loop over the model and no fetch.
-    //
-    // NOT a `Component.onCompleted`: the view mounts BEFORE the first document
-    // lands (the route is recorded by `QbzScene.open` and discovery is async),
-    // so at completion the model is empty and the one shot would be wasted.
-    onRowModelChanged: root.requestVisibleCovers()
 
     readonly property var rowModel: {
         var out = []
@@ -1007,7 +1004,19 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         model: root.rowModel
                         spacing: 0
-                        cacheBuffer: 2 * (root.cardH + root.rowGap)   // Grid:150 ±5 items
+                        cacheBuffer: 2 * (root.cardH + root.rowGap)
+                        function reportCovers() {
+                            if (visible && !coverWindow.running) coverWindow.start()
+                        }
+                        onContentYChanged: reportCovers()
+                        onModelChanged: reportCovers()
+                        onHeightChanged: reportCovers()
+                        onVisibleChanged: reportCovers()
+                        Timer {
+                            id: coverWindow
+                            interval: 180
+                            onTriggered: root.requestVisibleCovers(list)
+                        }
 
                         NumberAnimation {
                             id: jumpAnim

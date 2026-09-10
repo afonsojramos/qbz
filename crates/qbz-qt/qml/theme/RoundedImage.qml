@@ -464,7 +464,14 @@ Item {
     /// the same measurement, as ContentRouter's page fade.
     ///
     /// reduceMotion skips it: the art simply appears.
-    property int fadeMs: 200
+    // Card/grid consumers opt in. Detail artwork keeps its existing fade.
+    // High density retains the measured baseline until it meets the CPU gate.
+    property bool gridArtwork: false
+    readonly property bool immediateGridArtwork: gridArtwork
+        && QbzLocal.artworkImmediateEnabled()
+        && root._dpr <= 1
+    property int fadeMs: immediateGridArtwork ? 0 : 200
+    readonly property bool revealed: root.ready && !fadeIn.running && art.opacity >= 0.999
 
     // ── The two arms ────────────────────────────────────────────────────────
     // One Loader swap at startup (when GraphicsInfo.api resolves), not per
@@ -516,7 +523,7 @@ Item {
         fadeIn.stop()
         if (!root.ready) {
             art.opacity = 0.0
-        } else if (QbzShell.reduceMotion) {
+        } else if (QbzShell.reduceMotion || root.fadeMs <= 0) {
             art.opacity = 1.0
         } else {
             fadeIn.restart()

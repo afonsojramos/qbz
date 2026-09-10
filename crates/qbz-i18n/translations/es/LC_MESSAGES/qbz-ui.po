@@ -7014,3 +7014,19 @@ msgstr "Quick Connect falló: {}"
 
 msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
 msgstr "Ingresa este código en Ajustes > Quick Connect desde un cliente Jellyfin con sesión iniciada. QBZ espera hasta 5 minutos."
+
+#: qbz-qt/qml/Main.qml
+msgid "Close QBZ?"
+msgstr "¿Cerrar QBZ?"
+
+#: qbz-qt/qml/Main.qml
+msgid "Yes"
+msgstr "Sí"
+
+#: qbz-qt/qml/Main.qml
+msgid "No"
+msgstr "No"
+
+#: qbz-qt/qml/Main.qml
+msgid "Don't show again"
+msgstr "No volver a mostrar"

@@ -20,6 +20,8 @@ import "../theme"
 
 Rectangle {
     id: root
+    readonly property bool artworkReady: coverImage.ready
+    readonly property bool artworkImmediate: coverImage.immediateGridArtwork
 
     property var item: ({})
     // Host-resolved artwork path (the AlbumCard artSource pattern).
@@ -115,6 +117,8 @@ Rectangle {
             // a rectangular scissor never produced this radius. A clip is an
             // unconditional batch root, so this one cost a draw call per item.
             RoundedImage {
+                id: coverImage
+                gridArtwork: true
                 anchors.fill: parent
                 source: root.artSource
                 radius: theme.radiusSm
