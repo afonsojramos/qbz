@@ -7024,3 +7024,6 @@ msgstr "Dit kan enkele minuten duren wanneer MusicBrainz het druk heeft."
 
 msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
 msgstr "Dit duurt langer dan normaal — MusicBrainz heeft het mogelijk druk. Probeer het zo opnieuw."
+
+msgid "Remove from Mixtape"
+msgstr "Verwijderen uit mixtape"

@@ -740,6 +740,7 @@ pub(crate) fn pick(collection_id: &str) {
 
     let items = pending_snapshot();
     let cid = collection_id.to_string();
+    let cid_reload = collection_id.to_string();
     crate::spawn(async move {
         let outcome = tokio::task::spawn_blocking(move || add_items(&cid, &items))
             .await
@@ -754,6 +755,11 @@ pub(crate) fn pick(collection_id: &str) {
         // (spec 02 §7 T4).
         if outcome.added > 0 {
             crate::myqbz_qt::reload_grids();
+            // Live-update the OPEN detail (#766): if the target collection is
+            // the one on screen, re-derive it so a just-added playlist/album
+            // appears without a reopen. No-op when a different (or no) detail
+            // is open.
+            crate::myqbz_detail_qt::reload_if_open(&cid_reload);
         }
     });
 }

@@ -768,6 +768,7 @@ Rectangle {
                                 showExpander: root.rowExpander
                                 dotPhase: root.dotPhase
                                 rev: root.patchRev
+                                detailKind: root.kind
                             }
 
                             // Inline tracks (.slint :1151-1218): padding

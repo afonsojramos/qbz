@@ -2636,3 +2636,6 @@ msgstr "This can take a few minutes when MusicBrainz is busy."
 
 msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
 msgstr "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+
+msgid "Remove from Mixtape"
+msgstr "Remove from Mixtape"
