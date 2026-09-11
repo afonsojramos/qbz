@@ -77,6 +77,64 @@ Rectangle {
     readonly property bool loading: root.doc.loading === true
     readonly property string kind: root.doc.kind || "daily"
 
+    // --- Multi-select (parity with PlaylistView) --------------------------
+    // The mix rows are Qobuz catalog tracks (see the delegate's SOURCE note),
+    // so the selection rides the shared bulk seam exactly like a playlist:
+    // selection lives in QML, select-all/clear never reach Rust, and every
+    // other action goes down as a JSON id array through
+    // QbzPlayer.bulkTracksAction (bulk_tracks_qt.rs). This is what the header
+    // note called out as the only missing piece.
+    property bool multiSelect: false
+    property var selected: ({})
+    readonly property int selectedCount: Object.keys(root.selected).length
+    SelectionModel { id: sel }
+    function setMultiSelect(on) {
+        root.multiSelect = on
+        if (!on) { root.selected = ({}); sel.anchorId = "" }
+    }
+    function toggleSelected(id, mods) {
+        root.selected = sel.next(root.selected, id, root.tracks,
+                                 mods === undefined ? Qt.NoModifier : mods)
+    }
+    function selectedIdsInOrder() {
+        var rows = root.tracks
+        var out = []
+        for (var i = 0; i < rows.length; i++)
+            if (root.selected[rows[i].id] === true) out.push(rows[i].id)
+        return out
+    }
+    function allTrackIds() {
+        var rows = root.tracks
+        var out = []
+        for (var i = 0; i < rows.length; i++) out.push(rows[i].id)
+        return out
+    }
+    function bulkAction(action) {
+        if (action === "select-all") {
+            var m = {}
+            var rows = root.tracks
+            for (var i = 0; i < rows.length; i++) m[rows[i].id] = true
+            root.selected = m
+            return
+        }
+        if (action === "clear") { root.selected = ({}); sel.anchorId = ""; return }
+        var ids = root.selectedIdsInOrder()
+        if (ids.length === 0) return
+        QbzPlayer.bulkTracksAction(JSON.stringify(ids), action, "mix", root.kind)
+        if (action !== "add-to-playlist" && action !== "add-to-mixtape")
+            root.selected = ({})
+    }
+    // Ctrl+A / Escape hotkey seam (AppShell duck-types these).
+    function selectAll() {
+        if (!root.multiSelect) root.setMultiSelect(true)
+        root.bulkAction("select-all")
+    }
+    function exitMultiSelectMode() {
+        if (root.multiSelect) root.setMultiSelect(false)
+    }
+    // Drop the selection when the mix identity changes (switching tiles).
+    onKindChanged: root.setMultiSelect(false)
+
     // --- skeleton pulse (the HomeView gating rule: freeze on NOT VISIBLE,
     // never on lost focus) --------------------------------------------------
     property bool skelPhase: false
@@ -97,6 +155,24 @@ Rectangle {
         anchors.centerIn: parent
         showSettingsAction: true
         onSettingsClicked: QbzShell.navigateTo("settings")
+    }
+
+    // Whole-mix queue menu (header "list-end" disc). Routes every track
+    // through the shared bulk seam, so Play next / Play later land in the same
+    // sections a per-row action would.
+    CardMenu {
+        id: mixQueueMenu
+        menuWidth: 190
+        entries: [
+            { "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "action": "play-next" },
+            { "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "action": "play-later" },
+            { "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "action": "queue" }
+        ]
+        onPicked: function (a) {
+            if (root.tracks.length === 0) return
+            QbzPlayer.bulkTracksAction(
+                JSON.stringify(root.allTrackIds()), a, "mix", root.kind)
+        }
     }
 
     // ============================ the page ================================
@@ -198,20 +274,36 @@ Rectangle {
                             anchors.verticalCenter: parent.verticalCenter
                             onClicked: QbzHome.mixShuffle()
                         }
-                        // Add-to-playlist: inert in the .slint too (no
-                        // `clicked` there) — see the header note.
+                        // Queue options for the WHOLE mix — Play next / Play
+                        // later / Add to queue (the header lacked these).
+                        QbzCircleAction {
+                            id: mixQueueDisc
+                            diameterOverride: root.kioskHost ? 64 : 0
+                            name: "list-end"
+                            btnEnabled: root.tracks.length > 0
+                            anchors.verticalCenter: parent.verticalCenter
+                            onClicked: mixQueueMenu.openBelowLeft(mixQueueDisc)
+                        }
+                        // Add-to-playlist — "create playlist from this mix":
+                        // the picker (QbzPlaylistPicker) offers a New Playlist
+                        // arm, so this seeds a fresh playlist from every track.
                         QbzCircleAction {
                             diameterOverride: root.kioskHost ? 64 : 0
                             name: "list-plus"
-                            btnEnabled: false
+                            btnEnabled: root.tracks.length > 0
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: QbzPlaylistPicker.openForTracks(
+                                JSON.stringify(root.allTrackIds()))
                         }
-                        // Multi-select: DIMMED and inert (see the header note).
+                        // Multi-select toggle — lights the bulk bar + the row
+                        // checkboxes (parity with PlaylistView).
                         QbzCircleAction {
                             diameterOverride: root.kioskHost ? 64 : 0
                             name: "square-check-big"
-                            btnEnabled: false
+                            active: root.multiSelect
+                            btnEnabled: root.tracks.length > 0
                             anchors.verticalCenter: parent.verticalCenter
+                            onClicked: root.setMultiSelect(!root.multiSelect)
                         }
                         QbzCircleAction {
                             diameterOverride: root.kioskHost ? 64 : 0
@@ -245,6 +337,27 @@ Rectangle {
                 text: QbzSession.tr("No tracks for this mix.", QbzSession.trRev)
                 color: theme.textMuted
                 font.pixelSize: theme.fontBody
+            }
+
+            // --- Multi-select bulk bar (parity with PlaylistView) -----------
+            // In flow above the column header; shown only while selecting.
+            QbzMultiSelectBar {
+                kioskHost: root.kioskHost
+                visible: root.multiSelect && root.tracks.length > 0
+                width: parent.width - 64
+                selectedCount: root.selectedCount
+                actions: [
+                    { "id": "select-all", "label": QbzSession.tr("Select all", QbzSession.trRev), "icon": "square-check-big", "danger": false, "needsSelection": false },
+                    { "id": "play-next", "label": QbzSession.tr("Play next", QbzSession.trRev), "icon": "list-start", "danger": false, "needsSelection": true },
+                    { "id": "play-later", "label": QbzSession.tr("Play later", QbzSession.trRev), "icon": "list-plus", "danger": false, "needsSelection": true },
+                    { "id": "queue", "label": QbzSession.tr("Add to queue", QbzSession.trRev), "icon": "list-end", "danger": false, "needsSelection": true },
+                    { "id": "add-to-playlist", "label": QbzSession.tr("Add to playlist", QbzSession.trRev), "icon": "list-music", "danger": false, "needsSelection": true },
+                    { "id": "add-to-mixtape", "label": QbzSession.tr("Add to Mixtape/Collection", QbzSession.trRev), "icon": "cassette-tape", "danger": false, "needsSelection": true },
+                    { "id": "add-to-favorites", "label": QbzSession.tr("Add to Library", QbzSession.trRev), "icon": "heart", "danger": false, "needsSelection": true },
+                    { "id": "make-offline", "label": QbzSession.tr("Make available offline", QbzSession.trRev), "icon": "cloud-download", "danger": false, "needsSelection": true },
+                    { "id": "clear", "label": QbzSession.tr("Clear", QbzSession.trRev), "icon": "x", "danger": false, "needsSelection": true }
+                ]
+                onAction: function (id) { root.bulkAction(id) }
             }
 
             // --- Track list column header -----------------------------------
@@ -286,6 +399,11 @@ Rectangle {
                     showArtwork: true
                     showAlbum: true
                     showFavorite: true
+                    // Multi-select: the leading cell becomes a checkbox and
+                    // the row toggles its membership (parity with PlaylistView).
+                    selectMode: root.multiSelect
+                    checked: root.selected[modelData.id] === true
+                    onToggleSelect: function (mods) { root.toggleSelected(modelData.id, mods) }
                     // The mix list is not reorderable and is not a drag
                     // source for playlists (flat catalog rows, no container).
                     onPlayRequested: QbzHome.mixPlayTrack(modelData.id)

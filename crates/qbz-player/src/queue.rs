@@ -39,11 +39,19 @@ struct InternalState {
     history: VecDeque<usize>,
     /// Track ID to stop after (optional)
     stop_after_track_id: Option<u64>,
-    /// Manual-block size (#442): how many entries right after `current_index`
-    /// were added by hand ("Play next" / "Play later"). The block always
-    /// plays before the source (album/playlist) resumes; "Add to queue" does
-    /// NOT extend it (it appends to the absolute end, untouched).
+    /// "Play next" block size (#442): how many entries right after
+    /// `current_index` were added by "Play next". These render under the
+    /// "Next in queue" header (the priority block); it plays before everything
+    /// else. "Add to queue" does NOT extend it.
     manual_next_count: usize,
+    /// "Play later" block size (#442, owner refinement 2026-09-11): entries
+    /// added by "Play later", which sit AFTER the play-next block but BEFORE
+    /// the source resumes — i.e. at the head of the "Next up" section, not in
+    /// "Next in queue". They append in order (each new one after the previous),
+    /// which is what fixes NorinB's "adds to the beginning" report on the
+    /// non-shuffle path. Under shuffle the block concept degrades (see
+    /// `add_track_later`) and this stays 0.
+    manual_later_count: usize,
 }
 
 /// An exact, in-process snapshot of queue playback authority.
@@ -80,6 +88,7 @@ impl QueueManager {
                 history: VecDeque::with_capacity(50),
                 stop_after_track_id: None,
                 manual_next_count: 0,
+                manual_later_count: 0,
             }),
         }
     }
@@ -219,10 +228,13 @@ impl QueueManager {
             }
 
             let new_idx = insert_index;
+            // IDLE plays from shuffle_order[0], so a "Play next" belongs at the
+            // FRONT of the shuffle display, not appended at the end (that shipped
+            // it to the very bottom of an idle queue — #442 idle-shuffle).
             let next_pos = if state.current_index.is_some() {
                 state.shuffle_position + 1
             } else {
-                state.shuffle_order.len()
+                0
             };
 
             if next_pos >= state.shuffle_order.len() {
@@ -231,6 +243,17 @@ impl QueueManager {
                 state.shuffle_order.insert(next_pos, new_idx);
             }
         }
+        log::debug!(
+            "[queue][#442] play-next id={} linear@{insert_index} shuffle={} \
+             mnc={} mlc={} current={:?} order_len={}",
+            state.tracks.get(insert_index.min(state.tracks.len().saturating_sub(1)))
+                .map(|t| t.id).unwrap_or(0),
+            state.shuffle,
+            state.manual_next_count,
+            state.manual_later_count,
+            state.current_index,
+            state.shuffle_order.len(),
+        );
     }
 
     /// Add a track at the END of the manual block (#442 "Play later"): after
@@ -240,36 +263,76 @@ impl QueueManager {
     /// concept is meaningless once the order is reshuffled.
     pub fn add_track_later(&self, track: QueueTrack) {
         let mut state = self.state.lock().unwrap();
-        let insert_index = if state.shuffle {
-            state.current_index.map(|idx| idx + 1).unwrap_or(0)
-        } else {
-            state
-                .current_index
-                .map(|idx| idx + 1 + state.manual_next_count)
-                .unwrap_or(state.manual_next_count)
-        };
-        let insert_index = insert_index.min(state.tracks.len());
-        state.tracks.insert(insert_index, track);
-        state.manual_next_count += 1;
+        let track_id = track.id;
 
         if state.shuffle {
+            // Under shuffle, PLAYBACK follows `shuffle_order`, so "Play later"
+            // lands at the END of the separate queue by inserting its
+            // shuffle-order entry AFTER the play-next block and any earlier
+            // "Play later" — not at the front (that was the owner-validated
+            // "Play later behaves like Play next under shuffle"). The linear
+            // insert + index shift is the same proven path add_track_next uses.
+            // (NorinB's separate "random swap on skip" is captured by the
+            // #442 log in `next`, since the owner cannot reproduce it.)
+            let insert_index = state
+                .current_index
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
+                .min(state.tracks.len());
+            state.tracks.insert(insert_index, track);
             for idx in state.shuffle_order.iter_mut() {
                 if *idx >= insert_index {
                     *idx += 1;
                 }
             }
             let new_idx = insert_index;
-            let next_pos = if state.current_index.is_some() {
+            // IDLE plays from shuffle_order[0], so the manual block sits at the
+            // FRONT: a "Play later" lands right after the play-next block there,
+            // NOT appended at the very end (that shipped it to the bottom of an
+            // idle queue — #442 idle-shuffle "play-later goes to the end").
+            let base_pos = if state.current_index.is_some() {
                 state.shuffle_position + 1
             } else {
-                state.shuffle_order.len()
+                0
             };
-            if next_pos >= state.shuffle_order.len() {
+            let target_pos = (base_pos + state.manual_next_count + state.manual_later_count)
+                .min(state.shuffle_order.len());
+            if target_pos >= state.shuffle_order.len() {
                 state.shuffle_order.push(new_idx);
             } else {
-                state.shuffle_order.insert(next_pos, new_idx);
+                state.shuffle_order.insert(target_pos, new_idx);
             }
+            state.manual_later_count += 1;
+            log::debug!(
+                "[queue][#442] play-later SHUFFLE id={track_id} linear@{insert_index} \
+                 shuf@{target_pos} shuf_pos={} mnc={} mlc={} order_len={} current={:?}",
+                state.shuffle_position,
+                state.manual_next_count,
+                state.manual_later_count,
+                state.shuffle_order.len(),
+                state.current_index,
+            );
+            return;
         }
+
+        // Non-shuffle: append to the END of the "Play later" block — after the
+        // play-next block AND any earlier "Play later" tracks — so it lands at
+        // the head of the "Next up" section in ORDER (fixes NorinB's "adds to
+        // the beginning"). It does NOT extend `manual_next_count`, so it is not
+        // part of the "Next in queue" priority block.
+        let base = state.current_index.map(|idx| idx + 1).unwrap_or(0);
+        let insert_index =
+            (base + state.manual_next_count + state.manual_later_count).min(state.tracks.len());
+        state.tracks.insert(insert_index, track);
+        state.manual_later_count += 1;
+        log::debug!(
+            "[queue][#442] play-later id={track_id} linear@{insert_index} \
+             mnc={} mlc={} current={:?} len={}",
+            state.manual_next_count,
+            state.manual_later_count,
+            state.current_index,
+            state.tracks.len(),
+        );
     }
 
     /// Set the entire queue (replaces existing)
@@ -278,6 +341,7 @@ impl QueueManager {
         state.stop_after_track_id = None;
         // A full replacement is a new source: the manual block dissolves (#442).
         state.manual_next_count = 0;
+        state.manual_later_count = 0;
         // Remap history by track id BEFORE replacing tracks so that legitimate
         // plays survive queue version bumps / reorders. Entries whose track is
         // no longer present are dropped. See bug #316.
@@ -370,6 +434,7 @@ impl QueueManager {
         let mut state = self.state.lock().unwrap();
         state.stop_after_track_id = None;
         state.manual_next_count = 0;
+        state.manual_later_count = 0;
 
         if keep_current {
             // Keep the track at `current_index`, not always `tracks[0]`.
@@ -421,10 +486,16 @@ impl QueueManager {
 
         let removed = state.tracks.remove(index);
 
-        // Removing an entry inside the manual block shrinks it (#442).
+        // Removing an entry inside the manual blocks shrinks the right one
+        // (#442): the play-next block sits at (curr, curr+mnc], the play-later
+        // block right after it at (curr+mnc, curr+mnc+mlc].
         if let Some(curr_idx) = state.current_index {
-            if index > curr_idx && index <= curr_idx + state.manual_next_count {
+            let next_end = curr_idx + state.manual_next_count;
+            let later_end = next_end + state.manual_later_count;
+            if index > curr_idx && index <= next_end {
                 state.manual_next_count = state.manual_next_count.saturating_sub(1);
+            } else if index > next_end && index <= later_end {
+                state.manual_later_count = state.manual_later_count.saturating_sub(1);
             }
         }
 
@@ -1068,11 +1139,36 @@ impl QueueManager {
             state.history.retain(|&index| index != next_index);
         }
         state.current_index = next_idx;
-        // Manual-block bookkeeping (#442): advancing past a manual entry
-        // shrinks the block; exhausting or wrapping the queue dissolves it.
+        // Manual-block bookkeeping (#442): advancing consumes the play-next
+        // block first, then the play-later block; exhausting or wrapping the
+        // queue dissolves both.
         match next_idx {
-            Some(0) | None => state.manual_next_count = 0,
-            Some(_) => state.manual_next_count = state.manual_next_count.saturating_sub(1),
+            Some(0) | None => {
+                state.manual_next_count = 0;
+                state.manual_later_count = 0;
+            }
+            Some(_) => {
+                if state.manual_next_count > 0 {
+                    state.manual_next_count -= 1;
+                } else if state.manual_later_count > 0 {
+                    state.manual_later_count -= 1;
+                }
+            }
+        }
+        // #442 diagnosis (NorinB's "random swap" on skip): dump the shape while
+        // a manual block is live, so a log from a repro reveals whether the
+        // shuffle order and the linear queue disagree.
+        if state.shuffle && (state.manual_next_count > 0 || state.manual_later_count > 0) {
+            log::debug!(
+                "[queue][#442] next SHUFFLE current={:?} shuf_pos={} mnc={} mlc={} \
+                 order={:?} ids={:?}",
+                state.current_index,
+                state.shuffle_position,
+                state.manual_next_count,
+                state.manual_later_count,
+                state.shuffle_order,
+                state.tracks.iter().map(|t| t.id).collect::<Vec<_>>(),
+            );
         }
         next_idx.and_then(|idx| state.tracks.get(idx).cloned())
     }
@@ -1218,6 +1314,9 @@ impl QueueManager {
                     .get(state.shuffle_position + 1 + upcoming_index)
                     .copied(),
                 Some(curr_idx) => Some(curr_idx + 1 + upcoming_index),
+                // IDLE: the upcoming list is the shuffle order when shuffle is
+                // on (see get_state_full), so map the display index through it.
+                None if state.shuffle => state.shuffle_order.get(upcoming_index).copied(),
                 None => Some(upcoming_index),
             }
         };
@@ -1261,6 +1360,16 @@ impl QueueManager {
                 }
                 (target_index, (current_index..target_index).collect())
             }
+            None if state.shuffle => {
+                // IDLE + shuffle: the display index maps through the shuffle
+                // order (see get_state_full / play_upcoming_at). The crossed
+                // rows are the shuffle-order rows ahead of the target, so they
+                // become the cursor's back path in play order.
+                let target_index = *state.shuffle_order.get(upcoming_index)?;
+                let crossed = state.shuffle_order[..upcoming_index.min(state.shuffle_order.len())]
+                    .to_vec();
+                (target_index, crossed)
+            }
             None => {
                 let target_index = upcoming_index;
                 if target_index >= state.tracks.len() {
@@ -1291,9 +1400,14 @@ impl QueueManager {
         }
         state.history.retain(|&index| index != target_index);
         state.current_index = Some(target_index);
-        state.manual_next_count = state
-            .manual_next_count
-            .saturating_sub(upcoming_index.saturating_add(1));
+        // Jumping `upcoming_index + 1` rows forward consumes that many entries
+        // off the front — the play-next block first, then the play-later block
+        // (#442).
+        let consumed = upcoming_index.saturating_add(1);
+        let from_next = consumed.min(state.manual_next_count);
+        state.manual_next_count -= from_next;
+        let from_later = (consumed - from_next).min(state.manual_later_count);
+        state.manual_later_count -= from_later;
         if let Some(position) = target_shuffle_position {
             state.shuffle_position = position;
         }
@@ -1385,6 +1499,7 @@ impl QueueManager {
             state.shuffle = true;
             // The manual block is meaningless once the order is reshuffled (#442).
             state.manual_next_count = 0;
+            state.manual_later_count = 0;
             Self::regenerate_shuffle_order_internal(&mut state);
 
             // Shuffle only the part of the linear queue that has not been
@@ -1556,7 +1671,12 @@ impl QueueManager {
             repeat: state.repeat,
             total_tracks: state.tracks.len(),
             stop_after_track_id: state.stop_after_track_id,
-            manual_next_count: state.manual_next_count,
+            // The public "Next in queue" block is the WHOLE separate queue —
+            // play-next PLUS play-later (which appends at its end, in order) —
+            // so the "Next up" section header lands after both. Internally the
+            // two counters stay split to keep the front/end insert positions
+            // right (#442).
+            manual_next_count: state.manual_next_count + state.manual_later_count,
         }
     }
 
@@ -1644,6 +1764,17 @@ impl QueueManager {
                     .cloned()
                     .collect()
             }
+        } else if state.shuffle {
+            // IDLE + shuffle: the upcoming list must follow the shuffle order,
+            // not the linear one — otherwise the row the user sees first is not
+            // the row that plays first, and promoting it drops the cursor onto
+            // that track's shuffle position (which can be the LAST), leaving an
+            // empty upcoming (#442 idle-shuffle repro).
+            state
+                .shuffle_order
+                .iter()
+                .filter_map(|&idx| state.tracks.get(idx).cloned())
+                .collect()
         } else {
             state.tracks.clone()
         };
@@ -1665,7 +1796,12 @@ impl QueueManager {
             repeat: state.repeat,
             total_tracks: state.tracks.len(),
             stop_after_track_id: state.stop_after_track_id,
-            manual_next_count: state.manual_next_count,
+            // The public "Next in queue" block is the WHOLE separate queue —
+            // play-next PLUS play-later (which appends at its end, in order) —
+            // so the "Next up" section header lands after both. Internally the
+            // two counters stay split to keep the front/end insert positions
+            // right (#442).
+            manual_next_count: state.manual_next_count + state.manual_later_count,
         }
     }
 
@@ -1968,7 +2104,15 @@ mod tests {
             tracks.iter().map(|track| track.id).collect::<Vec<_>>(),
             vec![1, 10, 11, 12, 13, 2, 3]
         );
-        assert_eq!(queue.get_state_full().manual_next_count, 4);
+        // #442 split model: the echo preserves a 4-entry manual region — two
+        // "Play next" (10, 11) then two "Play later" (12, 13) — split across the
+        // two counters. The QConnect echo LINEAR order is unchanged (asserted
+        // above), which is what QConnect actually round-trips.
+        {
+            let state = queue.state.lock().unwrap();
+            assert_eq!(state.manual_next_count, 2);
+            assert_eq!(state.manual_later_count, 2);
+        }
         // Append is outside the manual block; another "later" still precedes source.
         queue.add_tracks(vec![create_test_track(20), create_test_track(21)]);
         let echo = queue.get_all_tracks();
@@ -2093,7 +2237,10 @@ mod tests {
         assert_eq!(state.repeat, RepeatMode::One);
         assert!(state.history.is_empty());
         assert_eq!(state.stop_after_track_id, Some(3));
-        assert_eq!(state.manual_next_count, 2);
+        // #442 split model: the snapshot round-trips both blocks — one
+        // "Play next" (10) and one "Play later" (11).
+        assert_eq!(state.manual_next_count, 1);
+        assert_eq!(state.manual_later_count, 1);
     }
 
     #[test]
@@ -2694,7 +2841,149 @@ mod tests {
             vec![2, 1]
         );
         assert!(playing.history.is_empty());
+        // #442 split model: promoting the "Play next" row (3) empties the
+        // play-next block; the "Play later" row (2) stays in the separate
+        // queue. The PUBLIC count is the whole separate queue (play-next +
+        // play-later), so it is 1 (just the play-later); internally the split
+        // is play-next 0 / play-later 1.
         assert_eq!(playing.manual_next_count, 1);
+        {
+            let state = queue.state.lock().unwrap();
+            assert_eq!(state.manual_next_count, 0);
+            assert_eq!(state.manual_later_count, 1);
+        }
+    }
+
+    #[test]
+    fn play_later_appends_to_next_up_in_order_non_shuffle() {
+        // #442 (owner refinement + NorinB): "Play next" builds the priority
+        // "Next in queue" block; "Play later" lands at the HEAD of "Next up",
+        // AFTER any earlier "Play later" (not before it — NorinB's bug), and
+        // NEVER inside the priority block.
+        let queue = QueueManager::new();
+        queue.set_queue(
+            vec![
+                create_test_track(1),
+                create_test_track(2),
+                create_test_track(3),
+            ],
+            Some(0),
+        );
+        queue.add_track_next(create_test_track(10)); // front of Next in queue
+        queue.add_track_later(create_test_track(20)); // head of Next up
+        queue.add_track_later(create_test_track(21)); // AFTER 20, in order
+
+        assert_eq!(
+            queue
+                .get_all_tracks()
+                .0
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
+            vec![1, 10, 20, 21, 2, 3]
+        );
+        {
+            let state = queue.state.lock().unwrap();
+            assert_eq!(state.manual_next_count, 1); // only 10 is "Next in queue"
+            assert_eq!(state.manual_later_count, 2); // 20, 21 are "Next up"
+        }
+
+        // A later "Play next" still jumps to the FRONT of the priority block.
+        queue.add_track_next(create_test_track(11));
+        assert_eq!(
+            queue
+                .get_all_tracks()
+                .0
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
+            vec![1, 11, 10, 20, 21, 2, 3]
+        );
+        {
+            let state = queue.state.lock().unwrap();
+            assert_eq!(state.manual_next_count, 2);
+            assert_eq!(state.manual_later_count, 2);
+        }
+
+        // Advancing consumes the play-next block first, then the play-later
+        // block, then the source.
+        assert_eq!(queue.next().expect("next").id, 11);
+        assert_eq!(queue.next().expect("next").id, 10);
+        assert_eq!(queue.state.lock().unwrap().manual_next_count, 0);
+        assert_eq!(queue.next().expect("next").id, 20);
+        assert_eq!(queue.state.lock().unwrap().manual_later_count, 1);
+    }
+
+    #[test]
+    fn play_later_plays_after_play_next_under_shuffle() {
+        // #442 (owner can reproduce this one): under shuffle, "Play later" used
+        // to jump to the FRONT of the separate queue like "Play next". It must
+        // play AFTER the play-next block instead.
+        let queue = QueueManager::new();
+        // Identity shuffle order => playback order == linear order; the head is
+        // id 1 at shuffle position 0.
+        queue.set_queue_with_order(
+            (1..=5).map(create_test_track).collect(),
+            Some(0),
+            true,
+            Some(vec![0, 1, 2, 3, 4]),
+        );
+        queue.add_track_next(create_test_track(10)); // plays next
+        queue.add_track_later(create_test_track(20)); // plays AFTER 10
+
+        let upcoming: Vec<u64> = queue
+            .get_state_full()
+            .upcoming
+            .iter()
+            .map(|t| t.id)
+            .take(2)
+            .collect();
+        assert_eq!(upcoming, vec![10, 20]); // NOT [20, 10]
+        {
+            let state = queue.state.lock().unwrap();
+            assert_eq!(state.manual_next_count, 1);
+            assert_eq!(state.manual_later_count, 1);
+        }
+    }
+
+    #[test]
+    fn idle_shuffle_play_keeps_the_rest_of_the_queue_upcoming() {
+        // #442 idle-shuffle repro: a queue built while idle with shuffle ON,
+        // whose linear head sits LAST in the shuffle order. Pressing play used
+        // to promote the linear head and drop the cursor onto its shuffle
+        // position (the last), leaving upcoming EMPTY — the queue "vanished".
+        let queue = QueueManager::new();
+        queue.set_queue_with_order(
+            (1..=5).map(create_test_track).collect(),
+            None,
+            true,
+            Some(vec![3, 1, 4, 2, 0]), // linear 0 (id 1) is LAST
+        );
+        // Idle display follows the shuffle order.
+        let up_ids: Vec<u64> = queue
+            .get_state_full()
+            .upcoming
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(up_ids, vec![4, 2, 5, 3, 1]);
+
+        // Play the first idle row (the shuffle head, id 4).
+        let first = queue.get_state_full().upcoming.first().cloned().unwrap();
+        assert_eq!(first.id, 4);
+        let played = queue
+            .play_upcoming_at_preserving_timeline(0, first.id)
+            .expect("promote the shuffle head");
+        assert_eq!(played.id, 4);
+
+        // The rest of the queue is STILL upcoming (the bug left it empty).
+        let after: Vec<u64> = queue
+            .get_state_full()
+            .upcoming
+            .iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(after, vec![2, 5, 3, 1]);
     }
 
     #[test]
