@@ -2517,12 +2517,18 @@ mod tests {
     }
 
     #[test]
-    fn tracks_text_uses_em_dash_for_unknown_counts() {
-        let mut it = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
-        it.track_count = None;
-        assert_eq!(tracks_text(&it), "\u{2014}");
+    fn tracks_text_is_empty_for_track_and_unknown_album_count() {
+        // #766: a single track has no track count — the column stays empty.
         let track = item(1, "B", ItemType::Track, AlbumSource::Qobuz);
-        assert_eq!(tracks_text(&track), "1");
+        assert_eq!(tracks_text(&track), "");
+        // An album shows its stored count (item() seeds position + 1 = 1).
+        let album = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
+        assert_eq!(tracks_text(&album), "1");
+        // An album with an unknown count stays empty until `resolve_items`
+        // backfills the resolved count — no em-dash placeholder.
+        let mut unknown = item(2, "C", ItemType::Album, AlbumSource::Qobuz);
+        unknown.track_count = None;
+        assert_eq!(tracks_text(&unknown), "");
     }
 
     #[test]
