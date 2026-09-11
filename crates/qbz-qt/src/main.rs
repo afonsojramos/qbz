@@ -39,6 +39,7 @@ mod home_bridge;
 mod player_bridge;
 mod queue_bridge;
 mod session_bridge;
+mod panel_resize;
 mod shell_bridge;
 mod viz_bridge;
 // Immersive mode (2026-08-02 immersive-port contract, block B1): the

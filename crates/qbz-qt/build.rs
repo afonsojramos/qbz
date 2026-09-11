@@ -600,6 +600,7 @@ fn main() {
                 "qml/controls/QbzToggle.qml",
                 "qml/controls/QbzToolButton.qml",
                 "qml/controls/QbzTooltip.qml",
+                "qml/controls/PanelResizeHandle.qml",
                 "qml/controls/QbzProgressRing.qml",
                 // Applied-filters tooltip: the trigger a filter control mounts
                 // beside itself (it writes the shell channel QbzTooltip reads).
