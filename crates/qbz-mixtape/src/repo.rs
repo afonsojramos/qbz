@@ -179,6 +179,18 @@ pub fn set_kind(conn: &Connection, id: &str, new_kind: CollectionKind) -> Result
     Ok(())
 }
 
+/// Hide (or unhide) a collection from the sidebar tree. Reuses the row's own
+/// `hidden` column — the same "hide from sidebar" affordance playlists carry —
+/// so a hidden Mixtape/Collection drops out of the collapsible sidebar feed
+/// while remaining fully present in its grid and the management listing.
+pub fn set_hidden(conn: &Connection, id: &str, hidden: bool) -> Result<()> {
+    conn.execute(
+        "UPDATE mixtape_collections SET hidden = ?1, updated_at = ?2 WHERE id = ?3",
+        params![hidden as i64, now_ms(), id],
+    )?;
+    Ok(())
+}
+
 pub fn set_custom_artwork(conn: &Connection, id: &str, path: Option<&str>) -> Result<()> {
     conn.execute(
         "UPDATE mixtape_collections SET custom_artwork_path = ?1, updated_at = ?2 WHERE id = ?3",
@@ -621,6 +633,26 @@ mod tests {
         assert_eq!(c.source_ref.as_deref(), Some("qobuz-artist-123"));
         assert!(matches!(c.source_type, CollectionSourceType::ArtistDiscography));
         assert!(c.last_synced_at.is_some(), "artist collection stamps last_synced_at on create");
+    }
+
+    #[test]
+    fn set_hidden_toggles_the_flag() {
+        let conn = fresh_db();
+        let c = create_collection(
+            &conn,
+            CollectionKind::Mixtape,
+            "Hidden one",
+            None,
+            CollectionSourceType::Manual,
+            None,
+        )
+        .unwrap();
+        // Fresh collections are visible.
+        assert!(!get_collection(&conn, &c.id).unwrap().unwrap().hidden);
+        set_hidden(&conn, &c.id, true).unwrap();
+        assert!(get_collection(&conn, &c.id).unwrap().unwrap().hidden);
+        set_hidden(&conn, &c.id, false).unwrap();
+        assert!(!get_collection(&conn, &c.id).unwrap().unwrap().hidden);
     }
 
     #[test]

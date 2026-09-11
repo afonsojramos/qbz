@@ -7020,3 +7020,36 @@ msgstr "通常より時間がかかっています。MusicBrainzが混雑して�
 
 msgid "Remove from Mixtape"
 msgstr "ミックステープから削除"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "サイドバーに折りたたみ式の My QBZ を表示"
+
+msgid "Show Mixtapes"
+msgstr "ミックステープを表示"
+
+msgid "Show Collections"
+msgstr "コレクションを表示"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "標準の My QBZ メニュー項目を非表示"
+
+msgid "No mixtapes yet."
+msgstr "ミックステープはまだありません。"
+
+msgid "No collections yet."
+msgstr "コレクションはまだありません。"
+
+msgid "Show in sidebar"
+msgstr "サイドバーに表示"
+
+msgid "New Mixtape"
+msgstr "新しいミックステープ"
+
+msgid "New Collection"
+msgstr "新しいコレクション"
+
+msgid "Name (Z-A)"
+msgstr "名前（Z-A）"
+
+msgid "Search My QBZ"
+msgstr "My QBZ を検索"

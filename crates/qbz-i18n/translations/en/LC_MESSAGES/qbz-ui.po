@@ -2639,3 +2639,36 @@ msgstr "This is taking longer than usual — MusicBrainz may be busy. Try again 
 
 msgid "Remove from Mixtape"
 msgstr "Remove from Mixtape"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Show collapsible My QBZ in sidebar"
+
+msgid "Show Mixtapes"
+msgstr "Show Mixtapes"
+
+msgid "Show Collections"
+msgstr "Show Collections"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Hide standard My QBZ menu entry"
+
+msgid "No mixtapes yet."
+msgstr "No mixtapes yet."
+
+msgid "No collections yet."
+msgstr "No collections yet."
+
+msgid "Show in sidebar"
+msgstr "Show in sidebar"
+
+msgid "New Mixtape"
+msgstr "New Mixtape"
+
+msgid "New Collection"
+msgstr "New Collection"
+
+msgid "Name (Z-A)"
+msgstr "Name (Z-A)"
+
+msgid "Search My QBZ"
+msgstr "Search My QBZ"

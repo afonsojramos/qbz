@@ -1309,6 +1309,13 @@ pub(crate) fn publish_sidebar() {
             .set_sidebar_sort_by(QString::from(sort_by.as_str()));
         b.as_mut().set_sidebar_sort_asc(sort_asc);
     });
+    // The collapsible My QBZ tree rides the SAME funnel: `load_sidebar_once()`
+    // publishes the sidebar once per session (the reliable startup point, after
+    // the QML singletons exist), and every sidebar mutation republishes here.
+    // Gated by the opt-in inside, so a flat-sidebar profile pays nothing.
+    // `myqbz_qt::reload_grids` still republishes it on mixtape/collection
+    // mutations, which the playlist path here does not see.
+    crate::myqbz_qt::publish_sidebar_tree();
 }
 
 pub(crate) fn sidebar_set_sort(option: &str) {

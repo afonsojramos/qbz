@@ -157,6 +157,14 @@ pub mod qbz_shell {
         #[qproperty(QString, sidebar_json)]
         #[qproperty(QString, sidebar_sort_by)]
         #[qproperty(bool, sidebar_sort_asc)]
+        // Collapsible My QBZ tree feed (opt-in): both grids' rows as
+        // `{mixtapes:[{id,name,hidden}], collections:[…]}`. It lives on
+        // QbzShell — NOT QbzMyQbz — because the sidebar reads it: QbzMyQbz is
+        // not reliably registered in the shell QML context (NavFlyout.qml:89
+        // documents the same hazard), so a binding on it errors on first eval,
+        // captures no dependency and never updates. QbzShell is always resolved
+        // here. Published by `myqbz_qt::publish_sidebar_tree`.
+        #[qproperty(QString, myqbz_tree_json)]
         // The MINI-RAIL folder flyout's own document (contract §4.7):
         // `{folderId, folderName, count, rows:[{id,name,isLocal}]}`. It is a
         // separate document from `sidebar_json` because a COLLAPSED folder's
@@ -693,6 +701,18 @@ pub mod qbz_shell {
         /// header). Online the two verbs do the same thing.
         #[qinvokable]
         fn reload_sidebar(self: Pin<&mut QbzShell>);
+        /// Collapsible My QBZ tree actions, routed through QbzShell so the
+        /// sidebar never touches QbzMyQbz (not reliably registered here).
+        #[qinvokable]
+        fn myqbz_open_card(self: Pin<&mut QbzShell>, id: QString);
+        #[qinvokable]
+        fn myqbz_set_hidden(self: Pin<&mut QbzShell>, id: QString, hidden: bool);
+        /// Open the create modal (app-global MyQbzModals) for "mixtape" |
+        /// "collection", and force a tree republish, both from the sidebar.
+        #[qinvokable]
+        fn myqbz_create_open(self: Pin<&mut QbzShell>, kind: QString);
+        #[qinvokable]
+        fn myqbz_refresh_tree(self: Pin<&mut QbzShell>);
         #[qinvokable]
         fn sidebar_set_sort(self: Pin<&mut QbzShell>, option: QString);
         #[qinvokable]
@@ -823,6 +843,7 @@ pub struct QbzShellRust {
     sidebar_json: QString,
     sidebar_sort_by: QString,
     sidebar_sort_asc: bool,
+    myqbz_tree_json: QString,
     sidebar_folder_popup_json: QString,
     system_title_bar: bool,
     system_title_bar_pref: bool,
@@ -924,6 +945,7 @@ impl Default for QbzShellRust {
             sidebar_json: QString::from("[]"),
             sidebar_sort_by: QString::from("name"),
             sidebar_sort_asc: true,
+            myqbz_tree_json: QString::from("{\"mixtapes\":[],\"collections\":[]}"),
             // FULL SHAPE, not "{}" — see the qproperty comment.
             sidebar_folder_popup_json: QString::from(
                 r#"{"folderId":"","folderName":"","count":0,"rows":[]}"#,
@@ -1455,6 +1477,22 @@ impl qbz_shell::QbzShell {
     pub fn reload_sidebar(self: Pin<&mut Self>) {
         // The OFFLINE-SAFE verb — see the declaration's doc comment.
         crate::reload_sidebar_including_local();
+    }
+
+    pub fn myqbz_open_card(self: Pin<&mut Self>, id: QString) {
+        crate::myqbz_detail_qt::open(id.to_string());
+    }
+
+    pub fn myqbz_set_hidden(self: Pin<&mut Self>, id: QString, hidden: bool) {
+        crate::myqbz_qt::set_collection_hidden(id.to_string(), hidden);
+    }
+
+    pub fn myqbz_create_open(self: Pin<&mut Self>, kind: QString) {
+        crate::myqbz_qt::create_open(&kind.to_string());
+    }
+
+    pub fn myqbz_refresh_tree(self: Pin<&mut Self>) {
+        crate::myqbz_qt::publish_sidebar_tree();
     }
 
     pub fn sidebar_set_sort(self: Pin<&mut Self>, option: QString) {

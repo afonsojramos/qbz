@@ -7058,3 +7058,36 @@ msgstr "Это занимает больше времени, чем обычно
 
 msgid "Remove from Mixtape"
 msgstr "Удалить из микстейпа"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Показывать сворачиваемый My QBZ на боковой панели"
+
+msgid "Show Mixtapes"
+msgstr "Показывать микстейпы"
+
+msgid "Show Collections"
+msgstr "Показывать коллекции"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Скрыть стандартный пункт меню My QBZ"
+
+msgid "No mixtapes yet."
+msgstr "Пока нет микстейпов."
+
+msgid "No collections yet."
+msgstr "Пока нет коллекций."
+
+msgid "Show in sidebar"
+msgstr "Показать в боковой панели"
+
+msgid "New Mixtape"
+msgstr "Новый микстейп"
+
+msgid "New Collection"
+msgstr "Новая коллекция"
+
+msgid "Name (Z-A)"
+msgstr "Название (Я-А)"
+
+msgid "Search My QBZ"
+msgstr "Поиск в My QBZ"
