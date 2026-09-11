@@ -8,6 +8,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+use super::identity;
 use super::models::*;
 use crate::error::{IntegrationError, IntegrationResult};
 
@@ -196,12 +197,11 @@ impl MusicBrainzClient {
         }
 
 
+        // Exact quoted field expression, URL-encoded exactly once (#768:
+        // `artist:Swim Deep` let "Deep" leak into the global query and ranked
+        // Deep Purple first at score 100).
         let base = self.base_url().await;
-        let encoded_name = urlencoding::encode(name);
-        let url = format!(
-            "{}/artist?query=artist:{}&limit={}&fmt=json",
-            base, encoded_name, limit
-        );
+        let url = identity::artist_search_url(base, name, limit);
 
         let response = self.send_with_retry(&url).await?;
         response.json().await.map_err(Into::into)
@@ -255,40 +255,29 @@ impl MusicBrainzClient {
         Ok(None)
     }
 
-    /// Resolve an artist to get MusicBrainz ID
-    ///
-    /// Prefers exact name matches over highest score to avoid disambiguation
-    /// issues (e.g., multiple artists named "The Warning").
+    /// The quoted-name search window as cacheable candidates.
+    pub async fn search_artist_candidates(
+        &self,
+        name: &str,
+    ) -> IntegrationResult<Vec<identity::ArtistCandidate>> {
+        let response = self
+            .search_artist(name, identity::NAME_SEARCH_LIMIT)
+            .await?;
+        Ok(response.artists.iter().map(identity::ArtistCandidate::from).collect())
+    }
+
+    /// Resolve an artist NAME to a MusicBrainz id under the containment rule
+    /// (`identity::select_exact_name`): exactly one result in the quoted-name
+    /// window with the same trimmed, case-insensitive name and score >= 90.
+    /// Zero or several acceptable candidates resolve to `None`. There is no
+    /// first-result fallback any more — that fallback is how #768 handed
+    /// Swim Deep the biography of Deep Purple.
     pub async fn resolve_artist(&self, name: &str) -> IntegrationResult<Option<ResolvedArtist>> {
-        let response = self.search_artist(name, 10).await?;
-
-        if response.artists.is_empty() {
-            return Ok(None);
-        }
-
-        // Prefer exact name match (case-insensitive)
-        let target = name.trim().to_lowercase();
-        let best = response
-            .artists
-            .iter()
-            .find(|a| a.name.trim().to_lowercase() == target && a.score.unwrap_or(0) >= 90)
-            .or_else(|| response.artists.first());
-
-        if let Some(artist) = best {
-            let confidence = MatchConfidence::from_score(artist.score);
-
-            return Ok(Some(ResolvedArtist {
-                mbid: artist.id.clone(),
-                name: artist.name.clone(),
-                sort_name: artist.sort_name.clone(),
-                artist_type: ArtistType::from(artist.artist_type.as_deref()),
-                country: artist.country.clone(),
-                disambiguation: artist.disambiguation.clone(),
-                confidence,
-            }));
-        }
-
-        Ok(None)
+        let window = self.search_artist_candidates(name).await?;
+        Ok(match identity::select_exact_name(name, &window) {
+            identity::ExactNameSelection::Unique(c) => Some(c.to_resolved()),
+            _ => None,
+        })
     }
 
     // ============ Extended API Methods ============
@@ -867,24 +856,33 @@ impl MusicBrainzClient {
 
     /// Escape special characters in Lucene queries
     fn escape_query(s: &str) -> String {
-        s.replace('\\', "\\\\")
-            .replace('"', "\\\"")
-            .replace(':', "\\:")
-            .replace('(', "\\(")
-            .replace(')', "\\)")
-            .replace('[', "\\[")
-            .replace(']', "\\]")
-            .replace('{', "\\{")
-            .replace('}', "\\}")
-            .replace('^', "\\^")
-            .replace('~', "\\~")
-            .replace('*', "\\*")
-            .replace('?', "\\?")
-            .replace('!', "\\!")
-            .replace('+', "\\+")
-            .replace('-', "\\-")
-            .replace('&', "\\&")
-            .replace('|', "\\|")
+        identity::lucene_escape(s)
+    }
+}
+
+impl identity::IdentityFetcher for MusicBrainzClient {
+    fn artist_candidates<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> identity::BoxFuture<'a, Result<Vec<identity::ArtistCandidate>, identity::FetchError>> {
+        Box::pin(async move {
+            self.search_artist_candidates(name)
+                .await
+                .map_err(|e| identity::FetchError::Unavailable(e.to_string()))
+        })
+    }
+
+    fn isrc_credits<'a>(
+        &'a self,
+        isrc: &'a str,
+    ) -> identity::BoxFuture<'a, Result<identity::IsrcCredits, identity::FetchError>> {
+        Box::pin(async move {
+            let response = self
+                .search_recording_by_isrc(isrc)
+                .await
+                .map_err(|e| identity::FetchError::Unavailable(e.to_string()))?;
+            Ok(identity::IsrcCredits::from_search(isrc, &response))
+        })
     }
 }
 

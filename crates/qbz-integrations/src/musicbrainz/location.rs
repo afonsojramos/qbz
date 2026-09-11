@@ -266,7 +266,10 @@ pub fn build_scene_cache_key(area_id: &str, seeds: &AffinitySeeds) -> String {
 /// the per-genre limit, the `LocationCandidate` shape. Bumping is how old
 /// entries get abandoned; there is no migration and none is wanted, since a
 /// stale scene is indistinguishable from a fresh one on the wire.
-pub const SCENE_CACHE_KEY_VERSION: &str = "v1";
+/// v2 (2026-09-11, #768): the catalog scope became a REAL key component and
+/// rows are re-derived from the identifier-keyed identity cache on replay;
+/// v1 entries (name-validated by `max(albums_count)`) are orphaned on purpose.
+pub const SCENE_CACHE_KEY_VERSION: &str = "v2";
 
 /// Everything a scene discovery response actually depends on.
 ///
