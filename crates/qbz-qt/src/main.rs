@@ -632,6 +632,14 @@ fn restore_session_once() {
         now_playing::mark_restored_idle();
         playback_qt::publish_queue(&runtime).await;
         let resume = qbz_app::session_persist::pending_resume_position();
+        // #683: `refresh_now_playing` publishes the OPTIMISTIC MPRIS `Playing`
+        // at 0 (a stream is normally about to open, and the poll loop's
+        // play/pause edge corrects it). Nothing opens here — the restored
+        // session is parked — so without this `playerctl status` answered
+        // "Playing" from boot until the first real play, and the sleep
+        // inhibitor was armed for a paused app. Paused, at the resume
+        // position, is the truth.
+        media_controls_qt::push_playback_state(false, resume);
         log::info!("[qbz-qt] session restored (resume position {resume}s)");
     });
 }
