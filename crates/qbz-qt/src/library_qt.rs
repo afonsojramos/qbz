@@ -651,7 +651,7 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
         group: "favorites".into(),
         source: "qobuz".into(),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         subtitle: artist.clone(),
         artist,
         artist_id: album.artist.id.to_string(),

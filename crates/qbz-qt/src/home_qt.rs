@@ -1797,7 +1797,7 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         is_pinned,
         is_favorite,
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist,
         artist_id,
         blacklist_artist_ids,
@@ -1893,7 +1893,7 @@ fn map_slim(index: usize, album: DiscoverAlbum) -> HomeCard {
         // false. A future SlimCard with a heart inherits a correct row.
         is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: subtitle,
         artist_id,
         blacklist_artist_ids,
@@ -2101,7 +2101,7 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         // DiscoverBrowse, so one stamp covers four surfaces.
         is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: album.artist.name,
         artist_id: album.artist.id.to_string(),
         blacklist_artist_ids,

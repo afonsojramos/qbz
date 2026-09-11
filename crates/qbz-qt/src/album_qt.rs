@@ -1086,7 +1086,7 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
         // Heart from the favourite-id cache (see `AlbumCardData::is_favorite`).
         is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
-        title: release.title.clone(),
+        title: format_album_title(&release.title, release.version.as_deref()),
         artist,
         artist_id,
         genre: release
@@ -1213,7 +1213,7 @@ pub async fn load_suggestions(
                 is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
                 is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
                 id: a.id.clone(),
-                title: a.title.clone(),
+                title: format_album_title(&a.title, a.version.as_deref()),
                 artist,
                 artist_id: card_artist_id,
                 genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),

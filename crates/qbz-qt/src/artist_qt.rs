@@ -442,7 +442,10 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
         // mounts the same AlbumCard as Home (see `AlbumCardData::is_favorite`).
         is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
-        title: release.title.clone(),
+        // The Qobuz `version` ("50th Anniversary", "Deluxe") rides the title
+        // everywhere else in the app (`format_album_title`); the card is not
+        // the exception — a title without it points at the wrong edition.
+        title: crate::album_qt::format_album_title(&release.title, release.version.as_deref()),
         artist,
         artist_id,
         genre: release
@@ -631,6 +634,25 @@ pub async fn load_artist(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     artist_id: &str,
 ) -> Result<ArtistViewData, String> {
+    load_artist_with_evidence(runtime, artist_id)
+        .await
+        .map(|(data, _)| data)
+}
+
+/// The raw identity evidence the Artist Page hands the MusicBrainz source
+/// resolver (#768): the page's Qobuz id and the ISRCs of its OWN Popular
+/// Tracks. Collected off the raw `/artist/page` response before the lossy
+/// `map_artist`, so no field is added to the rendered document and no second
+/// Qobuz request is made. Never reaches QML.
+pub(crate) struct SourceEvidence {
+    pub qobuz_id: u64,
+    pub isrcs: Vec<String>,
+}
+
+pub(crate) async fn load_artist_with_evidence(
+    runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    artist_id: &str,
+) -> Result<(ArtistViewData, SourceEvidence), String> {
     let id: u64 = artist_id
         .parse()
         .map_err(|_| format!("invalid artist id: {artist_id}"))?;
@@ -639,7 +661,19 @@ pub async fn load_artist(
         .get_artist_page(id, None)
         .await
         .map_err(|e| e.to_string())?;
-    Ok(map_artist(page))
+    let isrcs = qbz_integrations::musicbrainz::identity::pick_source_isrcs(
+        page.id,
+        page.top_tracks
+            .iter()
+            .flatten()
+            .map(|t| (t.isrc.as_deref(), t.artist.as_ref().map(|a| a.id))),
+        qbz_integrations::musicbrainz::identity::MAX_SOURCE_ISRCS,
+    );
+    let evidence = SourceEvidence {
+        qobuz_id: page.id,
+        isrcs,
+    };
+    Ok((map_artist(page), evidence))
 }
 
 fn map_artist(page: PageArtistResponse) -> ArtistViewData {
@@ -1337,7 +1371,7 @@ pub async fn load_artist_view(
     artist_id: &str,
 ) -> Result<String, String> {
     let t = Instant::now();
-    let mut data = load_artist(runtime, artist_id).await?;
+    let (mut data, evidence) = load_artist_with_evidence(runtime, artist_id).await?;
     // The embedded artist/page buckets use release-date order. A persisted
     // popularity choice must fetch the server ranking before the first paint.
     for section in &mut data.release_sections {
@@ -1408,6 +1442,7 @@ pub async fn load_artist_view(
         generation,
         artist_id.to_string(),
         data.name.clone(),
+        evidence,
         similar_names,
         mb_on,
     );
@@ -1595,6 +1630,7 @@ fn spawn_enrichment(
     generation: u64,
     artist_id: String,
     artist_name: String,
+    evidence: SourceEvidence,
     similar_names: Vec<String>,
     mb_on: bool,
 ) {
@@ -1616,7 +1652,7 @@ fn spawn_enrichment(
         return;
     }
     crate::spawn(async move {
-        let meta = match load_mb_metadata(&runtime, &artist_name).await {
+        let meta = match load_mb_metadata(&runtime, &evidence, &artist_name).await {
             Ok(Some(meta)) => meta,
             Ok(None) => {
                 publish_mb_unavailable(generation);
@@ -1732,27 +1768,40 @@ struct MbMetadata {
     origin: MbOriginJson,
 }
 
-/// Resolve the artist name to an MBID, then fetch its metadata. `Ok(None)` =
-/// MB disabled or no confident match — the caller hides every MB section.
+/// Resolve the SOURCE artist (Qobuz id + name + own Popular-Track ISRCs) to
+/// an MBID, then fetch its metadata. `Ok(None)` = MB disabled, unavailable,
+/// or no identity strong enough to show — the caller hides every MB section.
+/// Missing Network data beats another band's biography (#768). Identity and
+/// voting live in core/`identity`; this only passes evidence and renders.
 async fn load_mb_metadata(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
+    evidence: &SourceEvidence,
     artist_name: &str,
 ) -> Result<Option<MbMetadata>, String> {
     if !runtime.core().musicbrainz_is_enabled().await {
         return Ok(None);
     }
-    let resolved = runtime
+    let resolution = runtime
         .core()
-        .musicbrainz_resolve_artist(artist_name)
-        .await
-        .map_err(|e| e.to_string())?;
-    let Some(resolved) = resolved else {
+        .musicbrainz_resolve_source_artist(evidence.qobuz_id, artist_name, &evidence.isrcs)
+        .await;
+    log::info!(
+        "[qbz-qt] artist {} {:?}: MB identity {} ({} isrcs offered, {} MB requests, cache {})",
+        evidence.qobuz_id,
+        artist_name,
+        resolution.identity.label(),
+        evidence.isrcs.len(),
+        resolution.requests,
+        resolution.cache
+    );
+    let Some(mbid) = resolution
+        .identity
+        .displayable_mbid()
+        .map(str::to_string)
+        .filter(|m| !m.is_empty())
+    else {
         return Ok(None);
     };
-    let mbid = resolved.mbid;
-    if mbid.is_empty() {
-        return Ok(None);
-    }
     let meta = runtime
         .core()
         .musicbrainz_get_artist_metadata(&mbid)

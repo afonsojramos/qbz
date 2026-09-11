@@ -45,6 +45,7 @@ use std::sync::{Arc, Mutex};
 
 use cxx_qt_lib::QString;
 pub(crate) use qbz_app::settings::search_service::InteractionAction;
+use crate::album_qt::format_album_title;
 use qbz_app::settings::search_service::SearchService;
 use qbz_app::shell::AppRuntime;
 use qbz_core::LoggingAdapter;
@@ -320,12 +321,6 @@ fn year_of(date: Option<&str>) -> String {
     date.and_then(|d| d.get(0..4)).unwrap_or("").to_string()
 }
 
-fn format_album_title(title: &str, version: Option<&str>) -> String {
-    match version.map(str::trim).filter(|v| !v.is_empty()) {
-        Some(v) => format!("{title} ({v})"),
-        None => title.to_string(),
-    }
-}
 
 fn map_album(album: &Album) -> CardRow {
     CardRow {

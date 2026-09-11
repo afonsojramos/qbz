@@ -921,6 +921,7 @@ Rectangle {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 2
                 Text {
+                    id: titleText
                     width: parent.width
                     height: 20
                     text: root.title
@@ -930,6 +931,48 @@ Rectangle {
                     font.weight: theme.weightMedium
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
+                    // The title is ALWAYS the full one (version included) and
+                    // elides at the card's width; when it is cut, hovering shows
+                    // the whole text in a small bubble above the line. `truncated`
+                    // is Qt's own verdict on the elision, so a title that fits
+                    // never raises a tooltip — no character counting. Qt's own
+                    // ToolTip, like QualityBadge.qml: a recycled delegate deep
+                    // inside a view cannot name the shell's tooltip overlay.
+                    ToolTip {
+                        id: titleTip
+                        visible: titleArea.containsMouse && titleText.truncated
+                            && root.title !== ""
+                        text: root.title
+                        delay: 350
+                        timeout: -1
+                        padding: 0
+                        x: 0
+                        y: -height - 4
+                        contentWidth: titleTipText.implicitWidth
+                        contentHeight: titleTipText.implicitHeight
+                        contentItem: Text {
+                            id: titleTipText
+                            text: titleTip.text
+                            color: theme.textPrimary
+                            font.pixelSize: 11
+                            font.weight: theme.weightMedium
+                            wrapMode: Text.Wrap
+                            width: Math.min(implicitWidth, 300)
+                            maximumLineCount: 3
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                            leftPadding: 9
+                            rightPadding: 9
+                            topPadding: 5
+                            bottomPadding: 5
+                        }
+                        background: Rectangle {
+                            color: theme.surfaceElevated
+                            radius: theme.radiusSm
+                            border.width: 1
+                            border.color: theme.borderSubtle
+                        }
+                    }
                     MouseArea {
                         id: titleArea
                         anchors.fill: parent
