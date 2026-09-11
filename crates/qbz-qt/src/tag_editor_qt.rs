@@ -2028,10 +2028,20 @@ mod tests {
         assert_eq!(editor_remote_source(&track), "plex");
     }
 
+    /// A fixture directory INSIDE the temp dir. `std::env::temp_dir()` itself
+    /// ends in a separator on Windows (`C:\...\Temp\`) while `Path::parent`
+    /// never yields one, so comparing the two strings failed the Windows gate
+    /// on every run since 2026-08-28. Joining a component normalises both.
+    fn fixture_directory(name: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(name);
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        directory
+    }
+
     #[test]
     fn sacd_editor_resolves_image_directory_and_refuses_direct_writes() {
         let mut open = session_fixture();
-        let directory = std::env::temp_dir();
+        let directory = fixture_directory("qbz-editor-sacd-fixture");
         let image = directory.join("Disc #1.iso");
         for (index, track) in open.tracks.iter_mut().enumerate() {
             track.file_path = qbz_disc::SacdRef {
@@ -2064,7 +2074,7 @@ mod tests {
 
     #[test]
     fn editor_directory_uses_real_parent_for_non_path_group_identity() {
-        let directory = std::env::temp_dir();
+        let directory = fixture_directory("qbz-editor-location-fixture");
         let file = directory.join("qbz-editor-location-fixture.flac");
         let track = LocalTrack {
             file_path: file.to_string_lossy().into_owned(),
