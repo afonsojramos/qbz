@@ -58,63 +58,31 @@ pub(crate) fn qobuz_label_url(label_id: &str) -> String {
     format!("https://play.qobuz.com/label/{label_id}")
 }
 
-/// Long-lived clipboard instance. arboard ties the offer's lifetime to the
-/// LAST live `Clipboard` object: dropping it destroys the X11 selection
-/// window (contents survive only when a clipboard MANAGER accepts the
-/// handoff — KDE ships one, stock GNOME/XFCE/Cinnamon do not) and ends the
-/// Wayland offer with the same rule. The old create-per-copy pattern
-/// therefore worked on KDE and silently lost the text everywhere else
-/// (HiFi-wizard copy report, #514). One instance kept alive for the whole
-/// process serves the offer like any normal app.
-///
-/// This is the #514 fix, verbatim from `share.rs:32-41` — it is NOT
-/// boilerplate to be simplified into a local. A create-per-copy port would
-/// pass every test run on KDE and lose the text everywhere else.
-static CLIPBOARD: std::sync::OnceLock<std::sync::Mutex<Option<arboard::Clipboard>>> =
-    std::sync::OnceLock::new();
+unsafe extern "C" {
+    fn qbz_clipboard_set_text(utf8: *const std::os::raw::c_char, len: i32);
+}
 
-/// Copy `text` to the system clipboard. Runs on a blocking thread —
-/// clipboard backends (X11/Wayland) can block. `share.rs:43-70`.
+/// Copy `text` to the system clipboard through Qt (`cxx/clipboard.cpp`).
 ///
-/// The one adaptation vs the reference: in the Slint app the arm already runs
-/// inside a tokio context, whereas a cxx-qt invokable runs on the **Qt event
-/// loop thread**, where a bare `tokio::task::spawn_blocking` panics ("must be
-/// called from the context of a Tokio runtime"). It therefore goes through
-/// `crate::spawn` (main.rs) onto the process-global runtime first — the same
-/// `spawn` + `spawn_blocking` sandwich `local_ephemeral.rs`, `browse_qt.rs`
-/// and `ambient_qt.rs` already use.
+/// #684: the arboard path before this needed `wlr/ext-data-control`, which
+/// KWin has and Mutter does not; on GNOME it fell back to X11, which works
+/// natively through XWayland and is unreachable inside the Flatpak sandbox —
+/// every Copy link on GNOME + Flatpak logged "clipboard unavailable" and
+/// copied nothing. QClipboard uses the base Wayland data-device protocol,
+/// needs no sandbox permission, and QGuiApplication keeps the offer alive
+/// for the life of the process (the #514 lifetime rule, without the
+/// long-lived instance the arboard port had to carry).
 ///
 /// Fire-and-forget by design: the caller never learns whether the copy
 /// worked, which is why the toast at the call site is unconditional
-/// (`main.rs:12758-12761` does the same).
+/// (`main.rs:12758-12761` does the same). The C++ side queues the write onto
+/// the GUI thread, so this is safe from a cxx-qt invokable or a worker.
 pub(crate) fn copy_to_clipboard(text: String) {
-    crate::spawn(async move {
-        let _ = tokio::task::spawn_blocking(move || {
-            let cell = CLIPBOARD.get_or_init(|| std::sync::Mutex::new(None));
-            let mut guard = match cell.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if guard.is_none() {
-                match arboard::Clipboard::new() {
-                    Ok(c) => *guard = Some(c),
-                    Err(e) => {
-                        log::warn!("[qbz-qt] clipboard unavailable: {e}");
-                        return;
-                    }
-                }
-            }
-            if let Some(clipboard) = guard.as_mut() {
-                if let Err(e) = clipboard.set_text(text) {
-                    log::warn!("[qbz-qt] clipboard set failed: {e}");
-                    // Drop the instance so the next copy reconnects — the
-                    // display connection may have gone away.
-                    *guard = None;
-                }
-            }
-        })
-        .await;
-    });
+    let len = i32::try_from(text.len()).unwrap_or(i32::MAX);
+    // SAFETY: the pointer/length pair is read synchronously inside the call
+    // (the C++ side copies into a QString before queueing), so `text` may be
+    // dropped as soon as the call returns.
+    unsafe { qbz_clipboard_set_text(text.as_ptr().cast(), len) };
 }
 
 /// Artist header ⋯ → Share. `artist/ArtistPageView.slint:530-538` fires

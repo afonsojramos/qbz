@@ -37,17 +37,10 @@ url = "2"
 open = "5"
 dirs = "5"
 
-# Share links (src/share_qt.rs).
-# Rust owns the clipboard on this side because the toast does: cxx-qt-lib 0.7
-# ships no QClipboard binding, and QML cannot publish QbzShell.toastJson, so
-# splitting the copy and its confirmation across the boundary would buy
-# nothing.
-#
-# wayland-data-control: Wayland-native clipboard via the data-control
-# protocols (GNOME/KDE/sway/niri/Hyprland), falling back to X11 when Wayland
-# is absent (#514 — without it arboard is X11-only and every copy fails on
-# Wayland-only sessions).
-arboard = { version = "3", features = ["wayland-data-control"] }
+# Share links (src/share_qt.rs) copy through Qt's own QClipboard
+# (cxx/clipboard.cpp) since #684: arboard's Wayland path needs the
+# wlr/ext-data-control protocol, which Mutter lacks, and its X11 fallback is
+# unreachable inside the Flatpak sandbox.
 
 qbz-core = { path = "../qbz-core" }
 qbz-app = { path = "../qbz-app" }
