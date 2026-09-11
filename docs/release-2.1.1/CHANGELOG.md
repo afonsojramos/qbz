@@ -2,11 +2,19 @@
 
 First maintenance release on top of the 2.1 Qt line. The headline is a marked
 improvement in scroll response and performance in heavily populated sections;
-the rest is a broad round of bug fixes across playback, library, casting and
-the media-server integrations.
+both side panels become resizable and the My QBZ sidebar collapsible; the rest
+is a broad round of bug fixes across playback, library, artist pages, casting
+and the media-server integrations.
 
 ## UI & navigation
 
+- Resizable playlist sidebar (240-480 px, snapping to the mini rail and closed
+  on the way down) and queue/lyrics column (300-600 px, pushing past the
+  maximum opens the Listen List); widths persist across restarts (#771).
+- Collapsible My QBZ sidebar with per-element hide and a header toolbar.
+- Album cards carry the edition/version in the title, with a tooltip when the
+  title is elided.
+- Custom album covers and artist portraits show on cards app-wide.
 - Smoother, faster scroll response and rendering in heavily populated sections.
 - Mouse wheel scrolling is predictable and natural again.
 - Navigation shortcuts survive input focus, and text inputs release focus correctly.
@@ -25,7 +33,10 @@ the media-server integrations.
 
 ## Playback & audio
 
+- Play next / Play later keep their order; Q-mix multiselect, queue and
+  create-playlist work (#442).
 - Recover from a wedged CPAL output stream and rate-limit POLLERR floods (#660).
+- MPRIS reports Paused, not Playing, after a session restore (#683).
 - ALAC signal format is derived from the codec configuration.
 - Rate-scaled ALSA callback buffering.
 - Exclusive mode row restored on macOS and preserved across an audio-backend change (#748).
@@ -47,12 +58,25 @@ the media-server integrations.
 
 ## Integrations
 
+- Artist page identity: MusicBrainz artists are matched by exact quoted name
+  and verified through the page's own top-track ISRCs; an unrelated first
+  result is never accepted, Artist Scene never picks a duplicate by album
+  count, and identities are cached by Qobuz id / MBID with real expiry (#768).
 - MusicBrainz artist data survives 503 and transport failures: retries behind a
   shared rate limiter, cached resolved artists, and a Scene loading heads-up
   with a 5-minute retry timeout.
 
+## Linux desktop
+
+- Copy link works on GNOME under Wayland and inside the Flatpak sandbox: the
+  clipboard now goes through Qt instead of arboard (#684).
+- The window publishes its desktop-file name, so GNOME's dock shows the QBZ
+  icon for the running window and notifications attach to the app.
+
 ## Packaging
 
+- The Nix flake installs the prebuilt release tarball instead of building from
+  source (#744).
 - AUR source packages use `jack` makedepends; Flathub runtime moved to 6.11.
 
 ---
