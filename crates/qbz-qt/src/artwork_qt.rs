@@ -409,8 +409,26 @@ pub fn cached_raw_path(url: &str) -> Option<PathBuf> {
 pub fn attach_cached(sections: &mut [HomeSection]) -> Vec<String> {
     let mut missing: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    // Apply the user's custom cover / portrait overrides before resolving art,
+    // so every Home surface (all tabs, recommendations, pinned/recent rails)
+    // shows them on cards — not just the album/artist pages. ONE store read for
+    // the whole pass; a profile with no overrides skips it entirely. Album
+    // rails key by id, artist rails ("artist"/"artists") by display name (the
+    // card title). Other kinds pass through the album lookup, a harmless no-op
+    // (a playlist/track/radio id is never a registered album key).
+    let overrides = crate::cover_artwork_qt::override_snapshot();
+    let has_overrides = !overrides.is_empty();
     for section in sections.iter_mut() {
+        let is_artist = section.kind == "artist" || section.kind == "artists";
         for card in section.items.iter_mut() {
+            if has_overrides {
+                let fallback = std::mem::take(&mut card.art_url);
+                card.art_url = if is_artist {
+                    overrides.artist(&card.title, fallback)
+                } else {
+                    overrides.album(&card.id, fallback)
+                };
+            }
             if card.art_url.is_empty() {
                 continue;
             }

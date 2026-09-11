@@ -449,11 +449,15 @@ fn map_artist(artist: &Artist) -> ArtistRow {
         },
         // ArtistCard grid cell (200px): full variant (best()) — the down-tier
         // was reverted after the 2026-08-15 owner smoke (contract 04 §3).
-        art_url: artist
-            .image
-            .as_ref()
-            .and_then(|i| i.best().cloned())
-            .unwrap_or_default(),
+        // Prefer the user's custom portrait override (keyed by name).
+        art_url: crate::cover_artwork_qt::prefer_artist_image(
+            &artist.name,
+            artist
+                .image
+                .as_ref()
+                .and_then(|i| i.best().cloned())
+                .unwrap_or_default(),
+        ),
         art_path: String::new(),
         following,
     }

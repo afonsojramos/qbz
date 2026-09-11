@@ -638,6 +638,13 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
             .unwrap_or_default()
     };
     let is_pinned = crate::sidebar_qt::is_pinned("album", &album.id);
+    // Prefer the user's custom cover override (add_custom_cover) when set, so
+    // the Library grid card matches the album page. Borrowed before `album.id`
+    // and `album.image` are moved into the struct below.
+    let cover_url = crate::cover_artwork_qt::prefer_album_cover(
+        &album.id,
+        album.image.best().cloned().unwrap_or_default(),
+    );
     FeedItem {
         is_pinned,
         kind: "album".into(),
@@ -657,8 +664,9 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         // Library grid card: full variant (best()) — the down-tier was
-        // reverted after the 2026-08-15 owner smoke (contract 04 §3).
-        image_url: album.image.best().cloned().unwrap_or_default(),
+        // reverted after the 2026-08-15 owner smoke (contract 04 §3). Custom
+        // cover override applied above.
+        image_url: cover_url,
         is_favorite: true,
         not_streamable,
         cache_status: if fully_cached { 3 } else { 0 },
@@ -668,6 +676,17 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
 }
 
 fn map_artist(artist: Artist) -> FeedItem {
+    // Prefer the user's custom portrait (add_custom_image) when set — keyed by
+    // artist NAME — so the card matches the artist page. Borrowed before
+    // `artist.name`/`artist.image` are moved into the struct.
+    let image_url = crate::cover_artwork_qt::prefer_artist_image(
+        &artist.name,
+        artist
+            .image
+            .as_ref()
+            .and_then(|img| img.best().cloned())
+            .unwrap_or_default(),
+    );
     FeedItem {
         // Pin badge state from the per-user store. The album mapper above
         // has always seeded it; the artist and playlist rows did not, so
@@ -679,10 +698,7 @@ fn map_artist(artist: Artist) -> FeedItem {
         source: "qobuz".into(),
         id: artist.id.to_string(),
         title: artist.name,
-        image_url: artist
-            .image
-            .and_then(|img| img.best().cloned())
-            .unwrap_or_default(),
+        image_url,
         is_favorite: true,
         ..Default::default()
     }
