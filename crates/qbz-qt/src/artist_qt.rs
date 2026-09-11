@@ -442,7 +442,10 @@ pub(crate) fn map_release(release: &PageArtistRelease) -> AlbumCardData {
         // mounts the same AlbumCard as Home (see `AlbumCardData::is_favorite`).
         is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
-        title: release.title.clone(),
+        // The Qobuz `version` ("50th Anniversary", "Deluxe") rides the title
+        // everywhere else in the app (`format_album_title`); the card is not
+        // the exception — a title without it points at the wrong edition.
+        title: crate::album_qt::format_album_title(&release.title, release.version.as_deref()),
         artist,
         artist_id,
         genre: release
