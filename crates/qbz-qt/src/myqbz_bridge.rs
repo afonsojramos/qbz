@@ -74,6 +74,11 @@ pub mod qbz_myqbz_bridge {
         /// Grid card click → nav push + load the detail document.
         #[qinvokable]
         fn open_card(self: Pin<&mut QbzMyQbz>, id: QString);
+        /// Collapsible-sidebar row menu: hide (or unhide) a collection from the
+        /// sidebar tree — the same "hide from sidebar" affordance playlists use.
+        /// The grids and the management listing keep showing it.
+        #[qinvokable]
+        fn set_collection_hidden(self: Pin<&mut QbzMyQbz>, id: QString, hidden: bool);
         /// `grid` is "mixtapes" | "collections" (the document's own identity).
         #[qinvokable]
         fn grid_search(self: Pin<&mut QbzMyQbz>, grid: QString, query: QString);
@@ -381,6 +386,10 @@ impl qbz_myqbz_bridge::QbzMyQbz {
 
     pub fn open_card(self: Pin<&mut Self>, id: QString) {
         crate::myqbz_detail_qt::open(id.to_string());
+    }
+
+    pub fn set_collection_hidden(self: Pin<&mut Self>, id: QString, hidden: bool) {
+        crate::myqbz_qt::set_collection_hidden(id.to_string(), hidden);
     }
 
     pub fn kiosk_grid_artwork(self: Pin<&mut Self>, grid: QString, first: i32, last: i32, px: i32) {

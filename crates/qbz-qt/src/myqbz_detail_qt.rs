@@ -343,6 +343,10 @@ pub struct DetailDoc {
     pub filter_count: i32,
     #[serde(rename = "hasAnyFilter")]
     pub has_any_filter: bool,
+    /// Sidebar visibility (the collapsible My QBZ tree's per-element flag). The
+    /// hero overflow menu flips it — "Hide from sidebar" / "Show in sidebar" —
+    /// which is the unhide surface for a row the sidebar dropped.
+    pub hidden: bool,
     pub items: Vec<DetailRow>,
 }
 
@@ -381,6 +385,7 @@ impl Default for DetailDoc {
             selected_count: 0,
             filter_count: 0,
             has_any_filter: false,
+            hidden: false,
             items: Vec::new(),
         }
     }
@@ -1456,6 +1461,7 @@ fn apply(c: MixtapeCollection, stored_open: Vec<String>) {
         d.meta = album_count_label(item_count);
         d.item_count = item_count as i32;
         d.play_mode = play_mode_str(c.play_mode).to_string();
+        d.hidden = c.hidden;
         d.found = true;
 
         // Header custom cover: non-empty AND resolvable. `cached_path` returns

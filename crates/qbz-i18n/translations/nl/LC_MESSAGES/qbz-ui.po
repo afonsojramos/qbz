@@ -7027,3 +7027,36 @@ msgstr "Dit duurt langer dan normaal — MusicBrainz heeft het mogelijk druk. Pr
 
 msgid "Remove from Mixtape"
 msgstr "Verwijderen uit mixtape"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Inklapbare My QBZ in de zijbalk tonen"
+
+msgid "Show Mixtapes"
+msgstr "Mixtapes tonen"
+
+msgid "Show Collections"
+msgstr "Collecties tonen"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Standaard My QBZ-menu-item verbergen"
+
+msgid "No mixtapes yet."
+msgstr "Nog geen mixtapes."
+
+msgid "No collections yet."
+msgstr "Nog geen verzamelingen."
+
+msgid "Show in sidebar"
+msgstr "Tonen in zijbalk"
+
+msgid "New Mixtape"
+msgstr "Nieuwe mixtape"
+
+msgid "New Collection"
+msgstr "Nieuwe verzameling"
+
+msgid "Name (Z-A)"
+msgstr "Naam (Z-A)"
+
+msgid "Search My QBZ"
+msgstr "My QBZ doorzoeken"

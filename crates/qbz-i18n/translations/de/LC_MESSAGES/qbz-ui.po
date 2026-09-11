@@ -7039,3 +7039,36 @@ msgstr "Das dauert länger als gewöhnlich — MusicBrainz ist möglicherweise a
 
 msgid "Remove from Mixtape"
 msgstr "Aus Mixtape entfernen"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Aufklappbares My QBZ in der Seitenleiste anzeigen"
+
+msgid "Show Mixtapes"
+msgstr "Mixtapes anzeigen"
+
+msgid "Show Collections"
+msgstr "Sammlungen anzeigen"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Standard-My-QBZ-Menüeintrag ausblenden"
+
+msgid "No mixtapes yet."
+msgstr "Noch keine Mixtapes."
+
+msgid "No collections yet."
+msgstr "Noch keine Collections."
+
+msgid "Show in sidebar"
+msgstr "In Seitenleiste anzeigen"
+
+msgid "New Mixtape"
+msgstr "Neue Mixtape"
+
+msgid "New Collection"
+msgstr "Neue Collection"
+
+msgid "Name (Z-A)"
+msgstr "Name (Z-A)"
+
+msgid "Search My QBZ"
+msgstr "My QBZ durchsuchen"

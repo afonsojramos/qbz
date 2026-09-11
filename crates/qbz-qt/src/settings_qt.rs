@@ -910,6 +910,37 @@ pub fn nav_header_compact() -> bool {
     pref_bool("nav_header_compact", NAV_HEADER_COMPACT_DEFAULT)
 }
 
+/// The collapsible "My QBZ" sidebar section (opt-in, OFF by default). When ON it
+/// reveals the three sub-toggles below; a fresh profile keeps the flat entry.
+pub fn collapsible_myqbz() -> bool {
+    pref_bool("collapsible_myqbz", false)
+}
+pub fn myqbz_show_mixtapes() -> bool {
+    pref_bool("myqbz_show_mixtapes", true)
+}
+pub fn myqbz_show_collections() -> bool {
+    pref_bool("myqbz_show_collections", true)
+}
+pub fn hide_standard_myqbz() -> bool {
+    pref_bool("hide_standard_myqbz", false)
+}
+
+// Sidebar tree collapse state — persisted so a collapsed section stays
+// collapsed across restarts (owner request 2026-09-10). All default EXPANDED
+// (false). The playlist tree and the three My QBZ sections each keep their own.
+pub fn sidebar_playlists_collapsed() -> bool {
+    pref_bool("sidebar_playlists_collapsed", false)
+}
+pub fn myqbz_collapsed() -> bool {
+    pref_bool("myqbz_collapsed", false)
+}
+pub fn myqbz_mixtapes_collapsed() -> bool {
+    pref_bool("myqbz_mixtapes_collapsed", false)
+}
+pub fn myqbz_collections_collapsed() -> bool {
+    pref_bool("myqbz_collections_collapsed", false)
+}
+
 /// Playlist rows draw a 2x2 micro-collage of track covers (Slint
 /// SidebarState.playlist-collage). Opt-OUT — default ON.
 pub fn sidebar_playlist_collage() -> bool {
@@ -2092,6 +2123,23 @@ pub struct SettingsDoc {
     pub nav_in_sidebar: bool,
     #[serde(rename = "navHeaderCompact")]
     pub nav_header_compact: bool,
+    #[serde(rename = "collapsibleMyqbz")]
+    pub collapsible_myqbz: bool,
+    #[serde(rename = "myqbzShowMixtapes")]
+    pub myqbz_show_mixtapes: bool,
+    #[serde(rename = "myqbzShowCollections")]
+    pub myqbz_show_collections: bool,
+    #[serde(rename = "hideStandardMyqbz")]
+    pub hide_standard_myqbz: bool,
+    // Persisted sidebar-tree collapse state (default expanded).
+    #[serde(rename = "sidebarPlaylistsCollapsed")]
+    pub sidebar_playlists_collapsed: bool,
+    #[serde(rename = "myqbzCollapsed")]
+    pub myqbz_collapsed: bool,
+    #[serde(rename = "myqbzMixtapesCollapsed")]
+    pub myqbz_mixtapes_collapsed: bool,
+    #[serde(rename = "myqbzCollectionsCollapsed")]
+    pub myqbz_collections_collapsed: bool,
     #[serde(rename = "myQbzLabel")]
     pub my_qbz_label: String,
     #[serde(rename = "sidebarPlaylistCollage")]
@@ -2625,6 +2673,14 @@ pub async fn publish_snapshot() {
             ),
             nav_in_sidebar: nav_in_sidebar(),
             nav_header_compact: nav_header_compact(),
+            collapsible_myqbz: collapsible_myqbz(),
+            myqbz_show_mixtapes: myqbz_show_mixtapes(),
+            myqbz_show_collections: myqbz_show_collections(),
+            hide_standard_myqbz: hide_standard_myqbz(),
+            sidebar_playlists_collapsed: sidebar_playlists_collapsed(),
+            myqbz_collapsed: myqbz_collapsed(),
+            myqbz_mixtapes_collapsed: myqbz_mixtapes_collapsed(),
+            myqbz_collections_collapsed: myqbz_collections_collapsed(),
             my_qbz_label: myqbz_label(),
             sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
             queue_track_artwork: pref_bool("queue_track_artwork", false),
@@ -3453,6 +3509,49 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
         "nav-header-compact" => {
             save_pref("nav_header_compact", serde_json::json!(value));
             crate::shell_bridge::ui(move |mut b| b.as_mut().set_nav_header_compact(value));
+            Ok(Apply::None)
+        }
+        // Collapsible My QBZ sidebar opt-ins. Persisted here; the sidebar reads
+        // them live from the republished settingsJson (Phase 3 wires the tree).
+        "collapsible-myqbz" => {
+            save_pref("collapsible_myqbz", serde_json::json!(value));
+            // When turned ON, populate the tree now: `publish_sidebar_tree()`
+            // no-ops while the opt-in is OFF, so without this the sidebar would
+            // stay empty until the next mixtape mutation. (Turning OFF needs no
+            // push — the sidebar hides the tree off the republished settings.)
+            if value {
+                crate::myqbz_qt::publish_sidebar_tree();
+            }
+            Ok(Apply::None)
+        }
+        "myqbz-show-mixtapes" => {
+            save_pref("myqbz_show_mixtapes", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-show-collections" => {
+            save_pref("myqbz_show_collections", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "hide-standard-myqbz" => {
+            save_pref("hide_standard_myqbz", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        // Sidebar-tree collapse state — persisted and read live from the
+        // republished settingsJson by Sidebar.qml (no bridge property needed).
+        "sidebar-playlists-collapsed" => {
+            save_pref("sidebar_playlists_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-collapsed" => {
+            save_pref("myqbz_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-mixtapes-collapsed" => {
+            save_pref("myqbz_mixtapes_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-collections-collapsed" => {
+            save_pref("myqbz_collections_collapsed", serde_json::json!(value));
             Ok(Apply::None)
         }
         "sidebar-playlist-collage" => {

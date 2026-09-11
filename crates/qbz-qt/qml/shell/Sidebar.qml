@@ -172,8 +172,100 @@ Rectangle {
 
     // Playlist tree state (phase 7).
     property bool searchOpen: false
-    property bool playlistsCollapsed: false
+    // PERSISTED collapse state (owner request 2026-09-10): read live from the
+    // republished settingsJson, toggled through `settingsBool`, so a collapsed
+    // section stays collapsed across restarts. Default expanded.
+    readonly property bool playlistsCollapsed: settingsDoc.sidebarPlaylistsCollapsed === true
     property string activePlaylistId: ""
+
+    // ---- Collapsible My QBZ tree (opt-in) -------------------------------
+    // Collapse state persisted the same way as the playlist tree above. The
+    // parent "My QBZ" header collapses the whole block; each section collapses
+    // its own list.
+    readonly property bool myqbzCollapsed: settingsDoc.myqbzCollapsed === true
+    readonly property bool myqbzMixtapesCollapsed: settingsDoc.myqbzMixtapesCollapsed === true
+    readonly property bool myqbzCollectionsCollapsed: settingsDoc.myqbzCollectionsCollapsed === true
+    // The light tree feed (myqbz_qt::publish_sidebar_tree): both grids' rows as
+    // {mixtapes:[{id,name,hidden}], collections:[…]}. GUARDED parse, same
+    // precedent as `settingsDoc`. Hidden rows are dropped here so the sidebar
+    // honours the per-element "Hide from sidebar" flag.
+    // EXPLICIT refresh, not a declarative binding: a plain `var` block binding
+    // on QbzShell.myqbzTreeJson did not re-evaluate on republish here (the tree
+    // stayed empty though Rust logged the feed). The grids drive their model the
+    // same way — `onItemsChanged` + `Component.onCompleted` (MyQbzGridView.qml:
+    // 152-153) — so mirror that: a Connections handler re-parses on every
+    // change, and `Component.onCompleted` seeds whatever is already published.
+    // PLAIN arrays assigned together in refreshMyqbzTree — NOT derived
+    // bindings. A derived `var` binding on another `var` (myqbzMixtapes:
+    // _visibleRows(myqbzTree.mixtapes)) did not re-evaluate when the source was
+    // assigned imperatively (the feed arrived — proven in the log — yet the
+    // rows stayed empty). Assigning the final arrays directly makes the
+    // Repeater/empty-state bindings react the ordinary way.
+    property var myqbzMixtapes: []
+    property var myqbzCollections: []
+    // Raw feed rows (hidden dropped), kept so a search / sort change re-derives
+    // the visible arrays without a DB round trip.
+    property var _myqbzMixRaw: []
+    property var _myqbzColRaw: []
+    // Playlists-parity toolbar state: inline search over the tree, and a simple
+    // A–Z / Z–A name sort.
+    property bool myqbzSearchOpen: false
+    property string myqbzSearch: ""
+    property bool myqbzSortAsc: true
+    function _visibleRows(arr) {
+        var out = []
+        if (!arr) return out
+        for (var i = 0; i < arr.length; ++i)
+            if (arr[i] && arr[i].hidden !== true) out.push(arr[i])
+        return out
+    }
+    // Apply the live search filter + name sort to one raw list.
+    function _filterSortMyqbz(arr) {
+        var q = root.myqbzSearch.trim().toLowerCase()
+        var out = []
+        for (var i = 0; i < arr.length; ++i) {
+            var r = arr[i]
+            if (!r) continue
+            if (q !== "" && String(r.name).toLowerCase().indexOf(q) === -1) continue
+            out.push(r)
+        }
+        out.sort(function (a, b) {
+            var an = String(a.name).toLowerCase()
+            var bn = String(b.name).toLowerCase()
+            if (an === bn) return 0
+            var lt = an < bn
+            return root.myqbzSortAsc ? (lt ? -1 : 1) : (lt ? 1 : -1)
+        })
+        return out
+    }
+    function _applyMyqbz() {
+        root.myqbzMixtapes = _filterSortMyqbz(root._myqbzMixRaw)
+        root.myqbzCollections = _filterSortMyqbz(root._myqbzColRaw)
+    }
+    function refreshMyqbzTree() {
+        var t
+        try { t = JSON.parse(QbzShell.myqbzTreeJson) }
+        catch (e) { t = ({ "mixtapes": [], "collections": [] }) }
+        root._myqbzMixRaw = _visibleRows(t.mixtapes)
+        root._myqbzColRaw = _visibleRows(t.collections)
+        root._applyMyqbz()
+    }
+    onMyqbzSearchChanged: root._applyMyqbz()
+    onMyqbzSortAscChanged: root._applyMyqbz()
+    Connections {
+        target: QbzShell
+        function onMyqbzTreeJsonChanged() { root.refreshMyqbzTree() }
+    }
+    Component.onCompleted: root.refreshMyqbzTree()
+    // Master gate + the two section gates + the standard-entry suppressor.
+    readonly property bool myqbzTreeOn: settingsDoc.collapsibleMyqbz === true
+    readonly property bool myqbzShowMixtapes: settingsDoc.myqbzShowMixtapes !== false
+    readonly property bool myqbzShowCollections: settingsDoc.myqbzShowCollections !== false
+    // The collapsible tree REPLACES the flat My QBZ nav entry — its parent
+    // header click reaches the same surface — so the two are mutually
+    // exclusive: whenever the tree is on, the classic row is suppressed. (No
+    // separate toggle; keeping both would be the same entry twice.)
+    readonly property bool hideStandardMyqbz: myqbzTreeOn
     // ---- Large-NPB dock space reservation -------------------------------
     // The cover+spectrum dock is an AppShell-ROOT overlay pinned flush to the
     // WINDOW bottom-left, so it extends the bar's height BELOW this sidebar
@@ -363,6 +455,37 @@ Rectangle {
         visibleFolders: root.visibleFolders
     }
 
+    // Right-click menu for a collapsible My QBZ tree row (mixtape/collection):
+    // one action, "Hide from sidebar".
+    MyQbzSidebarMenu { id: myqbzRowMenu }
+
+    // My QBZ header "+" — create a new Mixtape or Collection (app-global modal).
+    CardMenu {
+        id: myqbzPlusMenu
+        menuWidth: 190
+        entries: [
+            { "label": QbzSession.tr("New Mixtape", QbzSession.trRev), "icon": "cassette-tape", "action": "mixtape" },
+            { "label": QbzSession.tr("New Collection", QbzSession.trRev), "icon": "library-big", "action": "collection" },
+        ]
+        onPicked: function (a) { QbzShell.myqbzCreateOpen(a) }
+    }
+    // My QBZ header "..." — a simple name sort plus refresh.
+    CardMenu {
+        id: myqbzMoreMenu
+        menuWidth: 190
+        entries: [
+            { "label": QbzSession.tr("Name (A-Z)", QbzSession.trRev), "icon": "chevron-down", "action": "az" },
+            { "label": QbzSession.tr("Name (Z-A)", QbzSession.trRev), "icon": "chevron-up", "action": "za" },
+            { "sep": true },
+            { "label": QbzSession.tr("Refresh", QbzSession.trRev), "icon": "refresh-cw", "action": "refresh" },
+        ]
+        onPicked: function (a) {
+            if (a === "az") root.myqbzSortAsc = true
+            else if (a === "za") root.myqbzSortAsc = false
+            else if (a === "refresh") QbzShell.myqbzRefreshTree()
+        }
+    }
+
     width: QbzShell.sidebarState === 2 ? 0
          : QbzShell.sidebarState === 1 ? theme.sidebarMiniWidth
          : theme.sidebarOpenWidth
@@ -528,6 +651,130 @@ Rectangle {
         }
     }
 
+    // A collapsible My QBZ tree HEADER: "My QBZ" / "Mixtapes" / "Collections".
+    // TWO hit-areas by owner intent — the TEXT is a link to that surface, the
+    // CHEVRON only collapses its list. `indent` nests the section headers under
+    // the parent. Muted, discreet; not a full nav row.
+    component MyQbzHeader: Rectangle {
+        id: mqHeader
+        property string label: ""
+        property bool expanded: true
+        property int indent: 0
+        property bool showChevron: true
+        signal linkClicked()
+        signal toggle()
+
+        width: parent ? parent.width : 0
+        height: 30
+        radius: 6
+        color: (mqLinkArea.containsMouse || mqChevArea.containsMouse)
+            ? theme.surfaceHover : "transparent"
+
+        Row {
+            anchors.fill: parent
+            anchors.leftMargin: 8 + mqHeader.indent
+            anchors.rightMargin: 4
+            spacing: 4
+
+            Text {
+                id: mqLinkText
+                width: parent.width - 26
+                height: parent.height
+                text: mqHeader.label
+                color: mqLinkArea.containsMouse ? theme.textPrimary : theme.textSecondary
+                font.pixelSize: mqHeader.indent > 0 ? 12 : 13
+                font.weight: theme.weightMedium
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+                MouseArea {
+                    id: mqLinkArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: mqHeader.linkClicked()
+                }
+            }
+            Rectangle {
+                width: 22
+                height: 22
+                radius: 4
+                visible: mqHeader.showChevron
+                anchors.verticalCenter: parent.verticalCenter
+                color: mqChevArea.containsMouse ? theme.surfaceElevated : "transparent"
+                QbzIcon {
+                    name: mqHeader.expanded ? "chevron-down" : "chevron-right"
+                    width: 14
+                    height: 14
+                    anchors.centerIn: parent
+                    tintName: mqChevArea.containsMouse ? "textPrimary" : "muted"
+                }
+                MouseArea {
+                    id: mqChevArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: mqHeader.toggle()
+                }
+            }
+        }
+    }
+
+    // A collapsible My QBZ tree ITEM: one mixtape/collection. Click opens its
+    // detail (openCard); right-click offers "Hide from sidebar".
+    component MyQbzItem: Rectangle {
+        id: mqItem
+        property string itemId: ""
+        property string label: ""
+        property bool isActive: false
+
+        width: parent ? parent.width : 0
+        height: 28
+        radius: 6
+        color: (mqItemArea.containsMouse || mqItem.isActive)
+            ? theme.surfaceHover : "transparent"
+
+        Row {
+            anchors.fill: parent
+            // Indented past the section header's text so items read as children.
+            anchors.leftMargin: 26
+            anchors.rightMargin: 8
+            spacing: 8
+
+            QbzIcon {
+                name: "music"
+                width: 13
+                height: 13
+                anchors.verticalCenter: parent.verticalCenter
+                tintName: (mqItemArea.containsMouse || mqItem.isActive) ? "textPrimary" : "muted"
+            }
+            Text {
+                width: parent.width - 21
+                height: parent.height
+                text: mqItem.label
+                color: (mqItemArea.containsMouse || mqItem.isActive)
+                    ? theme.textPrimary : theme.textSecondary
+                font.pixelSize: 12
+                verticalAlignment: Text.AlignVCenter
+                elide: Text.ElideRight
+            }
+        }
+        MouseArea {
+            id: mqItemArea
+            anchors.fill: parent
+            hoverEnabled: true
+            acceptedButtons: Qt.LeftButton | Qt.RightButton
+            cursorShape: Qt.PointingHandCursor
+            onClicked: function (mouse) {
+                if (mouse.button === Qt.RightButton) {
+                    var lx = mqItem.width - myqbzRowMenu.menuWidth
+                    myqbzRowMenu.openForItem(mqItem.itemId, mqItem, Math.max(0, lx), 26)
+                } else {
+                    QbzShell.myqbzOpenCard(mqItem.itemId)
+                }
+            }
+        }
+    }
+
     Column {
         anchors.fill: parent
         // Mini left/right are ASYMMETRIC on purpose — see `miniPadLeft` at the
@@ -563,7 +810,286 @@ Rectangle {
                 delegate: NavRow {
                     required property var modelData
                     section: modelData
+                    // Offline-gated as before, PLUS the opt-in suppressor: with
+                    // the collapsible tree on and "Hide standard My QBZ menu
+                    // entry" checked, the flat My QBZ section row gives way to
+                    // the tree block mounted right below this Repeater.
                     visible: !(modelData.qobuz && QbzSession.offline)
+                        && !(modelData.id === "myqbz" && root.hideStandardMyqbz)
+                }
+            }
+
+            // ---- Collapsible My QBZ tree (opt-in) ----------------------
+            // Sits right under the four section rows (My QBZ is the last of
+            // them), so its expanded tree reads as that section's contents.
+            // Hidden on the mini rail and whenever the opt-in is off. The
+            // parent "My QBZ" header collapses the whole block; each section
+            // header links to its grid and collapses its own list.
+            Column {
+                id: myqbzTree
+                visible: !root.mini && root.myqbzTreeOn
+                width: parent.width
+                spacing: 2
+
+                // Parent header TOOLBAR — Playlists-parity: branding icon +
+                // title (a link to the My QBZ surface) on the LEFT; search /
+                // new / more / collapse FLOATING on the right, their chevron
+                // aligned to the playlist carets (rightMargin 4 → the 22px box's
+                // 15px icon centres on width-15, same as the row carets and the
+                // Mixtapes/Collections sub-chevrons).
+                Item {
+                    width: parent.width
+                    height: 34
+
+                    // Branding icon — user image, else the baked qbz-symbolic.
+                    Item {
+                        id: myqbzBrandIcon
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 18
+                        height: 18
+                        Image {
+                            visible: navFlyout.brandingIconPath !== ""
+                            source: navFlyout.brandingIconPath
+                            width: 16
+                            height: 16
+                            anchors.centerIn: parent
+                            fillMode: Image.PreserveAspectFit
+                            mipmap: true
+                        }
+                        QbzIcon {
+                            visible: navFlyout.brandingIconPath === ""
+                            name: "qbz-symbolic"
+                            width: 16
+                            height: 16
+                            anchors.centerIn: parent
+                            tintName: "secondary"
+                        }
+                    }
+
+                    // Floating right-hand controls.
+                    Row {
+                        id: myqbzHeaderBtns
+                        anchors.right: parent.right
+                        anchors.rightMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 4
+
+                        // Search toggle.
+                        Rectangle {
+                            width: 22
+                            height: 22
+                            radius: 4
+                            color: (myqbzSearchArea.containsMouse || root.myqbzSearchOpen) ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                name: "search"
+                                width: 15
+                                height: 15
+                                anchors.centerIn: parent
+                                tintName: (myqbzSearchArea.containsMouse || root.myqbzSearchOpen) ? "textPrimary" : "muted"
+                            }
+                            MouseArea {
+                                id: myqbzSearchArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    root.myqbzSearchOpen = !root.myqbzSearchOpen
+                                    if (!root.myqbzSearchOpen) {
+                                        myqbzSearchEdit.text = ""
+                                        root.myqbzSearch = ""
+                                    } else {
+                                        myqbzSearchEdit.forceActiveFocus()
+                                    }
+                                }
+                            }
+                        }
+                        // New (+).
+                        Rectangle {
+                            width: 22
+                            height: 22
+                            radius: 4
+                            color: myqbzPlusArea.containsMouse ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                name: "plus"
+                                width: 16
+                                height: 16
+                                anchors.centerIn: parent
+                                tintName: myqbzPlusArea.containsMouse ? "textPrimary" : "muted"
+                            }
+                            MouseArea {
+                                id: myqbzPlusArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: myqbzPlusMenu.openBelowLeft(myqbzPlusArea)
+                            }
+                        }
+                        // More (…) — sort + refresh.
+                        Rectangle {
+                            width: 22
+                            height: 22
+                            radius: 4
+                            color: myqbzMoreArea.containsMouse ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                name: "ellipsis"
+                                width: 15
+                                height: 15
+                                anchors.centerIn: parent
+                                tintName: myqbzMoreArea.containsMouse ? "textPrimary" : "muted"
+                            }
+                            MouseArea {
+                                id: myqbzMoreArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: myqbzMoreMenu.openBelowLeft(myqbzMoreArea)
+                            }
+                        }
+                        // Collapse chevron (down = expanded).
+                        Rectangle {
+                            width: 22
+                            height: 22
+                            radius: 4
+                            color: myqbzChevArea.containsMouse ? theme.surfaceHover : "transparent"
+                            QbzIcon {
+                                name: root.myqbzCollapsed ? "chevron-right" : "chevron-down"
+                                width: 15
+                                height: 15
+                                anchors.centerIn: parent
+                                tintName: myqbzChevArea.containsMouse ? "textPrimary" : "muted"
+                            }
+                            MouseArea {
+                                id: myqbzChevArea
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: QbzBridge.settingsBool("myqbz-collapsed", !root.myqbzCollapsed)
+                            }
+                        }
+                    }
+
+                    // Title — a link to the My QBZ surface (Collections). Fills
+                    // between the icon and the floating controls.
+                    Text {
+                        visible: !root.myqbzSearchOpen
+                        anchors.left: myqbzBrandIcon.right
+                        anchors.leftMargin: 8
+                        anchors.right: myqbzHeaderBtns.left
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: navFlyout.brandingLabel
+                        color: myqbzTitleArea.containsMouse ? theme.textPrimary : theme.textSecondary
+                        font.pixelSize: 13
+                        font.weight: theme.weightMedium
+                        elide: Text.ElideRight
+                        MouseArea {
+                            id: myqbzTitleArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: QbzShell.navigateTo("collections")
+                        }
+                    }
+                    // Inline search field (filters the tree client-side).
+                    Rectangle {
+                        visible: root.myqbzSearchOpen
+                        anchors.left: myqbzBrandIcon.right
+                        anchors.leftMargin: 8
+                        anchors.right: myqbzHeaderBtns.left
+                        anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 22
+                        radius: 4
+                        color: theme.surfaceElevated
+                        border.width: 1
+                        border.color: theme.borderSubtle
+                        TextInput {
+                            id: myqbzSearchEdit
+                            anchors.fill: parent
+                            anchors.leftMargin: 6
+                            color: theme.textPrimary
+                            font.pixelSize: 12
+                            verticalAlignment: Text.AlignVCenter
+                            clip: true
+                            onTextEdited: root.myqbzSearch = text
+                            Text {
+                                visible: myqbzSearchEdit.text === ""
+                                anchors.fill: parent
+                                text: QbzSession.tr("Search My QBZ", QbzSession.trRev)
+                                color: theme.textMuted
+                                font.pixelSize: 12
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                    }
+                }
+
+                // Mixtapes section (gated by its own opt-in).
+                MyQbzHeader {
+                    visible: !root.myqbzCollapsed && root.myqbzShowMixtapes
+                    width: parent.width
+                    indent: 12
+                    label: QbzSession.tr("Mixtapes", QbzSession.trRev)
+                    expanded: !root.myqbzMixtapesCollapsed
+                    onLinkClicked: QbzShell.navigateTo("mixtapes")
+                    onToggle: QbzBridge.settingsBool("myqbz-mixtapes-collapsed", !root.myqbzMixtapesCollapsed)
+                }
+                Repeater {
+                    model: (!root.myqbzCollapsed && root.myqbzShowMixtapes
+                            && !root.myqbzMixtapesCollapsed) ? root.myqbzMixtapes : []
+                    delegate: MyQbzItem {
+                        required property var modelData
+                        width: myqbzTree.width
+                        itemId: String(modelData.id)
+                        label: String(modelData.name)
+                    }
+                }
+                Text {
+                    visible: !root.myqbzCollapsed && root.myqbzShowMixtapes
+                        && !root.myqbzMixtapesCollapsed && root.myqbzMixtapes.length === 0
+                    width: parent.width
+                    leftPadding: 26
+                    height: 22
+                    text: QbzSession.tr("No mixtapes yet.", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+
+                // Collections section (gated by its own opt-in).
+                MyQbzHeader {
+                    visible: !root.myqbzCollapsed && root.myqbzShowCollections
+                    width: parent.width
+                    indent: 12
+                    label: QbzSession.tr("Collections", QbzSession.trRev)
+                    expanded: !root.myqbzCollectionsCollapsed
+                    onLinkClicked: QbzShell.navigateTo("collections")
+                    onToggle: QbzBridge.settingsBool("myqbz-collections-collapsed", !root.myqbzCollectionsCollapsed)
+                }
+                Repeater {
+                    model: (!root.myqbzCollapsed && root.myqbzShowCollections
+                            && !root.myqbzCollectionsCollapsed) ? root.myqbzCollections : []
+                    delegate: MyQbzItem {
+                        required property var modelData
+                        width: myqbzTree.width
+                        itemId: String(modelData.id)
+                        label: String(modelData.name)
+                    }
+                }
+                Text {
+                    visible: !root.myqbzCollapsed && root.myqbzShowCollections
+                        && !root.myqbzCollectionsCollapsed && root.myqbzCollections.length === 0
+                    width: parent.width
+                    leftPadding: 26
+                    height: 22
+                    text: QbzSession.tr("No collections yet.", QbzSession.trRev)
+                    color: theme.textMuted
+                    font.pixelSize: 11
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
                 }
             }
 
@@ -1081,7 +1607,7 @@ Rectangle {
                     anchors.fill: parent
                     hoverEnabled: true
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.playlistsCollapsed = !root.playlistsCollapsed
+                    onClicked: QbzBridge.settingsBool("sidebar-playlists-collapsed", !root.playlistsCollapsed)
                 }
             }
         }

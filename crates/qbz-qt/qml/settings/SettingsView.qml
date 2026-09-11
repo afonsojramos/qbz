@@ -70,6 +70,7 @@ Item {
         { label: QbzSession.tr("Audio", QbzSession.trRev), section: 0 },
         { label: QbzSession.tr("Playback", QbzSession.trRev), section: 1 },
         { label: QbzSession.tr("Appearance", QbzSession.trRev), section: 2 },
+        { label: QbzSession.tr("Navigation", QbzSession.trRev), section: 10 },
         { label: QbzSession.tr("Offline", QbzSession.trRev), section: 3 },
         { label: QbzSession.tr("Local Library", QbzSession.trRev), section: 4 },
         { label: QbzSession.tr("Blacklist", QbzSession.trRev), section: 5 },
@@ -243,6 +244,12 @@ Item {
                         label: QbzSession.tr("Appearance", QbzSession.trRev)
                         active: root.section === 2
                         onClicked: QbzBridge.settingsSetSection(2)
+                    }
+                    SubNavItem {
+                        name: "compass"
+                        label: QbzSession.tr("Navigation", QbzSession.trRev)
+                        active: root.section === 10
+                        onClicked: QbzBridge.settingsSetSection(10)
                     }
                     SubNavItem {
                         name: "cloud-download"
@@ -421,6 +428,15 @@ Item {
                             panelIndex: 2
                             sourceComponent: Component {
                                 AppearanceSettings { kioskHost: root.kioskHost;
+                                    width: parent.width
+                                    doc: root.doc
+                                }
+                            }
+                        }
+                        Panel {
+                            panelIndex: 10
+                            sourceComponent: Component {
+                                NavigationSettings { kioskHost: root.kioskHost;
                                     width: parent.width
                                     doc: root.doc
                                 }
