@@ -29,7 +29,16 @@ class ProcessTests(unittest.TestCase):
         self.root = Path(self.directory.name)
         self.log = self.root / "smoke.log"
 
-    def run_fake(self, code, seconds=.25):
+    # The default window is generous ON PURPOSE. The early-exit fakes finish in
+    # a few hundred ms and `observe` returns as soon as they do, so the window
+    # costs nothing there — but a fresh Python interpreter on a loaded CI
+    # runner can take longer than a 250 ms window to reach its crash. When it
+    # did, the deadline expired with the child still alive, SIGTERM and the
+    # self-inflicted SIGSEGV raced, and the smoke rejected the run as
+    # "unexpected process exit status -11" instead of "exited before" (the
+    # 2026-09-11 pre-flight flake). The two live-process tests pass their own
+    # short window explicitly: they are the ones that must wait it out.
+    def run_fake(self, code, seconds=5):
         return smoke.observe([sys.executable, "-u", "-c", code], dict(os.environ),
                              seconds, self.log, grace=.15)
 
@@ -65,7 +74,7 @@ class ProcessTests(unittest.TestCase):
                               f'subprocess.run([sys.executable, "-u", "-c", {child!r}])\n')
 
     def test_live_process_is_accepted_and_reaped(self):
-        result = self.run_fake(STARTUP + "import time; time.sleep(60)\n")
+        result = self.run_fake(STARTUP + "import time; time.sleep(60)\n", seconds=.25)
         self.assertTrue(result["survived"])
         self.assertGreaterEqual(result["observed_seconds"], .25)
         self.assertEqual(result["returncode"], -signal.SIGTERM)
@@ -74,7 +83,7 @@ class ProcessTests(unittest.TestCase):
     def test_live_process_ignoring_term_is_killed_and_reaped(self):
         result = self.run_fake('import signal, time\n'
                               'signal.signal(signal.SIGTERM, signal.SIG_IGN)\n'
-                              + STARTUP + 'time.sleep(60)\n')
+                              + STARTUP + 'time.sleep(60)\n', seconds=.25)
         self.assertEqual(result["returncode"], -signal.SIGKILL)
         self.assert_reaped(result["pid"])
 
@@ -86,7 +95,7 @@ class ProcessTests(unittest.TestCase):
                 '    raise SystemExit(0)\n'
                 'signal.signal(signal.SIGTERM, stop)\n'
                 'print("child=" + str(child.pid), flush=True)\n' + STARTUP + 'time.sleep(60)\n')
-        result = self.run_fake(code)
+        result = self.run_fake(code, seconds=.25)
         child = int(self.log.read_text().splitlines()[0].split("=", 1)[1])
         self.assert_reaped(result["pid"])
         with self.assertRaises(ProcessLookupError):
@@ -96,7 +105,7 @@ class ProcessTests(unittest.TestCase):
         for logs in ('print("log\\n" * 12, flush=True)\n',
                      STARTUP + 'print("ReferenceError: missing", flush=True)\n'):
             with self.subTest(logs=logs), self.assertRaises(RuntimeError):
-                self.run_fake(logs + 'import time; time.sleep(60)\n')
+                self.run_fake(logs + 'import time; time.sleep(60)\n', seconds=.25)
             result = json.loads(Path(str(self.log) + ".json").read_text())
             self.assertTrue(result["survived"])
             self.assert_reaped(result["pid"])
