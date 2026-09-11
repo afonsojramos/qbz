@@ -894,6 +894,35 @@ pub fn set_sidebar_state(state: i32) -> i32 {
     state
 }
 
+/// Persisted open-sidebar width (#771), clamped to the panel's range;
+/// absent = the pre-#771 240.
+pub fn sidebar_width() -> i32 {
+    crate::panel_resize::clamp_sidebar_width(pref_i32(
+        "sidebar_width",
+        crate::panel_resize::SIDEBAR_MIN_WIDTH,
+    ))
+}
+
+pub fn set_sidebar_width(width: i32) -> i32 {
+    let width = crate::panel_resize::clamp_sidebar_width(width);
+    save_pref("sidebar_width", serde_json::Value::Number(width.into()));
+    width
+}
+
+/// Persisted queue/lyrics column width (#771), clamped; absent = 300.
+pub fn queue_panel_width() -> i32 {
+    crate::panel_resize::clamp_queue_width(pref_i32(
+        "queue_panel_width",
+        crate::panel_resize::QUEUE_MIN_WIDTH,
+    ))
+}
+
+pub fn set_queue_panel_width(width: i32) -> i32 {
+    let width = crate::panel_resize::clamp_queue_width(width);
+    save_pref("queue_panel_width", serde_json::Value::Number(width.into()));
+    width
+}
+
 /// Section-nav placement defaults — the Slint `ShellState` literals
 /// (state.slint:4124 / :4129). Sidebar ON, compact-header OFF.
 pub const NAV_IN_SIDEBAR_DEFAULT: bool = true;

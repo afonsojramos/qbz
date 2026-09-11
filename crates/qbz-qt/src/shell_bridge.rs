@@ -29,6 +29,17 @@ pub mod qbz_shell {
         // Seeded from ui_prefs `sidebar_state` and rewritten by cycle_sidebar
         // (1:1 Slint: persist-sidebar-state).
         #[qproperty(i32, sidebar_state)]
+        // #771: the open sidebar's width (240..480) and the queue/lyrics
+        // column's width (300..600), both persisted in ui_prefs and clamped
+        // in Rust (`panel_resize`). QML binds them; the drag handles call the
+        // `*_drag` invokables below and never write these directly.
+        #[qproperty(i32, sidebar_width)]
+        #[qproperty(i32, queue_panel_width)]
+        // True from the moment a DRAG snaps the sidebar's state until the next
+        // pointer move that merely follows the pointer. Set BEFORE the state
+        // so QML's width Behavior (disabled while dragging) sees it and
+        // animates the 240<->64 jump instead of teleporting.
+        #[qproperty(bool, sidebar_snapping)]
         #[qproperty(bool, queue_open)]
         // --- Section-nav placement (Slint ShellState) ---------------------
         // ON  = the Discover / Library / Local Library / My QBZ rows live in
@@ -503,6 +514,22 @@ pub mod qbz_shell {
         /// NPB queue button / queue panel close.
         #[qinvokable]
         fn toggle_queue(self: Pin<&mut QbzShell>);
+        /// #771 sidebar edge drag: `x` is the pointer's window-left-relative
+        /// px. Applies the snap rules (`panel_resize::sidebar_drag_target`)
+        /// LIVE: open widths follow the pointer, past the thresholds the
+        /// sidebar snaps to mini / closed exactly as the header button would.
+        #[qinvokable]
+        fn sidebar_drag(self: Pin<&mut QbzShell>, x: f64);
+        /// Pointer released: persist the width the drag ended on.
+        #[qinvokable]
+        fn sidebar_drag_end(self: Pin<&mut QbzShell>);
+        /// #771 column edge drag: `width` is window-right minus pointer x.
+        /// Past the threshold the whole column closes (queue and lyrics),
+        /// as their X buttons would.
+        #[qinvokable]
+        fn queue_panel_drag(self: Pin<&mut QbzShell>, width: f64);
+        #[qinvokable]
+        fn queue_panel_drag_end(self: Pin<&mut QbzShell>);
         /// Header history buttons.
         #[qinvokable]
         fn navigate_back(self: Pin<&mut QbzShell>);
@@ -811,6 +838,9 @@ use qbz_shell::QbzShell;
 /// Rust side of the shell bridge (plain storage, phase-1 pattern).
 pub struct QbzShellRust {
     sidebar_state: i32,
+    sidebar_width: i32,
+    queue_panel_width: i32,
+    sidebar_snapping: bool,
     nav_in_sidebar: bool,
     nav_header_compact: bool,
     sidebar_playlist_collage: bool,
@@ -907,6 +937,9 @@ impl Default for QbzShellRust {
         qbz_audio::set_seek_waveform_enabled(seekbar_waveform);
         Self {
             sidebar_state: crate::settings_qt::sidebar_state(),
+            sidebar_width: crate::settings_qt::sidebar_width(),
+            queue_panel_width: crate::settings_qt::queue_panel_width(),
+            sidebar_snapping: false,
             nav_in_sidebar: crate::settings_qt::nav_in_sidebar(),
             nav_header_compact: crate::settings_qt::nav_header_compact(),
             sidebar_playlist_collage: crate::settings_qt::sidebar_playlist_collage(),
@@ -1304,6 +1337,96 @@ impl qbz_shell::QbzShell {
         let next = !self.queue_open();
         QUEUE_OPEN.store(next, std::sync::atomic::Ordering::SeqCst);
         self.as_mut().set_queue_open(next);
+    }
+
+    /// Snap the sidebar to `state` from a drag: the same persistence and the
+    /// same Large-NPB fallback as `cycle_sidebar`, without the cycle.
+    fn snap_sidebar_state(mut self: Pin<&mut Self>, state: i32) {
+        if *self.sidebar_state() == state {
+            return;
+        }
+        self.as_mut().set_sidebar_state(state);
+        crate::settings_qt::set_sidebar_state(state);
+        if state != 0 && *self.npb_mode() == 3 {
+            self.as_mut().set_npb_mode(0);
+        }
+    }
+
+    pub fn sidebar_drag(mut self: Pin<&mut Self>, x: f64) {
+        use crate::panel_resize::{sidebar_drag_target, SidebarDrag};
+        let x = x.round() as i32;
+        match sidebar_drag_target(*self.sidebar_state(), x) {
+            SidebarDrag::Open(width) => {
+                if *self.sidebar_state() != crate::panel_resize::SIDEBAR_OPEN {
+                    // A state snap: animate it (flag first, then state).
+                    self.as_mut().set_sidebar_snapping(true);
+                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_OPEN);
+                } else if *self.sidebar_snapping() {
+                    // Back to pointer-following: the width tracks the mouse.
+                    self.as_mut().set_sidebar_snapping(false);
+                }
+                if *self.sidebar_width() != width {
+                    self.as_mut().set_sidebar_width(width);
+                }
+            }
+            SidebarDrag::Mini => {
+                if *self.sidebar_state() != crate::panel_resize::SIDEBAR_MINI {
+                    self.as_mut().set_sidebar_snapping(true);
+                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_MINI);
+                }
+            }
+            SidebarDrag::Closed => {
+                if *self.sidebar_state() != crate::panel_resize::SIDEBAR_CLOSED {
+                    self.as_mut().set_sidebar_snapping(true);
+                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_CLOSED);
+                }
+            }
+        }
+    }
+
+    pub fn sidebar_drag_end(mut self: Pin<&mut Self>) {
+        // The width never drops below the minimum (Mini/Closed are STATES),
+        // so reopening later restores the last open width.
+        crate::settings_qt::set_sidebar_width(*self.sidebar_width());
+        if *self.sidebar_snapping() {
+            self.as_mut().set_sidebar_snapping(false);
+        }
+    }
+
+    pub fn queue_panel_drag(mut self: Pin<&mut Self>, width: f64) {
+        use crate::panel_resize::{queue_drag_target, ColumnDrag};
+        let queue_in_column =
+            *self.queue_open() && self.current_view().to_string() != "queue-view";
+        match queue_drag_target(width.round() as i32, queue_in_column) {
+            ColumnDrag::Open(width) => {
+                if *self.queue_panel_width() != width {
+                    self.as_mut().set_queue_panel_width(width);
+                }
+            }
+            ColumnDrag::Closed => {
+                if *self.queue_open() {
+                    self.as_mut().toggle_queue();
+                }
+                if *self.lyrics_open() {
+                    self.as_mut().toggle_lyrics();
+                }
+            }
+            // Owner spec 2026-09-11: pushed past the maximum with the queue in
+            // the column, the queue moves to the Listen List view; lyrics (if
+            // open) keep the column. The logical queue toggle is untouched, so
+            // leaving the view restores the drawer, exactly as the panel's own
+            // expand button does (`QbzShell.navigateTo("queue-view")`).
+            ColumnDrag::PushThrough => {
+                if *self.queue_panel_width() != crate::panel_resize::QUEUE_MAX_WIDTH {
+                    self.as_mut().set_queue_panel_width(crate::panel_resize::QUEUE_MAX_WIDTH);
+                }
+                crate::navigate_to("queue-view");
+            }
+        }
+    }
+
+    pub fn queue_panel_drag_end(self: Pin<&mut Self>) {
+        crate::settings_qt::set_queue_panel_width(*self.queue_panel_width());
     }
 
     pub fn navigate_back(self: Pin<&mut Self>) {

@@ -486,9 +486,14 @@ Rectangle {
         }
     }
 
+    // #771: the open width is the user's (240..480, persisted); the other
+    // two states keep their fixed rails.
     width: QbzShell.sidebarState === 2 ? 0
          : QbzShell.sidebarState === 1 ? theme.sidebarMiniWidth
-         : theme.sidebarOpenWidth
+         : QbzShell.sidebarWidth
+    /// Set by AppShell while its resize handle is pressed: the width follows
+    /// the pointer directly, the state snaps still animate.
+    property bool resizing: false
     // surface-card @ 0.5 while the ambient background is active (phase 14).
     color: ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
     readonly property bool ambientOn: theme.ambientOn
@@ -497,7 +502,12 @@ Rectangle {
     // animates (same as the Slint root).
     clip: true
 
+    // While the pointer drives the width the Behavior is off (it would lag
+    // the mouse); a STATE snap during that drag (open <-> mini <-> closed)
+    // still animates, because the bridge raises `sidebarSnapping` right
+    // before it changes the state and lowers it on the next pointer-follow.
     Behavior on width {
+        enabled: !root.resizing || QbzShell.sidebarSnapping
         NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
     }
 

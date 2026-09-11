@@ -264,6 +264,7 @@ Rectangle {
         // AppShell level rather than inside Sidebar.slint.
         tooltip: tooltipOverlay
         // Animated 3-state width lives inside the component.
+        resizing: sidebarHandle.active
     }
 
     // QueueView temporarily takes the queue drawer's visual slot without
@@ -282,12 +283,14 @@ Rectangle {
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: npb.top
+        // #771: the open width is the user's (300..600, persisted).
         width: (root.queueSidebarVisible || QbzShell.lyricsOpen)
-            ? theme.queuePanelWidth : 0
+            ? QbzShell.queuePanelWidth : 0
         clip: true
         color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
 
         Behavior on width {
+            enabled: !queueHandle.active
             NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
         }
 
@@ -322,6 +325,70 @@ Rectangle {
                 ? (root.queueSidebarVisible ? parent.height / 2 - 1 : parent.height)
                 : 0
             visible: QbzShell.lyricsOpen
+        }
+    }
+
+    // --- #771 resize handles ------------------------------------------------
+    // Siblings of the panels, not children: Sidebar clips and the column
+    // animates, and a handle inside either would be clipped or dragged along.
+    // Each sits on the border the user SEES — the content PANE's edge, 8px
+    // past the panel (the bezel between them is panel-coloured, so the
+    // panel's own edge is invisible) — nudged 1-2px toward its panel, above
+    // the content frame in z. The bridge (`panel_resize.rs`) decides
+    // clamp/snap/close; these only report the pointer, and pulse their notch
+    // when a drag lands on a snap point.
+    PanelResizeHandle {
+        id: sidebarHandle
+        // No edge to grab once the sidebar is closed; the header button
+        // reopens it, as before.
+        visible: QbzShell.sidebarState !== 2
+        // Pane edge at sidebar.width + 8; strip 245..249 at 240, centre 247.
+        x: sidebar.width + 5
+        anchors.top: header.bottom
+        anchors.bottom: npb.top
+        z: 5
+        onDragged: function (px) { QbzShell.sidebarDrag(px) }
+        onReleased: QbzShell.sidebarDragEnd()
+    }
+    PanelResizeHandle {
+        id: queueHandle
+        visible: queueColumn.width > 0
+        // Pane edge at queueColumn.x - 8; strip x-9..x-4, centre x-6.5.
+        x: queueColumn.x - 9
+        anchors.top: header.bottom
+        anchors.bottom: npb.top
+        z: 5
+        // The column hangs off the window's RIGHT edge: a pointer at x means
+        // a width of (window width - x).
+        onDragged: function (px) { QbzShell.queuePanelDrag(root.width - px) }
+        onReleased: QbzShell.queuePanelDragEnd()
+        // Parked at the maximum with the QUEUE in the column: there is more
+        // past here (push through -> Listen List). Lyrics-only: nothing.
+        beyond: active && root.queueSidebarVisible
+            && QbzShell.queuePanelWidth === theme.queuePanelWidth * 2
+        beyondSide: -1
+    }
+    // Snap feedback: the bridge clamps and snaps; a width landing EXACTLY on
+    // a range end, or a state snap, while the pointer is down is the moment
+    // the notch pulses. A drag inside the range changes the width on every
+    // move and never hits these equalities twice in a row.
+    Connections {
+        target: QbzShell
+        function onSidebarWidthChanged() {
+            if (sidebarHandle.active
+                    && (QbzShell.sidebarWidth === theme.sidebarOpenWidth
+                        || QbzShell.sidebarWidth === theme.sidebarOpenWidth * 2))
+                sidebarHandle.pulse()
+        }
+        function onSidebarStateChanged() {
+            if (sidebarHandle.active)
+                sidebarHandle.pulse()
+        }
+        function onQueuePanelWidthChanged() {
+            if (queueHandle.active
+                    && (QbzShell.queuePanelWidth === theme.queuePanelWidth
+                        || QbzShell.queuePanelWidth === theme.queuePanelWidth * 2))
+                queueHandle.pulse()
         }
     }
 
