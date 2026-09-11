@@ -326,6 +326,7 @@ Rectangle {
               "enabled": playable },
             { "label": t("Add to queue", r), "icon": "list-end", "action": "queue",
               "enabled": playable },
+            { "label": t("Add to mixtape", r), "icon": "cassette-tape", "action": "mixtape" },
             { "sep": true },
             { "label": root.headerPinned ? t("Unpin", r) : t("Pin", r),
               "icon": root.headerPinned ? "pin-filled" : "pin", "action": "pin" },
@@ -356,6 +357,15 @@ Rectangle {
             QbzPlaylistEdit.open(String(root.doc.id || ""))
         else if (action === "offline")
             QbzOffline.cachePlaylist(String(root.doc.id || ""))
+        else if (action === "mixtape")
+            // Same payload shape the cards use (QbzMyQbzAdd.open). Source-aware:
+            // a local playlist carries "local", a Qobuz one "qobuz".
+            QbzMyQbzAdd.open(JSON.stringify([{
+                "itemType": "playlist",
+                "source": root.isLocal ? "local" : "qobuz",
+                "sourceItemId": String(root.doc.id || ""),
+                "title": root.doc.name || ""
+            }]))
     }
 
     CardMenu {
@@ -972,11 +982,15 @@ Rectangle {
                     onMoveDownRequested: QbzBridge.playlistMoveRow(String(item.id), 1)
                     onPlayRequested: QbzBridge.playlistPlayTrack(item.id)
                     onEnqueueRequested: function (m) { QbzBridge.playlistEnqueueTrack(item.id, m) }
-                    // The DISPLAY row id, as a string. For a Qobuz row it IS
-                    // the membership id (`playlist_qt.rs:363-364` sets both
-                    // from `track.id`); for a LOCAL row `playlistTrackId` is a
-                    // queue id — or 0 on an unresolved one — and the removal
-                    // has to be keyed on the id the position map knows.
+                    // The DISPLAY row id, as a string — for a Qobuz row the
+                    // CATALOG id, for a LOCAL row its library rowid / plex key.
+                    // Each Rust arm resolves it to the target it needs: the
+                    // Qobuz arm (`playlist_qt::remove_track`) looks up the row's
+                    // MEMBERSHIP id from it (the two differ since the
+                    // membership-id split), the local/sidecar arms key their
+                    // repo removal on it directly. Do NOT send `playlistTrackId`
+                    // here: on a LOCAL row it is a queue id (or 0 unresolved),
+                    // which the position map does not know.
                     onRemoveRequested: QbzBridge.playlistRemoveTrack(String(item.id))
                     // "Find available version" (contract §6.1) — the ONE
                     // surface that offers it, and the gate is the reference's:

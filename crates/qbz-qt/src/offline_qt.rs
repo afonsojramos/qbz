@@ -78,7 +78,19 @@ pub async fn activate(user_id: u64) {
         log::warn!("[qbz-qt] offline: library connection failed: {e}");
     }
 
+    match state.restore_library_rows(None).await {
+        Ok(report) => log::info!(
+            "[offline-library] startup ready={} restored={} unavailable={} failed={}",
+            report.ready,
+            report.restored,
+            report.unavailable,
+            report.failed
+        ),
+        Err(error) => log::warn!("[offline-library] startup repair failed: {error}"),
+    }
     *slot().lock().await = Some(Arc::new(state));
+    crate::local_catalog_qt::request_catch_up();
+    crate::local_bridge_ops::publish_availability();
     log::info!("[qbz-qt] offline cache activated for user {user_id}");
     load_cached_ids().await;
 }

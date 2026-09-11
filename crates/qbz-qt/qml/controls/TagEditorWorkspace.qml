@@ -252,6 +252,7 @@ Item {
                         }
                         EditCell {
                             width: trackPane.trackW
+                            enabled: !workspace.editor.fixedTrackNumbers
                             numeric: true
                             text: trackDelegate.modelData.trackNumber
                             onEdited: function(value) { trackDelegate.modelData.trackNumber = value }

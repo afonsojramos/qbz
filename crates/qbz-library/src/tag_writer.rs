@@ -271,6 +271,17 @@ pub struct FrontCoverWrite {
 /// Decode and atomically install a conventional folder front cover.
 /// The old file is restored if the final rename fails.
 pub fn write_folder_front_cover(album_dir: &Path, bytes: &[u8]) -> Result<String, LibraryError> {
+    write_front_cover_at(&album_dir.join("cover.jpg"), bytes)
+}
+
+/// Persist artwork next to one SACD image without overwriting a shared folder cover.
+pub fn write_sacd_front_cover(image: &Path, bytes: &[u8]) -> Result<String, LibraryError> {
+    let mut path = image.as_os_str().to_os_string();
+    path.push(".cover.jpg");
+    write_front_cover_at(&std::path::PathBuf::from(path), bytes)
+}
+
+fn write_front_cover_at(target: &Path, bytes: &[u8]) -> Result<String, LibraryError> {
     if bytes.is_empty() || bytes.len() > 25 * 1024 * 1024 {
         return Err(LibraryError::Metadata(
             "The selected cover is empty or larger than 25 MiB.".to_string(),
@@ -288,9 +299,17 @@ pub fn write_folder_front_cover(album_dir: &Path, bytes: &[u8]) -> Result<String
             "The selected cover has unsupported dimensions.".to_string(),
         ));
     }
-    let target = album_dir.join("cover.jpg");
-    let temporary = album_dir.join(".cover.jpg.qbz-tmp");
-    let backup = album_dir.join(".cover.jpg.qbz-backup");
+    let name = target
+        .file_name()
+        .ok_or_else(|| LibraryError::InvalidPath(target.display().to_string()))?;
+    let sibling = |suffix: &str| {
+        let mut file = std::ffi::OsString::from(".");
+        file.push(name);
+        file.push(suffix);
+        target.with_file_name(file)
+    };
+    let temporary = sibling(".qbz-tmp");
+    let backup = sibling(".qbz-backup");
     image
         .save_with_format(&temporary, image::ImageFormat::Jpeg)
         .map_err(|error| LibraryError::Metadata(format!("Cover encode failed: {error}")))?;
@@ -1468,6 +1487,31 @@ mod editor_write_target_tests {
                 .map(|picture| picture.data()),
             Some(cover.as_slice())
         );
+    }
+
+    #[test]
+    fn sacd_front_cover_is_durable_and_does_not_touch_iso_or_folder_art() {
+        let tmp = tempfile::tempdir().unwrap();
+        let iso = tmp.path().join("Disc.iso");
+        std::fs::write(&iso, b"immutable ISO").unwrap();
+        std::fs::write(tmp.path().join("cover.jpg"), b"shared folder art").unwrap();
+        let mut bytes = Vec::new();
+        image::DynamicImage::new_rgb8(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let path = write_sacd_front_cover(&iso, &bytes).unwrap();
+        assert_eq!(Path::new(&path), tmp.path().join("Disc.iso.cover.jpg"));
+        assert_eq!(image::open(&path).unwrap().width(), 4);
+        assert_eq!(std::fs::read(&iso).unwrap(), b"immutable ISO");
+        assert_eq!(
+            std::fs::read(tmp.path().join("cover.jpg")).unwrap(),
+            b"shared folder art"
+        );
+        assert!(write_sacd_front_cover(&iso, b"bad image").is_err());
+        assert_eq!(image::open(&path).unwrap().width(), 4);
     }
 
     #[test]

@@ -877,6 +877,8 @@ impl AudioBackend for PipeWireBackend {
             .map_err(|e| format!("Failed to create device sink builder: {}", e))?
             .with_supported_config(&supported_config)
             .with_buffer_size(cpal_buffer_size)
+            // #660: shared rate-limited callback + wedge latch (see stream_health).
+            .with_error_callback(crate::stream_health::error_callback("PipeWire"))
             .open_stream()
             .map_err(|e| {
                 format!(

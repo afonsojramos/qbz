@@ -112,6 +112,10 @@ pub struct DetailRow {
     /// local/Plex items, whose tracks carry none).
     #[serde(rename = "artistId")]
     pub artist_id: String,
+    /// Resolved album id for a TRACK row (source-aware), so its click opens the
+    /// album it is on; "" until `resolve_items` lands. Albums use `sourceItemId`.
+    #[serde(rename = "albumId")]
+    pub album_id: String,
     /// RESOLVED source ("qobuz" | "plex" | "local" | "offline") — this is how a
     /// Plex item stored as `AlbumSource::Local` finally reads "plex", and a
     /// Qobuz download stored the same way reads "offline". Both come from the
@@ -119,6 +123,10 @@ pub struct DetailRow {
     /// literal.
     #[serde(rename = "sourceKind")]
     pub source_kind: String,
+    /// Every distinct source across the item's tracks (a playlist can mix them);
+    /// empty until `resolve_items` lands. `source_kind` stays the primary one.
+    #[serde(rename = "sourceKinds")]
+    pub source_kinds: Vec<String>,
     #[serde(rename = "typeLabel")]
     pub type_label: String,
     #[serde(rename = "qualityTier")]
@@ -228,6 +236,8 @@ struct RowPatch {
     source_item_id: String,
     #[serde(rename = "sourceKind", skip_serializing_if = "Option::is_none")]
     source_kind: Option<String>,
+    #[serde(rename = "sourceKinds", skip_serializing_if = "Option::is_none")]
+    source_kinds: Option<Vec<String>>,
     #[serde(rename = "qualityTier", skip_serializing_if = "Option::is_none")]
     quality_tier: Option<String>,
     #[serde(rename = "qualityDetail", skip_serializing_if = "Option::is_none")]
@@ -236,6 +246,10 @@ struct RowPatch {
     type_label: Option<String>,
     #[serde(rename = "artistId", skip_serializing_if = "Option::is_none")]
     artist_id: Option<String>,
+    #[serde(rename = "albumId", skip_serializing_if = "Option::is_none")]
+    album_id: Option<String>,
+    #[serde(rename = "tracksText", skip_serializing_if = "Option::is_none")]
+    tracks_text: Option<String>,
     #[serde(rename = "qualityResolving", skip_serializing_if = "Option::is_none")]
     quality_resolving: Option<bool>,
     #[serde(rename = "artUrl", skip_serializing_if = "Option::is_none")]
@@ -329,6 +343,10 @@ pub struct DetailDoc {
     pub filter_count: i32,
     #[serde(rename = "hasAnyFilter")]
     pub has_any_filter: bool,
+    /// Sidebar visibility (the collapsible My QBZ tree's per-element flag). The
+    /// hero overflow menu flips it — "Hide from sidebar" / "Show in sidebar" —
+    /// which is the unhide surface for a row the sidebar dropped.
+    pub hidden: bool,
     pub items: Vec<DetailRow>,
 }
 
@@ -367,6 +385,7 @@ impl Default for DetailDoc {
             selected_count: 0,
             filter_count: 0,
             has_any_filter: false,
+            hidden: false,
             items: Vec::new(),
         }
     }
@@ -387,6 +406,16 @@ struct ResolvedItem {
     /// backfilling rows stored with empty art.
     artwork_url: String,
     artist_id: String,
+    /// The first resolved track's album id (source-aware: a Qobuz album id, or a
+    /// local/media-server album key), so a TRACK row can open the album it is on.
+    album_id: String,
+    /// Resolved track count for an ALBUM or PLAYLIST row (`None` for a track), so
+    /// the tracks column shows a real number instead of staying empty.
+    tracks_count: Option<u32>,
+    /// Every DISTINCT source across the item's tracks, in first-seen order: a
+    /// playlist can mix Qobuz + local/media-server, so its row shows one glyph
+    /// per source. An album/track resolves to a single entry.
+    source_kinds: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -596,12 +625,12 @@ fn classify_release_type(track_count: Option<u32>) -> &'static str {
 
 /// TRACKS column: "1" for a track, else the count or an em-dash (U+2014).
 fn tracks_text(item: &MixtapeCollectionItem) -> String {
+    // A track has no track count — the column stays EMPTY for it. An album or
+    // playlist shows its count: the stored one if present, otherwise "" until
+    // `resolve_items` backfills the resolved track count (#766).
     match item.item_type {
-        ItemType::Track => "1".to_string(),
-        _ => match item.track_count {
-            Some(n) => n.to_string(),
-            None => "\u{2014}".to_string(),
-        },
+        ItemType::Track => String::new(),
+        _ => item.track_count.map(|n| n.to_string()).unwrap_or_default(),
     }
 }
 
@@ -826,7 +855,9 @@ fn to_item(
                 .map(|s| !s.is_empty())
                 .unwrap_or(false),
         artist_id,
+        album_id: String::new(),
         source_kind,
+        source_kinds: Vec::new(),
         type_label: type_label_text,
         quality_tier,
         quality_detail,
@@ -1430,6 +1461,7 @@ fn apply(c: MixtapeCollection, stored_open: Vec<String>) {
         d.meta = album_count_label(item_count);
         d.item_count = item_count as i32;
         d.play_mode = play_mode_str(c.play_mode).to_string();
+        d.hidden = c.hidden;
         d.found = true;
 
         // Header custom cover: non-empty AND resolvable. `cached_path` returns
@@ -1536,6 +1568,27 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
         .map(|id| id.to_string())
         .unwrap_or_default();
 
+    // The first resolved track's album id, so a TRACK row opens its album.
+    // Whatever the source hands back (a Qobuz album id, a media-server album
+    // key) — `crate::open_album` already routes Qobuz-vs-local by its shape.
+    let album_id = first.and_then(|t| t.album_id.clone()).unwrap_or_default();
+
+    // Track count for the tracks column — a track carries none; an album or
+    // playlist reports how many tracks resolved.
+    let tracks_count = match item.item_type {
+        ItemType::Track => None,
+        _ => Some(tracks.len() as u32),
+    };
+
+    // Every distinct source across the tracks (a playlist can mix them).
+    let mut source_kinds: Vec<String> = Vec::new();
+    for track in tracks {
+        let sk = source_kind_of(track).to_string();
+        if !source_kinds.contains(&sk) {
+            source_kinds.push(sk);
+        }
+    }
+
     ResolvedItem {
         source_kind,
         quality_tier: quality_tier.to_string(),
@@ -1543,6 +1596,9 @@ fn resolve_from_tracks(item: &MixtapeCollectionItem, tracks: &[QueueTrack]) -> R
         type_label: type_label_text,
         artwork_url,
         artist_id,
+        album_id,
+        tracks_count,
+        source_kinds,
     }
 }
 
@@ -1611,6 +1667,9 @@ async fn resolve_offline_cached(item: &MixtapeCollectionItem) -> Option<Resolved
         type_label: type_label_text,
         artwork_url: String::new(),
         artist_id: String::new(),
+        album_id: String::new(),
+        tracks_count: None,
+        source_kinds: vec!["qobuz".to_string()],
     })
 }
 
@@ -1646,18 +1705,30 @@ fn apply_resolved(item: &MixtapeCollectionItem, resolved: ResolvedItem, collecti
             .filter(|r| r.source_item_id == item.source_item_id)
         {
             row.source_kind = resolved.source_kind.clone();
+            row.source_kinds = resolved.source_kinds.clone();
             row.quality_tier = resolved.quality_tier.clone();
             row.quality_detail = resolved.quality_detail.clone();
             row.type_label = resolved.type_label.clone();
             row.artist_id = resolved.artist_id.clone();
+            row.album_id = resolved.album_id.clone();
+            // Album/playlist tracks column: show the resolved count (a track keeps
+            // its empty cell).
+            if !matches!(item.item_type, ItemType::Track) {
+                if let Some(n) = resolved.tracks_count {
+                    row.tracks_text = n.to_string();
+                }
+            }
             row.quality_resolving = false;
 
             let mut patch = RowPatch::of(row);
             patch.source_kind = Some(row.source_kind.clone());
+            patch.source_kinds = Some(row.source_kinds.clone());
             patch.quality_tier = Some(row.quality_tier.clone());
             patch.quality_detail = Some(row.quality_detail.clone());
             patch.type_label = Some(row.type_label.clone());
             patch.artist_id = Some(row.artist_id.clone());
+            patch.album_id = Some(row.album_id.clone());
+            patch.tracks_text = Some(row.tracks_text.clone());
             patch.quality_resolving = Some(false);
 
             if row.art_url.is_empty() && !resolved.artwork_url.is_empty() {
@@ -2446,12 +2517,18 @@ mod tests {
     }
 
     #[test]
-    fn tracks_text_uses_em_dash_for_unknown_counts() {
-        let mut it = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
-        it.track_count = None;
-        assert_eq!(tracks_text(&it), "\u{2014}");
+    fn tracks_text_is_empty_for_track_and_unknown_album_count() {
+        // #766: a single track has no track count — the column stays empty.
         let track = item(1, "B", ItemType::Track, AlbumSource::Qobuz);
-        assert_eq!(tracks_text(&track), "1");
+        assert_eq!(tracks_text(&track), "");
+        // An album shows its stored count (item() seeds position + 1 = 1).
+        let album = item(0, "A", ItemType::Album, AlbumSource::Qobuz);
+        assert_eq!(tracks_text(&album), "1");
+        // An album with an unknown count stays empty until `resolve_items`
+        // backfills the resolved count — no em-dash placeholder.
+        let mut unknown = item(2, "C", ItemType::Album, AlbumSource::Qobuz);
+        unknown.track_count = None;
+        assert_eq!(tracks_text(&unknown), "");
     }
 
     #[test]

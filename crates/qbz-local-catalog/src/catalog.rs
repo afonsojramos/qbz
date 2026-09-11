@@ -602,7 +602,9 @@ impl Catalog {
                          LIMIT 1
                     ),'local'),
                     COALESCE((
-                        SELECT scp.native_album_id FROM source_copies scp
+                        SELECT CASE WHEN scp.source_kind IN ('jellyfin','subsonic')
+                                    THEN e.provider_release_id
+                                    ELSE scp.native_album_id END FROM source_copies scp
                          WHERE scp.edition_id=e.edition_id
                          ORDER BY scp.available DESC,
                                   CASE scp.source_kind
@@ -673,7 +675,9 @@ impl Catalog {
                  source_kind,artwork_source,artwork_token
              )
              SELECT ac.artist_key,MIN(ac.display_name),ac.artist_key,
-                    COUNT(DISTINCT CASE WHEN t.available=1 THEN sc.edition_id END),
+                    COUNT(DISTINCT CASE WHEN t.available=1
+                        AND (am.source_kind NOT IN ('jellyfin','subsonic') OR am.native_album_id!='')
+                        THEN sc.edition_id END),
                     COUNT(DISTINCT CASE WHEN t.available=1 THEN ac.catalog_id END),
                     COALESCE(MAX(t.available),0),
                     CASE WHEN COUNT(DISTINCT t.source_kind)>1 THEN 'mixed'
@@ -709,18 +713,22 @@ impl Catalog {
                FROM artist_identity_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
+               LEFT JOIN albums_materialized am ON am.edition_id=sc.edition_id
               GROUP BY ac.artist_key;
 
              INSERT INTO artist_source_stats(
                  artist_key,source_kind,source_instance,album_count,track_count,available
              )
              SELECT ac.artist_key,t.source_kind,t.source_instance,
-                    COUNT(DISTINCT CASE WHEN t.available=1 THEN sc.edition_id END),
+                    COUNT(DISTINCT CASE WHEN t.available=1
+                        AND (am.source_kind NOT IN ('jellyfin','subsonic') OR am.native_album_id!='')
+                        THEN sc.edition_id END),
                     COUNT(DISTINCT CASE WHEN t.available=1 THEN ac.catalog_id END),
                     COALESCE(MAX(t.available),0)
                FROM artist_identity_credits ac
                JOIN tracks t ON t.catalog_id=ac.catalog_id
                LEFT JOIN source_copies sc ON sc.source_copy_id=t.source_copy_id
+               LEFT JOIN albums_materialized am ON am.edition_id=sc.edition_id
               GROUP BY ac.artist_key,t.source_kind,t.source_instance;
 
              INSERT INTO artists_fts(artist_key,display_name)
@@ -2070,7 +2078,9 @@ fn map_row(row: &Row<'_>) -> rusqlite::Result<RowWithCursor> {
 const TRACK_COLUMNS: &str = "
     t.source_kind, t.source_instance, t.native_track_id, t.source_raw,
     t.local_track_id, t.local_path,
-    (SELECT NULLIF(sc.native_album_id,'') FROM source_copies sc
+    (SELECT CASE WHEN sc.source_kind IN ('jellyfin','subsonic')
+                 THEN e.provider_release_id ELSE NULLIF(sc.native_album_id,'') END
+       FROM source_copies sc JOIN editions e ON e.edition_id=sc.edition_id
       WHERE sc.source_copy_id=t.source_copy_id),
     t.title, t.artist, t.album_artist, t.album, t.duration_ms, t.year, t.disc_number,
     t.track_number, t.format, t.bit_depth, t.sample_rate_hz, t.artwork_token, t.available,
@@ -2128,6 +2138,12 @@ fn validate_albums_descriptor(descriptor: &QueryDescriptor) -> Result<()> {
     Ok(())
 }
 
+// Text-fallback groups keep orphan remote tracks indexed, but cannot be opened
+// through the server's album endpoint. Only real server IDs may become cards.
+// provider_release_id is normalized at ingestion, so whitespace IDs are empty.
+const RESOLVABLE_ALBUM: &str =
+    "(am.source_kind NOT IN ('jellyfin','subsonic') OR am.native_album_id!='')";
+
 fn album_filter_parts(
     descriptor: &QueryDescriptor,
     cursor: Option<&AlbumCursor>,
@@ -2137,7 +2153,7 @@ fn album_filter_parts(
             return Err(CatalogError::CursorDescriptorMismatch);
         }
     }
-    let mut predicates = Vec::new();
+    let mut predicates = vec![RESOLVABLE_ALBUM.to_string()];
     let mut params = Vec::new();
     let from_sql = if descriptor.search().is_empty() {
         "FROM albums_materialized am".to_string()
@@ -2586,6 +2602,7 @@ fn artist_album_filter(
         }
     }
     let mut predicates = vec![
+        RESOLVABLE_ALBUM.to_string(),
         "am.available=1".to_string(),
         "EXISTS (SELECT 1 FROM edition_artists ea \
                  WHERE ea.edition_id=am.edition_id AND ea.artist_key=?)"

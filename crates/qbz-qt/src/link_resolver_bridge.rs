@@ -29,6 +29,9 @@ pub mod qbz_link {
         #[qproperty(QString, playlist_provider)]
         type QbzLink = super::QbzLinkRust;
 
+        #[qsignal]
+        fn focus_requested(self: Pin<&mut QbzLink>);
+
         #[qinvokable]
         fn boot(self: Pin<&mut QbzLink>);
         #[qinvokable]
@@ -98,6 +101,10 @@ pub(crate) fn close_modal() {
 }
 
 fn reset_open(mut link: Pin<&mut QbzLink>) {
+    if *link.modal_open() {
+        link.as_mut().focus_requested();
+        return;
+    }
     link.as_mut().set_url(QString::default());
     link.as_mut().set_platform(QString::default());
     link.as_mut().set_error(QString::default());

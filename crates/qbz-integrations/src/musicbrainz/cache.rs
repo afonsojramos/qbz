@@ -7,6 +7,10 @@ use rusqlite::{params, Connection, OptionalExtension};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::identity::{
+    ArtistCandidate, EvidenceKind, IsrcCredits, SceneIdentityRow, SourceIdentityRow,
+    MATCHER_VERSION,
+};
 use super::models::{
     ArtistMetadata, ArtistRelationships, ArtistType, LocationDiscoveryResponse, MatchConfidence,
     ResolvedArtist, ResolvedTrack,
@@ -28,6 +32,15 @@ const SCENE_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 const QOBUZ_VALIDATION_TTL_SECS: i64 = 30 * 24 * 60 * 60;
 /// TTL for the typed Qobuz artist-match cache (30 days, same as above)
 const QOBUZ_ARTIST_MATCH_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// TTL of a cached exact-name search WINDOW (evidence, re-gated on every hit)
+const ARTIST_QUERY_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+/// TTL of a cached ISRC → recording-credits set
+const ISRC_CREDITS_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// TTL of an ISRC-verified identity row (source or scene)
+const VERIFIED_IDENTITY_TTL_SECS: i64 = 30 * 24 * 60 * 60;
+/// TTL of a provisional (unique-exact-name) scene identity row — a name alone
+/// is not identity, so it may not outlive a week
+const PROVISIONAL_IDENTITY_TTL_SECS: i64 = 7 * 24 * 60 * 60;
 
 /// The Qobuz half of a scene validation, and NOTHING else.
 ///
@@ -78,6 +91,15 @@ impl MusicBrainzCache {
         let cache = Self { conn };
         cache.init_schema()?;
 
+        Ok(cache)
+    }
+
+    /// An in-memory cache with the full schema — tests and dry runs.
+    pub fn open_in_memory() -> Result<Self, String> {
+        let conn = Connection::open_in_memory()
+            .map_err(|e| format!("Failed to open in-memory MusicBrainz cache: {}", e))?;
+        let cache = Self { conn };
+        cache.init_schema()?;
         Ok(cache)
     }
 
@@ -181,6 +203,44 @@ impl MusicBrainzCache {
                     disambiguation TEXT,
                     confidence TEXT NOT NULL,
                     cached_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+                );
+
+                -- #768 identity matcher (identity.rs). Versioned, identifier-
+                -- keyed, provenance-carrying; TTL is applied at READ time.
+                -- Old name-keyed rows (resolved_artists, mb_qobuz_artist_match)
+                -- stay on disk, inert: nothing on the corrected path reads them.
+                CREATE TABLE IF NOT EXISTS mb_artist_query_v2 (
+                    query_key TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mb_isrc_credits_v2 (
+                    isrc TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS mb_source_identity_v2 (
+                    qobuz_artist_id INTEGER NOT NULL,
+                    matcher_version INTEGER NOT NULL,
+                    mbid TEXT NOT NULL,
+                    evidence_kind TEXT NOT NULL,
+                    evidence_count INTEGER NOT NULL,
+                    source_name TEXT NOT NULL,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY (qobuz_artist_id, matcher_version)
+                );
+                CREATE TABLE IF NOT EXISTS mb_scene_identity_v2 (
+                    mbid TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    matcher_version INTEGER NOT NULL,
+                    qobuz_artist_id INTEGER NOT NULL,
+                    evidence_kind TEXT NOT NULL,
+                    evidence_count INTEGER NOT NULL,
+                    qobuz_name TEXT NOT NULL,
+                    image TEXT,
+                    albums_count INTEGER,
+                    fetched_at INTEGER NOT NULL,
+                    PRIMARY KEY (mbid, scope, matcher_version)
                 );
 
                 CREATE TABLE IF NOT EXISTS cache_stats (
@@ -715,6 +775,242 @@ impl MusicBrainzCache {
         Ok(())
     }
 
+    // ============ #768 identity matcher (identity.rs) ============
+    //
+    // Every getter enforces TTL and matcher version in the query itself and
+    // treats a malformed row as a miss. The `*_at` variants exist so tests can
+    // plant an old row without waiting for the clock.
+
+    fn kind_ttl(kind: EvidenceKind) -> i64 {
+        match kind {
+            EvidenceKind::VerifiedIsrc => VERIFIED_IDENTITY_TTL_SECS,
+            EvidenceKind::UniqueExactName => PROVISIONAL_IDENTITY_TTL_SECS,
+        }
+    }
+
+    /// Cached exact-name search window for `query_key` (evidence only —
+    /// the caller re-runs the acceptance rule on it).
+    pub fn get_artist_query(&self, query_key: &str) -> Result<Option<Vec<ArtistCandidate>>, String> {
+        let min_fetched_at = Self::current_timestamp() - ARTIST_QUERY_TTL_SECS;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT data FROM mb_artist_query_v2 WHERE query_key = ? AND fetched_at > ?",
+                params![query_key, min_fetched_at],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query artist-query cache: {}", e))?;
+        Ok(result.and_then(|data| serde_json::from_str(&data).ok()))
+    }
+
+    pub fn set_artist_query(&self, query_key: &str, window: &[ArtistCandidate]) -> Result<(), String> {
+        self.set_artist_query_at(query_key, window, Self::current_timestamp())
+    }
+
+    pub fn set_artist_query_at(
+        &self,
+        query_key: &str,
+        window: &[ArtistCandidate],
+        fetched_at: i64,
+    ) -> Result<(), String> {
+        let json = serde_json::to_string(window)
+            .map_err(|e| format!("Failed to serialize artist query: {}", e))?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_artist_query_v2 (query_key, data, fetched_at) VALUES (?, ?, ?)",
+                params![query_key, json, fetched_at],
+            )
+            .map_err(|e| format!("Failed to cache artist query: {}", e))?;
+        Ok(())
+    }
+
+    /// Cached complete recording/credit set for a normalised ISRC.
+    pub fn get_isrc_credits(&self, isrc: &str) -> Result<Option<IsrcCredits>, String> {
+        let min_fetched_at = Self::current_timestamp() - ISRC_CREDITS_TTL_SECS;
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT data FROM mb_isrc_credits_v2 WHERE isrc = ? AND fetched_at > ?",
+                params![isrc, min_fetched_at],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query isrc-credits cache: {}", e))?;
+        Ok(result
+            .and_then(|data| serde_json::from_str::<IsrcCredits>(&data).ok())
+            .filter(|c| c.isrc == isrc))
+    }
+
+    pub fn set_isrc_credits(&self, credits: &IsrcCredits) -> Result<(), String> {
+        self.set_isrc_credits_at(credits, Self::current_timestamp())
+    }
+
+    pub fn set_isrc_credits_at(&self, credits: &IsrcCredits, fetched_at: i64) -> Result<(), String> {
+        let json = serde_json::to_string(credits)
+            .map_err(|e| format!("Failed to serialize isrc credits: {}", e))?;
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_isrc_credits_v2 (isrc, data, fetched_at) VALUES (?, ?, ?)",
+                params![credits.isrc, json, fetched_at],
+            )
+            .map_err(|e| format!("Failed to cache isrc credits: {}", e))?;
+        Ok(())
+    }
+
+    /// The VERIFIED source identity for a Qobuz artist id under the current
+    /// matcher version, if it has not expired. Provisional rows are never
+    /// stored here (identity.rs only writes `VerifiedIsrc`), and a row whose
+    /// kind or MBID is malformed is a miss.
+    pub fn get_source_identity(&self, qobuz_artist_id: u64) -> Result<Option<SourceIdentityRow>, String> {
+        let min_fetched_at = Self::current_timestamp() - VERIFIED_IDENTITY_TTL_SECS;
+        let result: Option<(String, String, i64, String)> = self
+            .conn
+            .query_row(
+                "SELECT mbid, evidence_kind, evidence_count, source_name
+                 FROM mb_source_identity_v2
+                 WHERE qobuz_artist_id = ? AND matcher_version = ? AND fetched_at > ?",
+                params![qobuz_artist_id as i64, MATCHER_VERSION as i64, min_fetched_at],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query source identity: {}", e))?;
+        Ok(result.and_then(|(mbid, kind, count, source_name)| {
+            let evidence_kind = EvidenceKind::parse(&kind)?;
+            if evidence_kind != EvidenceKind::VerifiedIsrc || mbid.trim().is_empty() {
+                return None;
+            }
+            Some(SourceIdentityRow {
+                qobuz_artist_id,
+                mbid,
+                evidence_kind,
+                evidence_count: u32::try_from(count).unwrap_or(0),
+                source_name,
+            })
+        }))
+    }
+
+    pub fn set_source_identity(&self, row: &SourceIdentityRow) -> Result<(), String> {
+        self.set_source_identity_at(row, Self::current_timestamp())
+    }
+
+    pub fn set_source_identity_at(&self, row: &SourceIdentityRow, fetched_at: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_source_identity_v2
+                 (qobuz_artist_id, matcher_version, mbid, evidence_kind, evidence_count, source_name, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    row.qobuz_artist_id as i64,
+                    MATCHER_VERSION as i64,
+                    row.mbid,
+                    row.evidence_kind.as_str(),
+                    row.evidence_count as i64,
+                    row.source_name,
+                    fetched_at
+                ],
+            )
+            .map_err(|e| format!("Failed to cache source identity: {}", e))?;
+        Ok(())
+    }
+
+    /// The scene identity for (MBID, catalog scope) under the current matcher
+    /// version, with the TTL of ITS OWN evidence kind (verified 30 d,
+    /// provisional 7 d). Malformed rows are a miss.
+    pub fn get_scene_identity(&self, mbid: &str, scope: &str) -> Result<Option<SceneIdentityRow>, String> {
+        let now = Self::current_timestamp();
+        let result: Option<(i64, String, i64, String, Option<String>, Option<i64>, i64)> = self
+            .conn
+            .query_row(
+                "SELECT qobuz_artist_id, evidence_kind, evidence_count, qobuz_name, image, albums_count, fetched_at
+                 FROM mb_scene_identity_v2
+                 WHERE mbid = ? AND scope = ? AND matcher_version = ?",
+                params![mbid, scope, MATCHER_VERSION as i64],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| format!("Failed to query scene identity: {}", e))?;
+        Ok(result.and_then(
+            |(qobuz_id, kind, count, qobuz_name, image, albums_count, fetched_at)| {
+                let evidence_kind = EvidenceKind::parse(&kind)?;
+                if fetched_at <= now - Self::kind_ttl(evidence_kind) {
+                    return None;
+                }
+                let qobuz_id = u64::try_from(qobuz_id).ok().filter(|id| *id > 0)?;
+                Some(SceneIdentityRow {
+                    mbid: mbid.to_string(),
+                    scope: scope.to_string(),
+                    qobuz_id,
+                    evidence_kind,
+                    evidence_count: u32::try_from(count).unwrap_or(0),
+                    qobuz_name,
+                    image,
+                    albums_count: albums_count.and_then(|n| u32::try_from(n).ok()),
+                })
+            },
+        ))
+    }
+
+    pub fn set_scene_identity(&self, row: &SceneIdentityRow) -> Result<(), String> {
+        self.set_scene_identity_at(row, Self::current_timestamp())
+    }
+
+    pub fn set_scene_identity_at(&self, row: &SceneIdentityRow, fetched_at: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_scene_identity_v2
+                 (mbid, scope, matcher_version, qobuz_artist_id, evidence_kind, evidence_count, qobuz_name, image, albums_count, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    row.mbid,
+                    row.scope,
+                    MATCHER_VERSION as i64,
+                    row.qobuz_id as i64,
+                    row.evidence_kind.as_str(),
+                    row.evidence_count as i64,
+                    row.qobuz_name,
+                    row.image,
+                    row.albums_count.map(|n| n as i64),
+                    fetched_at
+                ],
+            )
+            .map_err(|e| format!("Failed to cache scene identity: {}", e))?;
+        Ok(())
+    }
+
+    /// Plant a row under an ARBITRARY matcher version (tests: an old matcher's
+    /// row must not satisfy the current lookup).
+    #[cfg(test)]
+    fn set_source_identity_versioned(&self, row: &SourceIdentityRow, version: i64) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT OR REPLACE INTO mb_source_identity_v2
+                 (qobuz_artist_id, matcher_version, mbid, evidence_kind, evidence_count, source_name, fetched_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params![
+                    row.qobuz_artist_id as i64,
+                    version,
+                    row.mbid,
+                    row.evidence_kind.as_str(),
+                    row.evidence_count as i64,
+                    row.source_name,
+                    Self::current_timestamp()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     // ============ Maintenance ============
 
     /// Clear expired entries from all tables
@@ -731,6 +1027,12 @@ impl MusicBrainzCache {
             ("mb_scene_cache", SCENE_TTL_SECS),
             ("mb_qobuz_validation", QOBUZ_VALIDATION_TTL_SECS),
             ("mb_qobuz_artist_match", QOBUZ_ARTIST_MATCH_TTL_SECS),
+            ("mb_artist_query_v2", ARTIST_QUERY_TTL_SECS),
+            ("mb_isrc_credits_v2", ISRC_CREDITS_TTL_SECS),
+            ("mb_source_identity_v2", VERIFIED_IDENTITY_TTL_SECS),
+            // The longer of the two kinds; the read path applies the
+            // provisional one itself.
+            ("mb_scene_identity_v2", VERIFIED_IDENTITY_TTL_SECS),
         ];
 
         for (table, ttl) in &tables_and_ttls {
@@ -767,6 +1069,10 @@ impl MusicBrainzCache {
                 DELETE FROM mb_qobuz_artist_match;
                 DELETE FROM resolved_tracks;
                 DELETE FROM resolved_artists;
+                DELETE FROM mb_artist_query_v2;
+                DELETE FROM mb_isrc_credits_v2;
+                DELETE FROM mb_source_identity_v2;
+                DELETE FROM mb_scene_identity_v2;
                 UPDATE cache_stats SET value = 0;
                 ",
             )
@@ -823,5 +1129,195 @@ impl MusicBrainzCache {
             "UPDATE cache_stats SET value = value + 1 WHERE key = ?",
             [key],
         );
+    }
+}
+
+#[cfg(test)]
+mod identity_cache_tests {
+    use super::*;
+
+    fn cand(mbid: &str, name: &str) -> ArtistCandidate {
+        ArtistCandidate {
+            mbid: mbid.into(),
+            name: name.into(),
+            score: Some(100),
+            sort_name: None,
+            artist_type: None,
+            country: None,
+            disambiguation: None,
+        }
+    }
+
+    fn source_row(qobuz: u64, mbid: &str, kind: EvidenceKind) -> SourceIdentityRow {
+        SourceIdentityRow {
+            qobuz_artist_id: qobuz,
+            mbid: mbid.into(),
+            evidence_kind: kind,
+            evidence_count: 1,
+            source_name: "Eve".into(),
+        }
+    }
+
+    fn scene_row(mbid: &str, scope: &str, qobuz: u64, kind: EvidenceKind) -> SceneIdentityRow {
+        SceneIdentityRow {
+            mbid: mbid.into(),
+            scope: scope.into(),
+            qobuz_id: qobuz,
+            evidence_kind: kind,
+            evidence_count: 1,
+            qobuz_name: "Eve".into(),
+            image: None,
+            albums_count: Some(3),
+        }
+    }
+
+    #[test]
+    fn two_qobuz_ids_with_the_same_name_do_not_share_a_source_mapping() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.set_source_identity(&source_row(7, "mb-a", EvidenceKind::VerifiedIsrc)).unwrap();
+        assert_eq!(c.get_source_identity(7).unwrap().unwrap().mbid, "mb-a");
+        assert!(c.get_source_identity(8).unwrap().is_none());
+    }
+
+    #[test]
+    fn two_mbids_with_the_same_name_do_not_share_a_scene_mapping() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.set_scene_identity(&scene_row("mb-a", "FR", 7, EvidenceKind::VerifiedIsrc)).unwrap();
+        assert_eq!(c.get_scene_identity("mb-a", "FR").unwrap().unwrap().qobuz_id, 7);
+        assert!(c.get_scene_identity("mb-b", "FR").unwrap().is_none());
+        assert!(c.get_scene_identity("mb-a", "US").unwrap().is_none(), "scope is part of the key");
+    }
+
+    #[test]
+    fn legacy_name_keyed_rows_cannot_satisfy_a_v2_lookup() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        // The pre-fix tables still accept writes; the v2 getters never read them.
+        c.put_artist(&ResolvedArtist {
+            mbid: "deep-purple".into(),
+            name: "Deep Purple".into(),
+            sort_name: None,
+            artist_type: ArtistType::Group,
+            country: None,
+            disambiguation: None,
+            confidence: MatchConfidence::Exact,
+        })
+        .unwrap();
+        c.set_qobuz_artist_match(
+            "swim deep",
+            &QobuzArtistMatch {
+                qobuz_id: 42,
+                name: "Swim Deep".into(),
+                image: None,
+                albums_count: Some(3),
+            },
+        )
+        .unwrap();
+        assert!(c.get_source_identity(42).unwrap().is_none());
+        assert!(c.get_scene_identity("85e67b0f-afd2-46c2-88b2-c3ba9b0883f2", "FR").unwrap().is_none());
+        assert!(c.get_artist_query(&super::super::identity::artist_query_key("Swim Deep")).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_provisional_kind_never_reads_back_as_a_verified_source_identity() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.set_source_identity(&source_row(7, "mb-a", EvidenceKind::UniqueExactName)).unwrap();
+        assert!(c.get_source_identity(7).unwrap().is_none());
+    }
+
+    #[test]
+    fn expired_rows_miss_at_read_time_without_any_cleanup_call() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        let now = MusicBrainzCache::current_timestamp();
+        c.set_source_identity_at(
+            &source_row(7, "mb-a", EvidenceKind::VerifiedIsrc),
+            now - VERIFIED_IDENTITY_TTL_SECS - 1,
+        )
+        .unwrap();
+        assert!(c.get_source_identity(7).unwrap().is_none());
+
+        // Scene: provisional expires after 7 days, verified after 30.
+        c.set_scene_identity_at(
+            &scene_row("mb-p", "FR", 1, EvidenceKind::UniqueExactName),
+            now - PROVISIONAL_IDENTITY_TTL_SECS - 1,
+        )
+        .unwrap();
+        c.set_scene_identity_at(
+            &scene_row("mb-v", "FR", 2, EvidenceKind::VerifiedIsrc),
+            now - PROVISIONAL_IDENTITY_TTL_SECS - 1,
+        )
+        .unwrap();
+        assert!(c.get_scene_identity("mb-p", "FR").unwrap().is_none());
+        assert_eq!(c.get_scene_identity("mb-v", "FR").unwrap().unwrap().qobuz_id, 2);
+
+        c.set_artist_query_at("k", &[cand("a", "Eve")], now - ARTIST_QUERY_TTL_SECS - 1)
+            .unwrap();
+        assert!(c.get_artist_query("k").unwrap().is_none());
+        c.set_isrc_credits_at(
+            &IsrcCredits {
+                isrc: "GBAAA0000001".into(),
+                recordings: vec![],
+            },
+            now - ISRC_CREDITS_TTL_SECS - 1,
+        )
+        .unwrap();
+        assert!(c.get_isrc_credits("GBAAA0000001").unwrap().is_none());
+    }
+
+    #[test]
+    fn a_previous_matcher_version_row_is_a_miss() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.set_source_identity_versioned(
+            &source_row(7, "mb-a", EvidenceKind::VerifiedIsrc),
+            MATCHER_VERSION as i64 - 1,
+        )
+        .unwrap();
+        assert!(c.get_source_identity(7).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_provenance_is_a_miss() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.conn
+            .execute(
+                "INSERT INTO mb_source_identity_v2 (qobuz_artist_id, matcher_version, mbid, evidence_kind, evidence_count, source_name, fetched_at) VALUES (7, ?, '', 'verified_isrc', 1, 'Eve', ?)",
+                params![MATCHER_VERSION as i64, MusicBrainzCache::current_timestamp()],
+            )
+            .unwrap();
+        assert!(c.get_source_identity(7).unwrap().is_none(), "empty mbid");
+        c.conn
+            .execute(
+                "INSERT INTO mb_scene_identity_v2 (mbid, scope, matcher_version, qobuz_artist_id, evidence_kind, evidence_count, qobuz_name, image, albums_count, fetched_at) VALUES ('m', 'FR', ?, 9, 'guessed', 1, 'Eve', NULL, NULL, ?)",
+                params![MATCHER_VERSION as i64, MusicBrainzCache::current_timestamp()],
+            )
+            .unwrap();
+        assert!(c.get_scene_identity("m", "FR").unwrap().is_none(), "unknown kind");
+    }
+
+    #[test]
+    fn search_window_and_isrc_credits_round_trip() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        let window = vec![cand("a", "Eve"), cand("b", "Eve")];
+        c.set_artist_query("k", &window).unwrap();
+        assert_eq!(c.get_artist_query("k").unwrap().unwrap(), window);
+        let credits = IsrcCredits {
+            isrc: "GBAAA0000001".into(),
+            recordings: vec![super::super::identity::RecordingCredits {
+                recording_mbid: "r".into(),
+                credit_mbids: vec!["a".into(), "b".into()],
+            }],
+        };
+        c.set_isrc_credits(&credits).unwrap();
+        assert_eq!(c.get_isrc_credits("GBAAA0000001").unwrap().unwrap(), credits);
+    }
+
+    #[test]
+    fn clear_all_and_cleanup_cover_the_v2_tables() {
+        let c = MusicBrainzCache::open_in_memory().unwrap();
+        c.set_source_identity(&source_row(7, "mb-a", EvidenceKind::VerifiedIsrc)).unwrap();
+        c.clear_all().unwrap();
+        assert!(c.get_source_identity(7).unwrap().is_none());
+        let old = MusicBrainzCache::current_timestamp() - VERIFIED_IDENTITY_TTL_SECS - 1;
+        c.set_source_identity_at(&source_row(7, "mb-a", EvidenceKind::VerifiedIsrc), old).unwrap();
+        assert_eq!(c.cleanup_expired().unwrap(), 1);
     }
 }

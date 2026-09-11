@@ -4,8 +4,8 @@
 # of the bare binary built by build-qt-linux.yml (release-flatpak.yml drops it
 # at packaging/flatpak/payload/ before flatpak-builder runs): no cargo, no
 # rust SDK extension, no memory-tier env. Qt comes from the KDE runtime
-# (org.kde.Platform 6.9 >= the 6.8 floor; a binary built against 6.8 loads on
-# 6.9 — Qt keeps forward ABI compatibility within a major).
+# (org.kde.Platform 6.11 >= the 6.8 floor; a binary built against 6.8 loads on
+# 6.11 — Qt keeps forward ABI compatibility within a major).
 #
 # The FLATHUB manifest (flathub/com.blitzfc.qbz repo) is the sibling of this
 # file consuming the published release tarball with x-checker-data; keep
@@ -14,7 +14,7 @@
 
 app-id: com.blitzfc.qbz
 runtime: org.kde.Platform
-runtime-version: '6.9'
+runtime-version: '6.11'
 sdk: org.kde.Sdk
 command: qbz
 finish-args:

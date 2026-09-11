@@ -7,6 +7,7 @@ node scripts/test_qt_local_views.mjs
 node scripts/test_qt_kiosk_art.mjs
 node scripts/test_qt_kiosk_navigation.mjs
 node scripts/test_qt_kiosk_feedback.mjs
+node scripts/test_qt_exclusive_gate.mjs
 python3 scripts/qt-cargo.py test --manifest-path crates/Cargo.toml -p qbz-qt --no-fail-fast
 target_dir="${CARGO_TARGET_DIR:-$PWD/crates/target}"
 logs="$(mktemp -d "${TMPDIR:-/tmp}/qbz-qt-gate-XXXXXX")"

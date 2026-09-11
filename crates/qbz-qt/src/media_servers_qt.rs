@@ -58,6 +58,7 @@ fn ensure_bound() {
     if *bound == Some(uid) {
         return;
     }
+    crate::media_connection_qt::cancel_all();
     invalidate_cache();
     STATE.reset();
     let dir = dirs::data_dir()
@@ -72,6 +73,7 @@ fn ensure_bound() {
 
 /// Bind the store to the active user. Called from `auth_qt`.
 pub fn init_for_user(base_dir: &std::path::Path) {
+    crate::media_connection_qt::cancel_all();
     invalidate_cache();
     STATE.init_at(base_dir);
     *BOUND.lock().unwrap_or_else(|error| error.into_inner()) =
@@ -84,6 +86,7 @@ pub fn init_for_user(base_dir: &std::path::Path) {
 }
 
 pub fn reset() {
+    crate::media_connection_qt::cancel_all();
     invalidate_cache();
     *BOUND.lock().unwrap_or_else(|error| error.into_inner()) = None;
     STATE.reset();
@@ -271,18 +274,80 @@ pub async fn probe(kind: MediaServerKind, url: &str) -> Result<String, String> {
     }
 }
 
-/// Authenticate and persist.
+/// Authenticate and verify library access; return settings for a guarded commit.
 ///
 /// What gets stored differs per protocol, and the asymmetry is the protocol's:
 /// Jellyfin issues a token and never needs the password again; Subsonic has no
 /// session, so the password is kept and its token is re-derived per request.
+async fn verified_jellyfin_session(
+    url: &str,
+    session: qbz_jellyfin::Session,
+    mut cfg: MediaServerSettings,
+) -> Result<MediaServerSettings, String> {
+    qbz_jellyfin::JellyfinClient::new(url, &session.access_token, &session.user_id)
+        .map_err(|e| e.to_string())?
+        .music_libraries()
+        .await
+        .map_err(|e| {
+            qbz_i18n::t_args(
+                "Signed in, but library access failed: {}",
+                &[&e.to_string()],
+            )
+        })?;
+    let info = tokio::time::timeout(std::time::Duration::from_secs(3), qbz_jellyfin::probe(url))
+        .await
+        .ok()
+        .and_then(Result::ok);
+    cfg.base_url = qbz_jellyfin::normalize_base_url(url);
+    cfg.token = session.access_token;
+    // The USER ID, not the typed name: every `/Items` call keys on it,
+    // and the two are not interchangeable.
+    cfg.username = session.user_id;
+    cfg.server_id = session.server_id;
+    cfg.server_name = info.map(|i| i.server_name).unwrap_or_default();
+    // The password is deliberately NOT stored — the token replaced it.
+    cfg.password = String::new();
+    cfg.enabled = true;
+    Ok(cfg)
+}
+
+pub async fn quick_connect(
+    url: &str,
+    cfg: MediaServerSettings,
+    operation: &crate::media_connection_qt::Operation,
+) -> Result<MediaServerSettings, String> {
+    let pairing = qbz_jellyfin::QuickConnect::start(url, &cfg.device_id)
+        .await
+        .map_err(quick_connect_error)?;
+    operation.phase("pairing-waiting", "");
+    operation.pairing_code(pairing.code());
+    let session = pairing
+        .wait_for_authorization(std::time::Duration::from_secs(300))
+        .await
+        .map_err(quick_connect_error)?;
+    operation.phase("pairing-verifying", "");
+    verified_jellyfin_session(url, session, cfg).await
+}
+fn quick_connect_error(error: qbz_jellyfin::JellyfinError) -> String {
+    match error {
+        qbz_jellyfin::JellyfinError::QuickConnectDisabled => {
+            qbz_i18n::t("Quick Connect is disabled on this server.")
+        }
+        qbz_jellyfin::JellyfinError::QuickConnectExpired => {
+            qbz_i18n::t("Quick Connect expired. Request a new code.")
+        }
+        other => qbz_i18n::t_args("Quick Connect failed: {}", &[&other.to_string()]),
+    }
+}
+
 pub async fn connect(
     kind: MediaServerKind,
     url: &str,
     username: &str,
     password: &str,
-) -> Result<(), String> {
-    let mut cfg = get(kind);
+    mut cfg: MediaServerSettings,
+    operation: &crate::media_connection_qt::Operation,
+) -> Result<MediaServerSettings, String> {
     match kind {
         MediaServerKind::Jellyfin => {
             // The DeviceId must be the PERSISTED one: authenticating under a
@@ -290,23 +355,25 @@ pub async fn connect(
             // server's device list. `init_for_user` minted it.
             let session = qbz_jellyfin::authenticate(url, &cfg.device_id, username, password)
                 .await
-                .map_err(|e| e.to_string())?;
-            let info = qbz_jellyfin::probe(url).await.ok();
-            cfg.base_url = qbz_jellyfin::normalize_base_url(url);
-            cfg.token = session.access_token;
-            // The USER ID, not the typed name: every `/Items` call keys on it,
-            // and the two are not interchangeable.
-            cfg.username = session.user_id;
-            cfg.server_id = session.server_id;
-            cfg.server_name = info.map(|i| i.server_name).unwrap_or_default();
-            // The password is deliberately NOT stored — the token replaced it.
-            cfg.password = String::new();
+                .map_err(|e| qbz_i18n::t_args("Sign-in failed: {}", &[&e.to_string()]))?;
+            operation.phase("verifying", "");
+            return verified_jellyfin_session(url, session, cfg).await;
         }
         MediaServerKind::Subsonic => {
             let creds = qbz_subsonic::Credentials::new(username, password, &cfg.salt);
             let client =
                 qbz_subsonic::SubsonicClient::new(url, creds).map_err(|e| e.to_string())?;
-            let info = client.ping().await.map_err(|e| e.to_string())?;
+            let info = client
+                .ping()
+                .await
+                .map_err(|e| qbz_i18n::t_args("Sign-in failed: {}", &[&e.to_string()]))?;
+            operation.phase("verifying", "");
+            client.album_ids(0).await.map_err(|e| {
+                qbz_i18n::t_args(
+                    "Signed in, but library access failed: {}",
+                    &[&e.to_string()],
+                )
+            })?;
             if !info.open_subsonic {
                 // Not fatal: the library still lists and still plays. But
                 // without the OpenSubsonic fields there is no bitDepth or
@@ -327,8 +394,7 @@ pub async fn connect(
         }
     }
     cfg.enabled = true;
-    put(kind, &cfg);
-    Ok(())
+    Ok(cfg)
 }
 
 /// Drop this server's cached rows.
@@ -662,6 +728,128 @@ pub fn search_tracks(query: &str, limit: Option<u32>) -> Vec<qbz_library::LocalT
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Exercise actual HTTP requests without touching configured servers or settings.
+    async fn fixture(
+        responses: Vec<(&'static str, u16, &'static str)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            for (path, status, body) in responses {
+                let (mut socket, _) =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut buf = [0; 2048];
+                    let n = socket.read(&mut buf).await.unwrap();
+                    assert!(n > 0);
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(end) = bytes.windows(4).position(|b| b == b"\r\n\r\n") {
+                        let header = String::from_utf8_lossy(&bytes[..end]);
+                        let length = header
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length:")
+                                    .and_then(|v| v.trim().parse::<usize>().ok())
+                            })
+                            .unwrap_or(0);
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let request = String::from_utf8_lossy(&bytes);
+                assert!(request.lines().next().unwrap().contains(path));
+                if path.contains("/Views") {
+                    assert!(request
+                        .to_ascii_lowercase()
+                        .contains("x-emby-token: test-token"));
+                }
+                let response = format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        (url, task)
+    }
+
+    #[tokio::test]
+    async fn connection_distinguishes_login_from_library_rejection_for_both_providers() {
+        qbz_app::ensure_crypto_provider();
+        const JF_AUTH: &str =
+            r#"{"AccessToken":"test-token","ServerId":"server","User":{"Id":"uid","Name":"user"}}"#;
+        const SUB_OK: &str = r#"{"subsonic-response":{"status":"ok","version":"1.16.1","type":"navidrome","openSubsonic":true,"albumList2":{"album":[]}}}"#;
+        const SUB_NO: &str =
+            r#"{"subsonic-response":{"status":"failed","error":{"code":40,"message":"denied"}}}"#;
+        for kind in MediaServerKind::ALL {
+            for mode in ["login-rejected", "library-rejected", "success"] {
+                let responses = match (kind, mode) {
+                    (MediaServerKind::Jellyfin, "login-rejected") => {
+                        vec![("/Users/AuthenticateByName", 401, "{}")]
+                    }
+                    (MediaServerKind::Jellyfin, "library-rejected") => vec![
+                        ("/Users/AuthenticateByName", 200, JF_AUTH),
+                        ("/Users/uid/Views", 401, "{}"),
+                    ],
+                    (MediaServerKind::Jellyfin, _) => vec![
+                        ("/Users/AuthenticateByName", 200, JF_AUTH),
+                        (
+                            "/Users/uid/Views",
+                            200,
+                            r#"{"Items":[],"TotalRecordCount":0}"#,
+                        ),
+                        (
+                            "/System/Info/Public",
+                            200,
+                            r#"{"ServerName":"test","Version":"10.11","Id":"server"}"#,
+                        ),
+                    ],
+                    (MediaServerKind::Subsonic, "login-rejected") => {
+                        vec![("/rest/ping.view", 200, SUB_NO)]
+                    }
+                    (MediaServerKind::Subsonic, "library-rejected") => vec![
+                        ("/rest/ping.view", 200, SUB_OK),
+                        ("/rest/getAlbumList2.view", 200, SUB_NO),
+                    ],
+                    (MediaServerKind::Subsonic, _) => vec![
+                        ("/rest/ping.view", 200, SUB_OK),
+                        ("/rest/getAlbumList2.view", 200, SUB_OK),
+                    ],
+                };
+                let (url, server) = fixture(responses).await;
+                let operation = crate::media_connection_qt::Operation::isolated(kind);
+                let cfg = MediaServerSettings {
+                    device_id: "test-device".into(),
+                    salt: "test-salt".into(),
+                    ..Default::default()
+                };
+                let result = connect(kind, &url, "user", "password", cfg, &operation).await;
+                server.await.unwrap();
+                match mode {
+                    "login-rejected" => assert!(result.unwrap_err().contains("Sign-in failed")),
+                    "library-rejected" => assert!(result
+                        .unwrap_err()
+                        .contains("Signed in, but library access failed")),
+                    _ => {
+                        let cfg = result.unwrap();
+                        assert!(cfg.enabled);
+                        if kind == MediaServerKind::Jellyfin {
+                            assert_eq!(cfg.token, "test-token");
+                            assert!(cfg.password.is_empty());
+                        } else {
+                            assert_eq!(cfg.password, "password");
+                        }
+                    }
+                }
+                drop(operation);
+            }
+        }
+    }
 
     /// The identifiers must be unique per install. They are generated once and
     /// persisted, so the only property worth pinning here is that two draws do

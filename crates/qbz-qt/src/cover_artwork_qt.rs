@@ -87,6 +87,44 @@ pub fn prefer_album_cover(album_id: &str, fallback_url: String) -> String {
     }
 }
 
+/// A one-shot snapshot of BOTH override maps, for a card/collage builder that
+/// resolves many rows at once (Home's `attach_cached` runs over hundreds of
+/// cards): read the store ONCE here instead of per row. `is_empty()` is the
+/// fast path — a profile with no overrides pays a single empty read and skips.
+pub struct OverrideSnapshot {
+    albums: HashMap<String, String>,
+    artists: HashMap<String, String>,
+}
+
+impl OverrideSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.albums.is_empty() && self.artists.is_empty()
+    }
+    /// Album override path (if registered AND on disk), else `fallback`.
+    pub fn album(&self, album_id: &str, fallback: String) -> String {
+        match self.albums.get(album_id) {
+            Some(p) if std::path::Path::new(p).is_file() => p.clone(),
+            _ => fallback,
+        }
+    }
+    /// Artist portrait override path (keyed by NAME), else `fallback`.
+    pub fn artist(&self, name: &str, fallback: String) -> String {
+        match self.artists.get(name) {
+            Some(p) if std::path::Path::new(p).is_file() => p.clone(),
+            _ => fallback,
+        }
+    }
+}
+
+/// Snapshot both override maps in one store read.
+pub fn override_snapshot() -> OverrideSnapshot {
+    let store = load_store();
+    OverrideSnapshot {
+        albums: store.albums,
+        artists: store.artists,
+    }
+}
+
 fn set_album_cover(album_id: &str, path: &str) {
     let mut store = load_store();
     store.albums.insert(album_id.to_string(), path.to_string());
@@ -225,6 +263,19 @@ pub fn save_cover_as(album_id: String, title: String, artwork_url: String) {
 /// `hasCustomImage` / `customImagePath`.
 pub fn artist_image(name: &str) -> Option<String> {
     load_store().artists.get(name).cloned()
+}
+
+/// The image URL a card/collage builder should emit for an artist: the custom
+/// portrait's absolute path when one is registered AND the file still exists,
+/// else the remote URL unchanged. The twin of [`prefer_album_cover`] — every
+/// surface that mounts an artist card (Home, Library, Search) picks the
+/// override up with no QML change, so a portrait set on the artist page also
+/// shows on its cards.
+pub fn prefer_artist_image(name: &str, fallback_url: String) -> String {
+    match artist_image(name) {
+        Some(p) if std::path::Path::new(&p).is_file() => p,
+        _ => fallback_url,
+    }
 }
 
 fn set_artist_image(name: &str, path: &str) {

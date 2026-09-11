@@ -122,6 +122,47 @@ fn track_cache_info(
 
 fn spawn_download(off: &Arc<OfflineCacheState>, track_id: u64) {
     let file_path = off.track_file_path(track_id, "flac");
+    let state = Arc::downgrade(off);
+    let rows = row_sink();
+    let sink = Arc::new(move |event: CacheEvent| {
+        let refresh = matches!(
+            event,
+            CacheEvent::Completed { .. } | CacheEvent::Processed { .. }
+        );
+        rows(event);
+        if refresh {
+            let state = state.clone();
+            crate::spawn(async move {
+                let Some(state) = state.upgrade() else {
+                    return;
+                };
+                let Some(current) = offline_qt::get().await else {
+                    return;
+                };
+                if !Arc::ptr_eq(&state, &current) {
+                    return;
+                }
+                match state.restore_library_rows(Some(track_id)).await {
+                    Ok(report) => log::info!(
+                        "[offline-library] track={track_id} restored={} unavailable={} failed={}",
+                        report.restored,
+                        report.unavailable,
+                        report.failed
+                    ),
+                    Err(error) => {
+                        log::warn!("[offline-library] track={track_id} repair failed: {error}")
+                    }
+                }
+                if offline_qt::get()
+                    .await
+                    .is_some_and(|current| Arc::ptr_eq(&state, &current))
+                {
+                    crate::local_catalog_qt::request_catch_up();
+                    crate::local_bridge_ops::publish_availability();
+                }
+            });
+        }
+    });
     qbz_offline_cache::spawn_track_cache_download(
         track_id,
         file_path,
@@ -130,7 +171,7 @@ fn spawn_download(off: &Arc<OfflineCacheState>, track_id: u64) {
         off.db.clone(),
         off.get_cache_path(),
         off.library_db.clone(),
-        row_sink(),
+        sink,
         off.cache_semaphore.clone(),
     );
 }
@@ -723,6 +764,8 @@ pub fn remove_album(album_id: String) {
             offline_qt::mark_cached(*id, false);
             push_status(*id, 0, 0.0);
         }
+        crate::local_catalog_qt::request_catch_up();
+        crate::local_bridge_ops::publish_availability();
         crate::toast_qt::success(qbz_i18n::t("Removed album from offline"));
         crate::offline_manager_qt::refresh_if_open().await;
     });
@@ -765,6 +808,8 @@ pub fn clear_all() {
             return;
         }
         offline_qt::clear_cached_ids();
+        crate::local_catalog_qt::request_catch_up();
+        crate::local_bridge_ops::publish_availability();
         crate::toast_qt::success(qbz_i18n::t("Cache cleared"));
         crate::offline_manager_qt::refresh_if_open().await;
     });
@@ -825,6 +870,8 @@ async fn remove_cached_inner(id: u64, toast: bool) {
         }
     }
     offline_qt::mark_cached(id, false);
+    crate::local_catalog_qt::request_catch_up();
+    crate::local_bridge_ops::publish_availability();
     push_status(id, 0, 0.0);
     if toast {
         crate::toast_qt::success(qbz_i18n::t("Removed from offline"));

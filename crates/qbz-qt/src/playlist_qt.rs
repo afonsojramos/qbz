@@ -781,6 +781,29 @@ pub(crate) fn adopt_doc(doc: PlaylistDoc) {
     *PAGE.lock().unwrap() = Some(PageState { doc });
 }
 
+/// Re-resolve any row (or header) artwork that was NOT on disk when the page
+/// was built, then republish. The LOCAL loader spawns this after
+/// `download_missing` lands a media-server sidecar cover (a `jellyfin:` /
+/// `subsonic:` ref), which mirrors the warm-then-republish the Qobuz loader
+/// does inline. It reads whatever page is open now, so it is a safe no-op if
+/// the user has navigated away.
+pub(crate) fn rewarm_row_art() {
+    let doc = with_doc(|d| {
+        if !d.cover_url.is_empty() && d.cover_path.is_empty() {
+            d.cover_path = crate::artwork_qt::cached_path(&d.cover_url);
+        }
+        for row in d.tracks.iter_mut() {
+            if row.art_path.is_empty() && !row.art_url.is_empty() {
+                row.art_path = crate::artwork_qt::cached_path(&row.art_url);
+            }
+        }
+        d.clone()
+    });
+    if let Some(doc) = doc {
+        publish(&doc);
+    }
+}
+
 fn with_doc<R>(f: impl FnOnce(&mut PlaylistDoc) -> R) -> Option<R> {
     let mut guard = PAGE.lock().unwrap();
     guard.as_mut().map(|page| f(&mut page.doc))
@@ -1914,59 +1937,72 @@ pub async fn delete_playlist(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Resul
 // ---------------------------------------------------------------------------
 
 /// Per-row "Remove from playlist" (owner-gated, spec §1.6.1 — the Qobuz
-/// API is owner-only). playlist_track_ids = the membership row ids.
-pub async fn remove_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, playlist_track_id: u64) {
-    let Some((pid, playlist_track_id)) = with_doc(|d| {
+/// API is owner-only).
+///
+/// `catalog_id` is the DISPLAY row id QML sends (`PlaylistTrackRow::id`, which
+/// is the catalog track id — the same value the local/sidecar arms of
+/// `crate::playlist_remove_track` route on). Qobuz's `playlist/deleteTracks`
+/// addresses the MEMBERSHIP id (`playlist_track_id`) instead, so it is resolved
+/// from the open document's matching row here.
+///
+/// This resolution IS the fix: the membership-id split (row build above) made
+/// `id` and `playlist_track_id` two different numbers, but the delete kept
+/// keying on the value QML sends — the catalog one — so `find`/`retain` matched
+/// nothing and the endpoint got a non-membership id, i.e. the click rendered
+/// and no-opped. Same-catalog duplicates resolve to their first occurrence:
+/// QML sends the same display id for both copies, so that is the most this key
+/// can disambiguate, and it stays offline-safe (a failed API call reloads).
+pub async fn remove_track(runtime: &Arc<AppRuntime<LoggingAdapter>>, catalog_id: u64) {
+    let Some((pid, membership_id)) = with_doc(|d| {
         if !d.is_owner {
-            return (None, 0);
+            return None;
         }
-        (d.id.parse::<u64>().ok(), playlist_track_id)
-    }) else {
-        return;
-    };
-    let Some(pid) = pid else { return };
-    // Optimistic removal; the API is the source of truth on failure. The
-    // row's CATALOG id is captured before it goes — the membership snapshot
-    // speaks track ids, not membership-row ids.
-    let removed_track_id = with_doc(|d| {
-        let track_id = d
+        let pid = d.id.parse::<u64>().ok()?;
+        let membership_id = d
             .tracks
             .iter()
-            .find(|t| t.playlist_track_id == playlist_track_id)
-            .and_then(|t| t.id.parse::<u64>().ok());
-        d.tracks
-            .retain(|t| t.playlist_track_id != playlist_track_id);
+            .find(|t| t.id.parse::<u64>().ok() == Some(catalog_id))
+            .map(|t| t.playlist_track_id)?;
+        Some((pid, membership_id))
+    })
+    .flatten() else {
+        return;
+    };
+    // Optimistic removal of exactly the matched row, keyed on the membership
+    // id so a same-catalog duplicate keeps its other copy. The API is the
+    // source of truth on failure.
+    with_doc(|d| {
+        d.tracks.retain(|t| t.playlist_track_id != membership_id);
         d.track_count = d.tracks.len() as i32;
         d.total_duration = total_duration_label(&d.tracks);
         let doc = d.clone();
         publish(&doc);
-        track_id
-    })
-    .flatten();
+    });
     match runtime
         .core()
-        .remove_tracks_from_playlist(pid, &[playlist_track_id])
+        .remove_tracks_from_playlist(pid, &[membership_id])
         .await
     {
         Ok(()) => {
-            if let Some(track_id) = removed_track_id {
-                let _ = tokio::task::spawn_blocking(move || {
-                    crate::library_db_qt::with_db(true, |db| {
-                        Ok(db.with_connection(|conn| {
-                            qbz_library::qobuz_playlist_snapshot::apply_removed_tracks(
-                                conn,
-                                pid,
-                                &[track_id],
-                            )
-                        }))
-                    })
+            // The membership snapshot speaks catalog track ids, not
+            // membership-row ids.
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::library_db_qt::with_db(true, |db| {
+                    Ok(db.with_connection(|conn| {
+                        qbz_library::qobuz_playlist_snapshot::apply_removed_tracks(
+                            conn,
+                            pid,
+                            &[catalog_id],
+                        )
+                    }))
                 })
-                .await;
-            }
+            })
+            .await;
         }
         Err(e) => {
             log::error!(
-                "[qbz-qt] remove track {playlist_track_id} from playlist {pid} failed: {e}"
+                "[qbz-qt] remove membership {membership_id} (catalog {catalog_id}) \
+                 from playlist {pid} failed: {e}"
             );
             // Reload to reconcile (bounded-retry equivalent — the Slint
             // reconciles the same way after failed playlist ops).

@@ -114,8 +114,26 @@ pub fn sidecar_path(album_dir: &Path) -> PathBuf {
     album_dir.join(SIDECAR_FILE_NAME)
 }
 
+/// One image owns its sidecar, even when several ISOs share a directory.
+pub fn sacd_sidecar_path(image: &Path) -> PathBuf {
+    let mut name = image.as_os_str().to_os_string();
+    name.push(".qbz.json");
+    PathBuf::from(name)
+}
+
+pub fn read_sacd_sidecar(image: &Path) -> Result<Option<AlbumTagSidecar>, LibraryError> {
+    read_sidecar_file(&sacd_sidecar_path(image))
+}
+
+pub fn write_sacd_sidecar(image: &Path, sidecar: &AlbumTagSidecar) -> Result<(), LibraryError> {
+    write_sidecar_file(&sacd_sidecar_path(image), sidecar)
+}
+
 pub fn read_album_sidecar(album_dir: &Path) -> Result<Option<AlbumTagSidecar>, LibraryError> {
-    let path = sidecar_path(album_dir);
+    read_sidecar_file(&sidecar_path(album_dir))
+}
+
+fn read_sidecar_file(path: &Path) -> Result<Option<AlbumTagSidecar>, LibraryError> {
     if !path.exists() {
         return Ok(None);
     }
@@ -130,15 +148,20 @@ pub fn write_album_sidecar(
     album_dir: &Path,
     sidecar: &AlbumTagSidecar,
 ) -> Result<(), LibraryError> {
-    fs::create_dir_all(album_dir).map_err(LibraryError::Io)?;
+    write_sidecar_file(&sidecar_path(album_dir), sidecar)
+}
 
-    let target = sidecar_path(album_dir);
-    let tmp = album_dir.join(format!("{}.tmp", SIDECAR_FILE_NAME));
+fn write_sidecar_file(target: &Path, sidecar: &AlbumTagSidecar) -> Result<(), LibraryError> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(LibraryError::Io)?;
+    }
+    let mut temporary = target.as_os_str().to_os_string();
+    temporary.push(".tmp");
+    let tmp = PathBuf::from(temporary);
     let content =
         serde_json::to_vec_pretty(sidecar).map_err(|e| LibraryError::Metadata(e.to_string()))?;
-
     fs::write(&tmp, content).map_err(LibraryError::Io)?;
-    fs::rename(&tmp, &target).map_err(LibraryError::Io)?;
+    fs::rename(&tmp, target).map_err(LibraryError::Io)?;
     Ok(())
 }
 
@@ -234,6 +257,31 @@ fn normalize(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sacd_sidecars_are_per_image_and_leave_audio_untouched() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("Disc 1.iso");
+        let second = temp.path().join("Disc 2.iso");
+        fs::write(&first, b"first image").unwrap();
+        fs::write(&second, b"second image").unwrap();
+        let mut sidecar = AlbumTagSidecar::new(AlbumMetadataOverride::default(), Vec::new());
+        sidecar.album.album_title = Some("Edited title".into());
+        write_sacd_sidecar(&first, &sidecar).unwrap();
+        assert_eq!(
+            read_sacd_sidecar(&first)
+                .unwrap()
+                .unwrap()
+                .album
+                .album_title
+                .as_deref(),
+            Some("Edited title")
+        );
+        assert!(read_sacd_sidecar(&second).unwrap().is_none());
+        assert!(read_album_sidecar(temp.path()).unwrap().is_none());
+        assert_eq!(fs::read(first).unwrap(), b"first image");
+        assert_eq!(fs::read(second).unwrap(), b"second image");
+    }
 
     fn track() -> LocalTrack {
         LocalTrack {

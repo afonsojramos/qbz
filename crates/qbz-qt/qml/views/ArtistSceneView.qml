@@ -149,7 +149,6 @@ Rectangle {
     property var coverMap: ({})
     property var _coverInbox: ({})
     property var _asked: ({})
-    readonly property int coverBatchCap: 48
     // Batched on a 16 ms one-shot: `libraryArtworkReady` fires once PER COVER,
     // and assigning `coverMap` per signal would republish the whole map to
     // every delegate 48 times for one screenful. One dirty frame instead of
@@ -167,6 +166,7 @@ Rectangle {
     Connections {
         target: QbzLibrary
         function onLibraryArtworkReady(key, path) {
+            if (root._asked[key] !== true || root.coverMap[key] === path) return
             root._coverInbox[key] = path
             if (!coverFlush.running)
                 coverFlush.start()
@@ -174,7 +174,7 @@ Rectangle {
     }
     function requestCovers(urls) {
         var out = []
-        for (var i = 0; i < urls.length && out.length < root.coverBatchCap; i++) {
+        for (var i = 0; i < urls.length; i++) {
             var u = urls[i]
             if (u === "" || root._asked[u] === true || root.coverMap[u])
                 continue
@@ -184,17 +184,25 @@ Rectangle {
         if (out.length > 0)
             QbzShell.sidebarArtworkWindow(JSON.stringify(out))
     }
-    /// Ask for every portrait the current model wants, capped per call.
-    /// Driven by the document landing and by scrolling — `requestCovers`
-    /// self-dedupes, so an over-eager caller costs a loop, not a fetch.
-    function requestVisibleCovers() {
-        if (!root.isReady)
+    // The native ListView already mounts two rows around the viewport. Ask
+    // for that bounded range, including after scrolling past the first page.
+    function requestVisibleCovers(view) {
+        if (!root.isReady || !view || !view.visible || !root.visible)
             return
-        var urls = []
         var rows = root.rowModel
-        for (var i = 0; i < rows.length; i++) {
-            if (rows[i].type === "header")
-                continue
+        if (rows.length === 0) return
+        var first = view.indexAt(4, view.contentY + 1)
+        var last = view.indexAt(4, view.contentY + Math.max(1, view.height) - 1)
+        if (first < 0) first = 0
+        if (last < 0) last = Math.min(rows.length - 1,
+            first + Math.ceil(view.height / (root.cardH + root.rowGap)))
+        var start = first
+        first = Math.max(0, first - 2)
+        last = Math.min(rows.length - 1, last + 2)
+        var urls = []
+        for (var offset = 0; offset <= last - first; offset++) {
+            var i = start + offset
+            if (i > last) i = first + i - last - 1
             var arts = rows[i].artists || []
             for (var j = 0; j < arts.length; j++)
                 urls.push(String(arts[j].artUrl || ""))
@@ -381,17 +389,6 @@ Rectangle {
     readonly property int columns: Math.max(1,
         Math.floor((gridPane.width + root.cardGap) / (root.cardW + root.cardGap)))
 
-    // Ask for the portraits whenever the row model settles. `rowModel` is
-    // rebuilt by a new document, a page appended, a filter, a search keystroke
-    // and a resize — every one of which can bring artists into view that were
-    // not there before, and `requestCovers` self-dedupes, so a redundant call
-    // costs a loop over the model and no fetch.
-    //
-    // NOT a `Component.onCompleted`: the view mounts BEFORE the first document
-    // lands (the route is recorded by `QbzScene.open` and discovery is async),
-    // so at completion the model is empty and the one shot would be wasted.
-    onRowModelChanged: root.requestVisibleCovers()
-
     readonly property var rowModel: {
         var out = []
         var showHeaders = root.groupingEnabled
@@ -495,6 +492,10 @@ Rectangle {
         // lets this one reset to 0 without touching the shared clock.
         property int ms: 0
         property int lastPulse: 0
+        // Derived from the pulse-driven `ms`, so no extra Timer: a busy-
+        // connection heads-up after ~10s, and a 5-minute safety net.
+        readonly property bool longWait: loadingLayer.ms > 10000 && !loadingLayer.timedOut
+        readonly property bool timedOut: loadingLayer.ms > 300000
 
         // S:1551-1554 — `@keyframes pulse`, 2s ease-in-out, 0%/100% scale(1)
         // opacity .8, 50% scale(1.06) opacity 1. A raised cosine is that curve.
@@ -508,7 +509,7 @@ Rectangle {
         Connections {
             target: QbzShell
             function onPulseMsChanged() {
-                if (!root.isLoading)
+                if (!root.isLoading || loadingLayer.timedOut)
                     return          // a handler that writes nothing costs no frame
                 var d = QbzShell.pulseMs - loadingLayer.lastPulse
                 if (d < 0 || d > 500)
@@ -525,6 +526,7 @@ Rectangle {
         }
 
         Column {
+            visible: !loadingLayer.timedOut
             anchors.centerIn: parent
             spacing: 24                                     // S:1511-1517
 
@@ -600,6 +602,64 @@ Rectangle {
                     text: Math.round(root.progress.pct || 0) + "%"
                     color: theme.textMuted
                     font.pixelSize: 12
+                }
+            }
+
+            // Busy-connection heads-up after the first ~10s so a slow
+            // MusicBrainz reads as expected, not as a hang.
+            Text {
+                visible: loadingLayer.longWait
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.tr("This can take a few minutes when MusicBrainz is busy.")
+                color: theme.textMuted
+                font.pixelSize: 12
+                width: 320
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+        }
+
+        // 5-minute safety net: if discovery is still running this long,
+        // MusicBrainz is throttling us hard. Offer Retry instead of an endless
+        // spinner; a late success still swaps in the grid on its own.
+        Column {
+            visible: loadingLayer.timedOut
+            anchors.centerIn: parent
+            spacing: 16
+            width: 360
+            Text {
+                width: parent.width
+                text: root.tr("This is taking longer than usual — MusicBrainz may be busy. Try again in a moment.")
+                color: theme.textSecondary
+                font.pixelSize: 14
+                wrapMode: Text.WordWrap
+                horizontalAlignment: Text.AlignHCenter
+            }
+            Rectangle {
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: sceneTimeoutLabel.implicitWidth + 40
+                height: root.kioskHost ? 64 : sceneTimeoutLabel.implicitHeight + 16
+                radius: 8
+                color: sceneTimeoutArea.containsMouse ? theme.surfaceElevated : theme.surfaceCard
+                Text {
+                    id: sceneTimeoutLabel
+                    anchors.centerIn: parent
+                    text: root.tr("Retry")
+                    color: theme.textPrimary
+                    font.pixelSize: 13
+                }
+                MouseArea {
+                    id: sceneTimeoutArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    // Reset the pulse clock too: the loading layer never went
+                    // invisible, so onVisibleChanged would not re-arm `ms`.
+                    onClicked: {
+                        QbzScene.retry()
+                        loadingLayer.ms = 0
+                        loadingLayer.lastPulse = QbzShell.pulseMs
+                    }
                 }
             }
         }
@@ -1007,7 +1067,19 @@ Rectangle {
                         boundsBehavior: Flickable.StopAtBounds
                         model: root.rowModel
                         spacing: 0
-                        cacheBuffer: 2 * (root.cardH + root.rowGap)   // Grid:150 ±5 items
+                        cacheBuffer: 2 * (root.cardH + root.rowGap)
+                        function reportCovers() {
+                            if (visible && !coverWindow.running) coverWindow.start()
+                        }
+                        onContentYChanged: reportCovers()
+                        onModelChanged: reportCovers()
+                        onHeightChanged: reportCovers()
+                        onVisibleChanged: reportCovers()
+                        Timer {
+                            id: coverWindow
+                            interval: 180
+                            onTriggered: root.requestVisibleCovers(list)
+                        }
 
                         NumberAnimation {
                             id: jumpAnim

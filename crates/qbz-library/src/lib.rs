@@ -82,9 +82,9 @@ pub use tag_writer::{
     compute_track_artist_match, inspect_album_tag_layers, read_editor_tag_snapshots,
     write_album_tags_to_files, write_album_tags_to_files_extended,
     write_album_tags_to_files_with_options, write_folder_front_cover, write_purchase_tags,
-    AlbumTagInspection, AlbumTagWrite, DirectTagWriteOptions, EditorTrackTagSnapshot,
-    ExtendedAlbumTagWrite, ExtendedTrackTagWrite, FrontCoverWrite, Id3v2WriteVersion,
-    PurchaseTagWrite, TagLayerInspection, TrackTagWrite,
+    write_sacd_front_cover, AlbumTagInspection, AlbumTagWrite, DirectTagWriteOptions,
+    EditorTrackTagSnapshot, ExtendedAlbumTagWrite, ExtendedTrackTagWrite, FrontCoverWrite,
+    Id3v2WriteVersion, PurchaseTagWrite, TagLayerInspection, TrackTagWrite,
 };
 pub use thumbnails::{
     clear_thumbnails, generate_thumbnail, generate_thumbnail_from_bytes, get_cache_size,

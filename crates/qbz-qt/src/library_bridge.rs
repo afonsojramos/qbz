@@ -42,12 +42,19 @@ pub mod qbz_library_bridge {
         // favorites_ui.json the shipping Slint build writes). Seeded in
         // `boot`, written back one key at a time through `set_library_pref`.
         #[qproperty(QString, library_prefs_json)]
-        // Process/session-only All-tab filters. They intentionally do not
+        // Process/session-only source filters, stored separately per tab. They do not
         // enter favorites_ui.json, but the singleton outlives LibraryView so
         // navigation cannot reset them with the component.
+        #[qproperty(bool, session_albums_hires_only)]
+        #[qproperty(bool, session_tracks_hires_only)]
+        #[qproperty(bool, session_hide_local_albums)]
         #[qproperty(bool, session_show_purchases)]
         #[qproperty(bool, session_show_favorites)]
         #[qproperty(bool, session_show_following)]
+        #[qproperty(bool, session_albums_show_purchases)]
+        #[qproperty(bool, session_albums_show_favorites)]
+        #[qproperty(bool, session_tracks_show_purchases)]
+        #[qproperty(bool, session_tracks_show_favorites)]
         // Artists SIDEPANEL: the selected artist's release sections
         // (library_sidepanel.rs). Its own document, never folded into
         // `library_json`: a selection must not re-serialize a 10k-row feed.
@@ -170,9 +177,16 @@ pub struct QbzLibraryRust {
     library_json: QString,
     library_counts_json: QString,
     library_prefs_json: QString,
+    session_albums_hires_only: bool,
+    session_tracks_hires_only: bool,
+    session_hide_local_albums: bool,
     session_show_purchases: bool,
     session_show_favorites: bool,
     session_show_following: bool,
+    session_albums_show_purchases: bool,
+    session_albums_show_favorites: bool,
+    session_tracks_show_purchases: bool,
+    session_tracks_show_favorites: bool,
     sidepanel_json: QString,
 }
 
@@ -186,9 +200,16 @@ impl Default for QbzLibraryRust {
             // Parseable defaults so QML's JSON.parse never throws on frame 1
             // (the real values arrive in `boot`).
             library_prefs_json: QString::from("{}"),
-            session_show_purchases: true,
-            session_show_favorites: true,
-            session_show_following: true,
+            session_albums_hires_only: false,
+            session_tracks_hires_only: false,
+            session_hide_local_albums: false,
+            session_show_purchases: false,
+            session_show_favorites: false,
+            session_show_following: false,
+            session_albums_show_purchases: false,
+            session_albums_show_favorites: false,
+            session_tracks_show_purchases: false,
+            session_tracks_show_favorites: false,
             sidepanel_json: QString::from("{}"),
         }
     }
@@ -220,6 +241,26 @@ impl qbz_library_bridge::QbzLibrary {
         let prefs = crate::library_prefs::to_json();
         self.as_mut()
             .set_library_prefs_json(QString::from(prefs.as_str()));
+        // Seed the per-tab source filters from disk too (persisted now, so a
+        // chosen filter survives a restart — still independent per tab). These
+        // are separate qproperties from the toolbar json doc above; done once
+        // here rather than in the reactive QML applyPrefs so a later document
+        // republish can never re-seed over a live toggle.
+        let f = crate::library_prefs::read();
+        self.as_mut().set_session_show_purchases(f.all_show_purchases);
+        self.as_mut().set_session_show_favorites(f.all_show_favorites);
+        self.as_mut().set_session_show_following(f.all_show_following);
+        self.as_mut().set_session_hide_local_albums(f.all_hide_local);
+        self.as_mut()
+            .set_session_albums_show_purchases(f.albums_show_purchases);
+        self.as_mut()
+            .set_session_albums_show_favorites(f.albums_show_favorites);
+        self.as_mut().set_session_albums_hires_only(f.albums_hires_only);
+        self.as_mut()
+            .set_session_tracks_show_purchases(f.tracks_show_purchases);
+        self.as_mut()
+            .set_session_tracks_show_favorites(f.tracks_show_favorites);
+        self.as_mut().set_session_tracks_hires_only(f.tracks_hires_only);
     }
 
     pub fn set_library_pref(mut self: Pin<&mut Self>, key: QString, value: QString) {
@@ -310,5 +351,25 @@ impl qbz_library_bridge::QbzLibrary {
 
     pub fn pin_state(&self, kind: QString, id: QString) -> bool {
         crate::sidebar_qt::is_pinned(&kind.to_string(), &id.to_string())
+    }
+}
+
+#[cfg(test)]
+mod filter_defaults_tests {
+    use super::QbzLibraryRust;
+
+    #[test]
+    fn every_only_filter_starts_unrestricted() {
+        let state = QbzLibraryRust::default();
+        assert!(!state.session_show_purchases);
+        assert!(!state.session_show_favorites);
+        assert!(!state.session_show_following);
+        assert!(!state.session_albums_show_purchases);
+        assert!(!state.session_albums_show_favorites);
+        assert!(!state.session_tracks_show_purchases);
+        assert!(!state.session_tracks_show_favorites);
+        assert!(!state.session_albums_hires_only);
+        assert!(!state.session_tracks_hires_only);
+        assert!(!state.session_hide_local_albums);
     }
 }

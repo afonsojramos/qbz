@@ -45,6 +45,8 @@ Rectangle {
             // a rectangular scissor never produced this radius. A clip is an
             // unconditional batch root, so this one cost a draw call per item.
             RoundedImage {
+                id: coverImage
+                gridArtwork: true
                 anchors.fill: parent
                 source: card.artPath
                 radius: 4

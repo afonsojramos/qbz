@@ -33,7 +33,27 @@ Rectangle {
     // NO outline (it matches the favorites toolbar buttons), 12px label and a
     // 14px chevron, and 40px narrower because toolbar selects were needlessly
     // wide (QbzSelect.slint:86-88,102-105,118-119,126,147-148,299).
+    // Optional sort selector: reselecting an option still emits selected.
+    property string sortDirection: ""
     property bool sm: false
+    // Optional leading glyph before the label (e.g. a sort field's
+    // arrow-down-up). Empty = none, and the positioner ignores the hidden
+    // slot so every existing select is byte-identical.
+    property string leadingIcon: ""
+    // When set, the COLLAPSED control always shows this fixed label instead of
+    // the current option — a placeholder select whose active choice lives in
+    // the outline + tooltip, not the field (the Sort control). The open list
+    // still highlights the current option.
+    property string placeholderText: ""
+    // "This select holds a non-default choice": draw an accent outline at rest.
+    // Only the border changes — the fill stays the ambient-aware token, so the
+    // control still goes translucent under the dynamic background.
+    property bool outlineActive: false
+    // Optional shared-tooltip host (a QbzTooltip) + text, shown on hover. Used
+    // to name the active sort when it differs from the tab default.
+    property var tooltipHost: null
+    property string tooltipText: ""
+    property string tooltipKey: ""
     signal selected(int index)
 
     QbzTheme { id: theme }
@@ -42,8 +62,15 @@ Rectangle {
     width: sm ? Math.max(0, menuWidth - 40) : menuWidth
     height: kioskHost ? 44 : (sm ? 30 : 34)
     radius: sm ? 6 : theme.radiusSm
-    border.width: selectRoot.activeFocus ? 2 : (sm ? 0 : 1)
-    border.color: selectRoot.activeFocus ? theme.accent : theme.borderSubtle
+    // sm (toolbar) selects show NO focus ring: it lingered after a pick and
+    // read as "still modified", so the outline could never fully clear on a
+    // return to default. There, only outlineActive draws a border, and it is
+    // gone the instant the choice is the default. Settings-size selects keep
+    // the keyboard focus ring.
+    border.width: (selectRoot.activeFocus && !sm) ? 2
+        : (selectRoot.outlineActive ? 1 : (sm ? 0 : 1))
+    border.color: (selectRoot.activeFocus && !sm) || selectRoot.outlineActive
+        ? theme.accent : theme.borderSubtle
     // Resting fill goes translucent under the dynamic background so the field
     // shows through the control (QbzSelect.slint:110-116). Hover keeps its own
     // token, which is already translucent.
@@ -131,6 +158,9 @@ Rectangle {
             return
         selectRoot.filter = ""
         listContent.currentIndex = selectRoot.currentIndex
+        // A field tooltip must not sit over its own open list.
+        if (selectRoot.tooltipHost)
+            selectRoot.tooltipHost.hide(selectRoot.tooltipKey !== "" ? selectRoot.tooltipKey : "qbz-select")
         popup.open()
         if (selectRoot.searchable)
             searchInput.forceActiveFocus()
@@ -168,11 +198,28 @@ Rectangle {
         anchors.leftMargin: selectRoot.sm ? 10 : 12
         anchors.rightMargin: selectRoot.sm ? 8 : 10
         spacing: 8
+        // Leading glyph (opt-in). A Row ignores a hidden child entirely — no
+        // slot, no spacing — so selects without a leadingIcon are unchanged.
+        QbzIcon {
+            id: leadingGlyph
+            visible: selectRoot.leadingIcon !== ""
+            name: selectRoot.leadingIcon
+            width: visible ? (selectRoot.sm ? 14 : 16) : 0
+            height: selectRoot.sm ? 14 : 16
+            anchors.verticalCenter: parent.verticalCenter
+            tintName: selectRoot.outlineActive ? "accent" : "secondary"
+        }
         Text {
-            width: parent.width - 16 - 8 - badgeSlot.width - (badgeSlot.visible ? 8 : 0)
+            width: parent.width - (leadingGlyph.visible ? leadingGlyph.width + 8 : 0)
+                - 16 - 8 - badgeSlot.width - (badgeSlot.visible ? 8 : 0)
             height: parent.height
-            text: selectRoot.currentIndex >= 0 && selectRoot.currentIndex < selectRoot.options.length
-                ? selectRoot.optLabel(selectRoot.currentIndex) : ""
+            // A placeholder select shows its fixed label; otherwise the current
+            // option. The active choice of a placeholder select is surfaced by
+            // the outline + tooltip, not here.
+            text: selectRoot.placeholderText !== ""
+                ? selectRoot.placeholderText
+                : (selectRoot.currentIndex >= 0 && selectRoot.currentIndex < selectRoot.options.length
+                    ? selectRoot.optLabel(selectRoot.currentIndex) : "")
             color: theme.textPrimary
             font.pixelSize: selectRoot.kioskHost ? (selectRoot.sm ? 12 : theme.fontBody) * 1.2 : (selectRoot.sm ? 12 : theme.fontBody)
             verticalAlignment: Text.AlignVCenter
@@ -205,7 +252,13 @@ Rectangle {
             }
         }
         QbzIcon {
-            name: selectRoot.popupPlacement === "left" ? "chevron-left" : "chevron-down"
+            // A placeholder select keeps a NEUTRAL chevron collapsed — its
+            // direction is not surfaced in the field (it lives in the tooltip
+            // and the open list), so the field says nothing about the active
+            // sort. Non-placeholder selects keep the direction chevron.
+            name: (selectRoot.sortDirection !== "" && selectRoot.placeholderText === "")
+                ? (selectRoot.sortDirection === "asc" ? "chevron-up" : "chevron-down")
+                : (selectRoot.popupPlacement === "left" ? "chevron-left" : "chevron-down")
             width: selectRoot.sm ? 14 : 16
             height: selectRoot.sm ? 14 : 16
             anchors.verticalCenter: parent.verticalCenter
@@ -222,6 +275,12 @@ Rectangle {
                 selectRoot.forceActiveFocus()
                 selectRoot.openPopup()
             }
+        }
+        onContainsMouseChanged: {
+            if (selectRoot.tooltipHost && selectRoot.tooltipText !== "")
+                selectRoot.tooltipHost.hover(containsMouse && !popup.opened, selectRoot,
+                    selectRoot.tooltipKey !== "" ? selectRoot.tooltipKey : "qbz-select",
+                    selectRoot.tooltipText)
         }
     }
 
@@ -409,6 +468,7 @@ Rectangle {
                             Item {
                                 id: rowBadge
                                 visible: selectRoot.optHasBadges()
+                                    || (selectRoot.sortDirection !== "" && optRow.index === selectRoot.currentIndex)
                                 width: visible ? 20 : 0
                                 height: parent.height
                                 Text {
@@ -422,7 +482,9 @@ Rectangle {
                                 }
                                 QbzIcon {
                                     visible: !selectRoot.optBp(optRow.index)
-                                    name: "volume-2"
+                                    name: selectRoot.sortDirection !== ""
+                                        ? (selectRoot.sortDirection === "asc" ? "chevron-up" : "chevron-down")
+                                        : "volume-2"
                                     width: 14
                                     height: 14
                                     anchors.centerIn: parent

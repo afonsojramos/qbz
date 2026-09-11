@@ -399,6 +399,10 @@ fn build_rhi_items() {
     cc.file("cxx/qt_vulkan_probe.cpp");
     println!("cargo:rerun-if-changed=cxx/win_shell.cpp");
     cc.file("cxx/win_shell.cpp");
+    println!("cargo:rerun-if-changed=cxx/app_lifecycle.cpp");
+    cc.file("cxx/app_lifecycle.cpp");
+    println!("cargo:rerun-if-changed=cxx/clipboard.cpp");
+    cc.file("cxx/clipboard.cpp");
     // Shell_NotifyIconW tray. No Q_OBJECT, so no moc; the body is inside
     // `#ifdef _WIN32` and compiles to nothing on Linux and macOS.
     println!("cargo:rerun-if-changed=cxx/win_tray.cpp");
@@ -575,6 +579,7 @@ fn main() {
                 "qml/controls/QbzEmptyState.qml",
                 "qml/controls/QbzIconButton.qml",
                 "qml/controls/QbzLineEdit.qml",
+                "qml/controls/InputFocusDismiss.qml",
                 "qml/controls/QbzLoadingDots.qml",
                 "qml/controls/QbzLoadMore.qml",
                 "qml/controls/QbzMultiSelectBar.qml",
@@ -597,6 +602,7 @@ fn main() {
                 "qml/controls/QbzToggle.qml",
                 "qml/controls/QbzToolButton.qml",
                 "qml/controls/QbzTooltip.qml",
+                "qml/controls/PanelResizeHandle.qml",
                 "qml/controls/QbzProgressRing.qml",
                 // Applied-filters tooltip: the trigger a filter control mounts
                 // beside itself (it writes the shell channel QbzTooltip reads).
@@ -634,6 +640,7 @@ fn main() {
                 "qml/rows/TrackListHeader.qml",
                 "qml/rows/TrackRow.qml",
                 "qml/settings/AppearanceSettings.qml",
+                "qml/settings/NavigationSettings.qml",
                 "qml/settings/CustomThemeEditor.qml",
                 "qml/settings/IntegrationsSettings.qml",
                 "qml/settings/SettingsView.qml",
@@ -686,6 +693,7 @@ fn main() {
                 "qml/shell/Sidebar.qml",
                 "qml/shell/SidebarFolderFlyout.qml",
                 "qml/shell/SidebarRowMenu.qml",
+                "qml/shell/MyQbzSidebarMenu.qml",
                 "qml/shell/SidebarNowPlayingDock.qml",
                 "qml/shell/AudioSettingsMenu.qml",
                 "qml/shell/AlbumQuickView.qml",

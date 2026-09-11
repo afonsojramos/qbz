@@ -408,6 +408,10 @@ pub(crate) fn init_for_user(dir: &Path, user_id: u64) {
             dir.display()
         ),
     }
+    // Seed the collapsible-sidebar tree for this account: the grids load lazily
+    // when the MyQBZ view opens, but the sidebar tree must be present from the
+    // first frame the shell paints (no-op when the opt-in is OFF).
+    publish_sidebar_tree();
 }
 
 /// Drop every per-user grid trace on logout, or the next account inherits the
@@ -422,6 +426,12 @@ pub(crate) fn teardown() {
     }
     *CREATE.lock().unwrap_or_else(|e| e.into_inner()) = CreateDoc::default();
     publish_create();
+    // Clear the sidebar tree too, or the next account inherits these rows.
+    crate::shell_bridge::ui(move |mut b| {
+        b.as_mut().set_myqbz_tree_json(QString::from(
+            "{\"mixtapes\":[],\"collections\":[]}",
+        ));
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +915,93 @@ pub(crate) fn load_grid(grid: Grid) {
 pub(crate) fn reload_grids() {
     load_grid(Grid::Mixtapes);
     load_grid(Grid::Collections);
+    publish_sidebar_tree();
+}
+
+/// Publish the collapsible-sidebar tree feed (opt-in). A LIGHT feed — id / name
+/// / hidden per collection, split into the Mixtapes and Collections sections —
+/// so `Sidebar.qml` renders the tree without touching the DB. Called from
+/// `reload_grids()` (every mutation) and at session bind, so the tree tracks
+/// creates, renames, deletes, kind-converts and hide toggles live (spec §3).
+///
+/// Skips the DB read entirely when the opt-in is OFF: a fresh/flat profile pays
+/// nothing. The `hidden` flag reuses the mixtape row's own column — the same
+/// "hide from sidebar" mechanism playlists use — so hidden rows ship in the
+/// feed and the QML drops them (and the management listing shows them greyed).
+pub(crate) fn publish_sidebar_tree() {
+    if !crate::settings_qt::collapsible_myqbz() {
+        return;
+    }
+    crate::spawn(async move {
+        let rows = tokio::task::spawn_blocking(|| list_collections(None))
+            .await
+            .unwrap_or_default();
+        let mut mixtapes: Vec<serde_json::Value> = Vec::new();
+        let mut collections: Vec<serde_json::Value> = Vec::new();
+        for c in rows {
+            let node = serde_json::json!({
+                "id": c.id,
+                "name": c.name,
+                "hidden": c.hidden,
+            });
+            match c.kind {
+                CollectionKind::Mixtape => mixtapes.push(node),
+                // Collections section mirrors the Collections grid: everything
+                // that is not a mixtape (plain collection + artist_collection).
+                _ => collections.push(node),
+            }
+        }
+        log::info!(
+            "[qbz-qt] myqbz sidebar tree published: {} mixtapes, {} collections",
+            mixtapes.len(),
+            collections.len()
+        );
+        let json = serde_json::json!({
+            "mixtapes": mixtapes,
+            "collections": collections,
+        })
+        .to_string();
+        // Published on QbzShell (not QbzMyQbz): the sidebar reads it, and
+        // QbzMyQbz is not reliably registered in the shell QML context.
+        crate::shell_bridge::ui(move |mut b| {
+            b.as_mut().set_myqbz_tree_json(QString::from(json.as_str()));
+        });
+    });
+}
+
+/// Toggle a collection's `hidden` flag from the collapsible sidebar tree's row
+/// menu — the "Hide from sidebar" affordance, the SAME mechanism playlists
+/// carry. Writes on a blocking worker, then `reload_grids()` re-lists the grids
+/// and republishes the tree so the row vanishes (or returns) live. The grids
+/// keep showing every row; only the sidebar drops the hidden ones. No-op with
+/// an empty id; failures are logged, not toasted (a silent hide/unhide, like
+/// the playlist one).
+pub(crate) fn set_collection_hidden(id: String, hidden: bool) {
+    if id.is_empty() {
+        return;
+    }
+    crate::spawn(async move {
+        let write_id = id.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            crate::library_db_qt::with_db(true, |db| {
+                Ok(db
+                    .with_connection(|conn| qbz_mixtape::repo::set_hidden(conn, &write_id, hidden))
+                    .map_err(|e| e.to_string()))
+            })
+            .unwrap_or_else(|| Err("library database unavailable".to_string()))
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("set-hidden task panicked: {e}")));
+        match result {
+            Ok(()) => {
+                reload_grids();
+                // Refresh the detail if THIS collection is open, so its hero
+                // menu flips between "Hide from sidebar" and "Show in sidebar".
+                crate::myqbz_detail_qt::reload_if_open(&id);
+            }
+            Err(e) => log::warn!("[qbz-qt] myqbz set_collection_hidden failed: {e}"),
+        }
+    });
 }
 
 /// Re-render both grids from cache after a live language switch: the eyebrow

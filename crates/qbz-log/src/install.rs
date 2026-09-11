@@ -15,6 +15,29 @@ static INSTALLED: AtomicBool = AtomicBool::new(false);
 /// opens/rotates the on-disk file, then sets the boxed logger + max level. Idempotent:
 /// a second call is a guarded no-op (it neither rotates the file again nor panics).
 pub fn install(default_level: &str) {
+    install_with_file_sink(default_level, true);
+}
+
+/// Same as [`install`], but with the on-disk file sink DISABLED (stderr + ring only).
+///
+/// For an internal, disposable child process that re-enters the same `main`.
+/// [`open_log_file`] rotates `qbz.log` to `qbz.log.prev` and creates a fresh
+/// file on every call, so a child running it MID-RUN renames the live log out
+/// from under the parent — which keeps writing to the renamed inode — and
+/// leaves `qbz.log` holding nothing but the child's own first lines.
+///
+/// Field-reported in #749: on Linux every launch spawns the presentation /
+/// GPU preflight child, so `~/.local/share/qbz/logs/qbz.log` ended at two
+/// lines on EVERY run while the app itself was healthy and its whole log went
+/// to `qbz.log.prev`. The user's log file, the first thing a bug report
+/// attaches, was structurally useless. A child's output is already captured
+/// by the parent (proof line on stdout, `preflight_output_tail` on failure),
+/// so it loses nothing by staying off the file.
+pub fn install_without_file_sink(default_level: &str) {
+    install_with_file_sink(default_level, false);
+}
+
+fn install_with_file_sink(default_level: &str, file_sink: bool) {
     // True one-shot guard: avoid re-rotating the log file or fighting an already-set logger.
     if INSTALLED.swap(true, Ordering::SeqCst) {
         return;
@@ -34,7 +57,7 @@ pub fn install(default_level: &str) {
     )
     .build();
     let level = inner.filter();
-    let file = open_log_file();
+    let file = if file_sink { open_log_file() } else { None };
 
     // Ignore the Err if a logger was somehow already set elsewhere.
     if log::set_boxed_logger(Box::new(TeeLogger::new(inner, file))).is_ok() {
@@ -55,16 +78,60 @@ pub fn log_file_path() -> Option<PathBuf> {
 /// Open the log file for this run, rotating any previous one to `qbz.log.prev`.
 /// Returns `None` (file sink disabled, gracefully) on any filesystem error.
 fn open_log_file() -> Option<BufWriter<File>> {
-    let path = log_file_path()?;
+    open_log_file_at(&log_file_path()?)
+}
+
+/// [`open_log_file`] against an explicit path, so the rotation contract is
+/// testable without a real data dir.
+///
+/// NOTE the hazard this encodes: every call renames the CURRENT file away and
+/// starts an empty one. That is right once per process run and wrong for
+/// anything else — see [`install_without_file_sink`].
+fn open_log_file_at(path: &std::path::Path) -> Option<BufWriter<File>> {
     let dir = path.parent()?;
     std::fs::create_dir_all(dir).ok()?;
 
     if path.exists() {
         let prev = dir.join("qbz.log.prev");
         // Best-effort rotation; a failure here must not disable logging.
-        let _ = std::fs::rename(&path, &prev);
+        let _ = std::fs::rename(path, &prev);
     }
 
-    let file = File::create(&path).ok()?;
+    let file = File::create(path).ok()?;
     Some(BufWriter::new(file))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    /// The rotation contract, and the reason a child process must never run it:
+    /// a second open renames the live file to `qbz.log.prev` and leaves an
+    /// empty `qbz.log` behind. This is #749 in three lines.
+    #[test]
+    fn a_second_open_rotates_the_live_file_away() {
+        let dir = std::env::temp_dir().join(format!("qbz-log-rotate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("qbz.log");
+
+        let mut first = open_log_file_at(&path).expect("first open");
+        writeln!(first, "parent line").unwrap();
+        first.flush().unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "parent line\n");
+
+        // A second process (the preflight child) installing its own logger.
+        let mut second = open_log_file_at(&path).expect("second open");
+        writeln!(second, "child line").unwrap();
+        second.flush().unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "child line\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("qbz.log.prev")).unwrap(),
+            "parent line\n",
+            "the parent's log survives only under .prev"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

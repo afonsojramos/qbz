@@ -707,10 +707,15 @@ impl AudioBackend for CpalDefaultBackend {
             .with_buffer_size(rodio::cpal::BufferSize::Fixed(
                 (config.sample_rate / 10).clamp(1024, 19200),
             ))
+            // #660: rodio's default callback eprintln!s every error of a
+            // wedged PCM (~1.7 M/s); the shared callback rate-limits it and
+            // latches the wedge for the audio thread to rebuild the stream.
+            .with_error_callback(crate::stream_health::error_callback("System default"))
             .open_stream()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
         #[cfg(not(target_os = "linux"))]
         let mixer_sink = builder
+            .with_error_callback(crate::stream_health::error_callback("System default"))
             .open_stream()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
 
@@ -814,9 +819,12 @@ impl CpalDefaultBackend {
                 builder
                     .with_supported_config(cfg)
                     .with_buffer_size(buffer_size)
+                    .with_error_callback(crate::stream_health::error_callback("System default"))
                     .open_stream()
             } else {
-                builder.open_stream()
+                builder
+                    .with_error_callback(crate::stream_health::error_callback("System default"))
+                    .open_stream()
             };
 
             let mixer_sink = match open_result {

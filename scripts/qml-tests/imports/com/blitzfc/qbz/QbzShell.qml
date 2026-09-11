@@ -1,0 +1,10 @@
+pragma Singleton
+import QtQuick
+QtObject {
+ signal trackCacheStatusChanged(string trackId, int status, real progress)
+ property bool reduceMotion: false
+ property bool forceCanvasArt: false
+ property string restoreScope: ""
+ property real scrollRestore: 0
+ function reportScroll(scope, y) {}
+ property string themeJson: ""; property int ambientMode: 0 }

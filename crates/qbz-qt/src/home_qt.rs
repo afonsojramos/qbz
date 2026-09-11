@@ -77,6 +77,10 @@ pub struct HomeCard {
     pub(crate) blacklist_album_id: String,
     pub genre: String,
     pub year: String,
+    #[serde(default, rename = "releaseSortKey")]
+    pub release_sort_key: u32,
+    #[serde(default, rename = "defaultOrder")]
+    pub default_order: u32,
     #[serde(rename = "qualityTier")]
     pub quality_tier: String,
     #[serde(rename = "qualityLabel")]
@@ -1793,7 +1797,7 @@ pub(crate) fn map_album(album: DiscoverAlbum) -> HomeCard {
         is_pinned,
         is_favorite,
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist,
         artist_id,
         blacklist_artist_ids,
@@ -1889,7 +1893,7 @@ fn map_slim(index: usize, album: DiscoverAlbum) -> HomeCard {
         // false. A future SlimCard with a heart inherits a correct row.
         is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: subtitle,
         artist_id,
         blacklist_artist_ids,
@@ -2013,16 +2017,12 @@ pub(crate) fn quality_detail_from_parts(
 /// is a card that quietly renders one line short. 1:1 with the reference's
 /// `album_map::map_album`.
 pub(crate) fn album_release_date(album: &Album) -> Option<String> {
-    album
-        .dates
-        .as_ref()
-        .and_then(|d| {
-            d.original
-                .clone()
-                .or_else(|| d.download.clone())
-                .or_else(|| d.stream.clone())
-        })
-        .or_else(|| album.release_date_original.clone())
+    let nonempty = |value: Option<&str>| value.filter(|s| !s.trim().is_empty()).map(str::to_string);
+    let dates = album.dates.as_ref();
+    nonempty(dates.and_then(|d| d.original.as_deref()))
+        .or_else(|| nonempty(album.release_date_original.as_deref()))
+        .or_else(|| nonempty(dates.and_then(|d| d.download.as_deref())))
+        .or_else(|| nonempty(dates.and_then(|d| d.stream.as_deref())))
 }
 
 /// `(bit_depth, sample_rate)` reading BOTH shapes: nested `audio_info` first,
@@ -2072,7 +2072,9 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
     //
     // Date: nested `dates` first (original > download > stream), else the flat
     // `release_date_original`.
-    let year = qbz_text_utils::dates::release_label(album_release_date(&album).as_deref());
+    let release_date = album_release_date(&album);
+    let year = qbz_text_utils::dates::release_label(release_date.as_deref());
+    let release_sort_key = qbz_text_utils::dates::release_sort_key(release_date.as_deref());
     let (bit_depth, sample_rate) = album_audio_parts(&album);
     let quality_tier = album_quality_tier(&album, bit_depth).to_string();
     let quality_label = match (bit_depth, sample_rate) {
@@ -2099,12 +2101,13 @@ pub(crate) fn map_flat_album(album: Album) -> HomeCard {
         // DiscoverBrowse, so one stamp covers four surfaces.
         is_favorite: crate::fav_cache_qt::is_album_favorite(&album.id),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: album.artist.name,
         artist_id: album.artist.id.to_string(),
         blacklist_artist_ids,
         blacklist_album_id,
         year,
+        release_sort_key,
         // Never set here before, so the hover meta's genre line was empty on
         // every card this mapper feeds — the card renders it, the collection
         // passes it, the document simply had nothing in it.

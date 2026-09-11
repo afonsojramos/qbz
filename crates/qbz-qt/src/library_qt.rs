@@ -48,7 +48,6 @@ use crate::home_qt;
 
 /// Matches favorites.rs paging.
 const PAGE_SIZE: u32 = 500;
-const MAX_ITEMS: usize = 10_000;
 
 /// One normalized row (superset of the per-tab cards + the All feed item).
 #[derive(Clone, Default, Serialize)]
@@ -150,7 +149,19 @@ pub struct FeedItem {
     #[serde(default, rename = "cacheStatus", skip_serializing_if = "is_zero_i32")]
     pub cache_status: i32,
     pub genre: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, rename = "updatedAt", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<i64>,
+    #[serde(default, rename = "trackCount", skip_serializing_if = "Option::is_none")]
+    pub track_count: Option<u32>,
     pub year: String,
+    #[serde(
+        default,
+        rename = "releaseSortKey",
+        skip_serializing_if = "is_zero_u32"
+    )]
+    pub release_sort_key: u32,
     pub duration: String,
     /// Matching evidence carried by Qobuz favourite-track rows. Omitted for
     /// every other feed kind so the high-cardinality mixed document only pays
@@ -162,6 +173,12 @@ pub struct FeedItem {
     pub explicit: bool,
     #[serde(rename = "playlistOwned")]
     pub playlist_owned: bool,
+    #[serde(
+        default,
+        rename = "playlistCreator",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub playlist_creator: String,
     #[serde(rename = "playlistFollowing")]
     pub playlist_following: bool,
     #[serde(rename = "isPinned", default)]
@@ -348,15 +365,29 @@ async fn fetch_favorites(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
     key: &str,
 ) -> Result<(Vec<serde_json::Value>, usize), String> {
+    collect_favorite_pages(key, |offset| async move {
+        runtime
+            .core()
+            .get_favorites(key, PAGE_SIZE, offset)
+            .await
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
+async fn collect_favorite_pages<F, Fut>(
+    key: &str,
+    mut fetch: F,
+) -> Result<(Vec<serde_json::Value>, usize), String>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<serde_json::Value, String>>,
+{
     let mut total: usize;
     let mut all_items: Vec<serde_json::Value> = Vec::new();
     let mut offset = 0u32;
     loop {
-        let value = runtime
-            .core()
-            .get_favorites(key, PAGE_SIZE, offset)
-            .await
-            .map_err(|e| e.to_string())?;
+        let value = fetch(offset).await?;
         let branch = value.get(key);
         total = branch
             .and_then(|b| b.get("total"))
@@ -368,12 +399,23 @@ async fn fetch_favorites(
             .cloned()
             .unwrap_or_default();
         let page_len = page.len();
-        all_items.extend(page);
-        offset += page_len as u32;
-        if page_len < PAGE_SIZE as usize
-            || (total > 0 && offset as usize >= total)
-            || all_items.len() >= MAX_ITEMS
+        // A server ignoring offset must not turn an uncapped fetch into an
+        // endless loop. Fail explicitly instead of publishing truncated data.
+        if page_len > 0
+            && all_items.len() >= page_len
+            && all_items[all_items.len() - page_len..] == page
         {
+            return Err(format!(
+                "Favorites {key}: server repeated a page at offset {offset}"
+            ));
+        }
+        all_items.extend(page);
+        offset = offset
+            .checked_add(
+                u32::try_from(page_len).map_err(|_| "Favorites page is too large".to_string())?,
+            )
+            .ok_or_else(|| "Favorites offset overflow".to_string())?;
+        if page_len < PAGE_SIZE as usize || (total > 0 && offset as usize >= total) {
             break;
         }
     }
@@ -521,6 +563,15 @@ fn map_track(track: Track) -> FeedItem {
         .performer
         .map(|p| (p.name, p.id.to_string()))
         .unwrap_or_default();
+    let label = track
+        .album
+        .as_ref()
+        .and_then(|a| a.label.as_ref())
+        .map(|label| label.name.clone())
+        .unwrap_or_default();
+    let release_sort_key = qbz_text_utils::dates::release_sort_key(
+        track.album.as_ref().and_then(|a| a.release_date_original.as_deref()),
+    );
     FeedItem {
         kind: "track".into(),
         group: "favorites".into(),
@@ -535,6 +586,8 @@ fn map_track(track: Track) -> FeedItem {
         album_artist,
         album_artist_id,
         genre,
+        label,
+        release_sort_key,
         duration: mmss(duration_secs),
         isrc,
         duration_secs,
@@ -574,16 +627,7 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
         .as_ref()
         .and_then(|a| a.maximum_sampling_rate)
         .or(album.maximum_sampling_rate);
-    let date = album
-        .dates
-        .as_ref()
-        .and_then(|d| {
-            d.original
-                .clone()
-                .or(d.download.clone())
-                .or(d.stream.clone())
-        })
-        .or(album.release_date_original.clone());
+    let date = home_qt::album_release_date(&album);
     let artist = if !album.artist.name.is_empty() {
         album.artist.name
     } else {
@@ -594,23 +638,35 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
             .unwrap_or_default()
     };
     let is_pinned = crate::sidebar_qt::is_pinned("album", &album.id);
+    // Prefer the user's custom cover override (add_custom_cover) when set, so
+    // the Library grid card matches the album page. Borrowed before `album.id`
+    // and `album.image` are moved into the struct below.
+    let cover_url = crate::cover_artwork_qt::prefer_album_cover(
+        &album.id,
+        album.image.best().cloned().unwrap_or_default(),
+    );
     FeedItem {
         is_pinned,
         kind: "album".into(),
         group: "favorites".into(),
         source: "qobuz".into(),
         id: album.id,
-        title: album.title,
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         subtitle: artist.clone(),
         artist,
         artist_id: album.artist.id.to_string(),
+        label: album.label.map(|label| label.name).unwrap_or_default(),
+        duration_secs: album.duration.unwrap_or(0),
+        track_count: Some(track_count as u32),
         genre: album.genre.map(|g| g.name).unwrap_or_default(),
         year: qbz_text_utils::dates::release_label(date.as_deref()),
+        release_sort_key: qbz_text_utils::dates::release_sort_key(date.as_deref()),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
         quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
         // Library grid card: full variant (best()) — the down-tier was
-        // reverted after the 2026-08-15 owner smoke (contract 04 §3).
-        image_url: album.image.best().cloned().unwrap_or_default(),
+        // reverted after the 2026-08-15 owner smoke (contract 04 §3). Custom
+        // cover override applied above.
+        image_url: cover_url,
         is_favorite: true,
         not_streamable,
         cache_status: if fully_cached { 3 } else { 0 },
@@ -620,6 +676,17 @@ fn map_album(album: Album, ready_offline_tracks: usize) -> FeedItem {
 }
 
 fn map_artist(artist: Artist) -> FeedItem {
+    // Prefer the user's custom portrait (add_custom_image) when set — keyed by
+    // artist NAME — so the card matches the artist page. Borrowed before
+    // `artist.name`/`artist.image` are moved into the struct.
+    let image_url = crate::cover_artwork_qt::prefer_artist_image(
+        &artist.name,
+        artist
+            .image
+            .as_ref()
+            .and_then(|img| img.best().cloned())
+            .unwrap_or_default(),
+    );
     FeedItem {
         // Pin badge state from the per-user store. The album mapper above
         // has always seeded it; the artist and playlist rows did not, so
@@ -631,10 +698,7 @@ fn map_artist(artist: Artist) -> FeedItem {
         source: "qobuz".into(),
         id: artist.id.to_string(),
         title: artist.name,
-        image_url: artist
-            .image
-            .and_then(|img| img.best().cloned())
-            .unwrap_or_default(),
+        image_url,
         is_favorite: true,
         ..Default::default()
     }
@@ -717,6 +781,22 @@ pub(crate) fn playlist_subtitle(owner: &str, tracks_count: u32) -> String {
     subtitle
 }
 
+fn playlist_creator(owned: bool, owner_name: &str) -> &'static str {
+    if owned {
+        "you"
+    } else if owner_name
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("qobuz"))
+    {
+        "qobuz"
+    } else if owner_name.trim().is_empty() {
+        "unknown"
+    } else {
+        "others"
+    }
+}
+
 fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
     // The card's single image is the playlist's own Qobuz artwork ONLY.
     // Falling back to `images300[0]` here is what put a member ALBUM cover
@@ -740,6 +820,9 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
         id: playlist.id.to_string(),
         title: playlist.name.clone(),
         subtitle,
+        track_count: Some(playlist.tracks_count),
+        duration_secs: playlist.duration,
+        updated_at: playlist.updated_at,
         playlist_own_image: !cover_url.is_empty(),
         image_url: cover_url,
         covers,
@@ -753,6 +836,7 @@ fn map_playlist_row(playlist: &Playlist, is_following: bool) -> FeedItem {
         // still available to callers as `group` / `playlist_following`.
         is_favorite: crate::fav_cache_qt::is_favorite("playlist", &playlist.id.to_string()),
         playlist_owned: owned,
+        playlist_creator: playlist_creator(owned, &playlist.owner.name).into(),
         playlist_following: is_following,
         ..Default::default()
     }
@@ -1126,11 +1210,11 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
         // A failed availability query must not turn every favorite into a
         // tombstone.  `None` means "unknown" and leaves rows interactive;
         // the next successful Library load will settle them.
-        let existing_albums: Option<HashSet<String>> = if album_candidates.is_empty() {
-            Some(HashSet::new())
+        let existing_albums: Option<HashMap<String, Vec<String>>> = if album_candidates.is_empty() {
+            Some(HashMap::new())
         } else {
             match tokio::task::spawn_blocking(move || {
-                crate::local_albums::existing_favorite_album_ids_blocking(album_candidates)
+                crate::local_albums::existing_favorite_album_sources_blocking(album_candidates)
             })
             .await
             {
@@ -1150,12 +1234,18 @@ pub async fn load_library(runtime: &Arc<AppRuntime<LoggingAdapter>>) -> Result<u
             let source_unavailable = lf.kind == "album"
                 && existing_albums
                     .as_ref()
-                    .is_some_and(|ids| !ids.contains(&lf.id));
+                    .is_some_and(|ids| !ids.contains_key(&lf.id));
+            let sources = existing_albums
+                .as_ref()
+                .and_then(|albums| albums.get(&lf.id))
+                .cloned()
+                .unwrap_or_default();
             feed.push(
                 FeedItem {
                     kind: lf.kind,
                     group: "local".into(),
                     source: lf.source,
+                    sources,
                     subtitle: lf.subtitle,
                     artist: lf.artist.clone(),
                     image_url: lf.artwork_url,
@@ -1316,6 +1406,10 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
                 bit_depth: a.bit_depth,
                 sample_rate: Some(khz(a.sample_rate)),
                 is_favorite: hearted("album", &a.id),
+                release_sort_key: a
+                    .year
+                    .map(|y| qbz_text_utils::dates::release_sort_key(Some(&y.to_string())))
+                    .unwrap_or(0),
                 year: a.year.map(|y| y.to_string()).unwrap_or_default(),
                 added_rank: rank(i, n),
                 id: a.id,
@@ -1459,6 +1553,41 @@ fn all_local_feed_blocking() -> Vec<FeedItem> {
     out
 }
 
+fn map_purchased_album(a: qbz_models::PurchaseAlbum) -> FeedItem {
+    let tier = if a.hires { "hires" } else { "cd" };
+    FeedItem {
+        // Purchase rows are the ONE group in this feed whose flags are
+        // not implied by the group itself: a purchased album can also
+        // be pinned and can also be a favourite, and both were left at
+        // their `Default` false. The card then drew a hollow heart and
+        // an unpinned badge over an album that IS both, and the first
+        // click on either REMOVED it. Same two O(1) reads every other
+        // producer does.
+        is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
+        is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
+        kind: "album".into(),
+        group: "purchases".into(),
+        source: "qobuz".into(),
+        subtitle: a.artist.name.clone(),
+        artist: a.artist.name,
+        artist_id: a.artist.id.to_string(),
+        image_url: a.image.best().cloned().unwrap_or_default(),
+        quality_tier: tier.into(),
+        year: qbz_text_utils::dates::release_label(a.release_date_original.as_deref()),
+        release_sort_key: qbz_text_utils::dates::release_sort_key(
+            a.release_date_original.as_deref(),
+        ),
+        label: a.label.as_ref().map(|label| label.name.clone()).unwrap_or_default(),
+        duration_secs: a.duration.unwrap_or(0),
+        track_count: a.tracks_count,
+        genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
+        id: a.id,
+        title: a.title,
+        ..Default::default()
+    }
+    .keyed()
+}
+
 /// Purchases via the offline-cache crate's pass-through (best-effort).
 async fn fetch_purchases(
     runtime: &Arc<AppRuntime<LoggingAdapter>>,
@@ -1480,33 +1609,7 @@ async fn fetch_purchases(
         .albums
         .items
         .into_iter()
-        .map(|a| {
-            let tier = if a.hires { "hires" } else { "cd" };
-            FeedItem {
-                // Purchase rows are the ONE group in this feed whose flags are
-                // not implied by the group itself: a purchased album can also
-                // be pinned and can also be a favourite, and both were left at
-                // their `Default` false. The card then drew a hollow heart and
-                // an unpinned badge over an album that IS both, and the first
-                // click on either REMOVED it. Same two O(1) reads every other
-                // producer does.
-                is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
-                is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
-                kind: "album".into(),
-                group: "purchases".into(),
-                source: "qobuz".into(),
-                subtitle: a.artist.name.clone(),
-                artist: a.artist.name,
-                artist_id: a.artist.id.to_string(),
-                image_url: a.image.best().cloned().unwrap_or_default(),
-                quality_tier: tier.into(),
-                genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
-                id: a.id,
-                title: a.title,
-                ..Default::default()
-            }
-            .keyed()
-        })
+        .map(map_purchased_album)
         .collect();
     let tracks = filtered
         .tracks
@@ -1540,6 +1643,14 @@ async fn fetch_purchases(
                 subtitle: t.performer.name.clone(),
                 artist: t.performer.name,
                 artist_id: t.performer.id.to_string(),
+                duration: mmss(t.duration),
+                duration_secs: t.duration,
+                label: t.album.as_ref().and_then(|a| a.label.as_ref())
+                    .map(|label| label.name.clone()).unwrap_or_default(),
+                genre: t.album.as_ref().and_then(|a| a.genre.as_ref())
+                    .map(|genre| genre.name.clone()).unwrap_or_default(),
+                release_sort_key: qbz_text_utils::dates::release_sort_key(
+                    t.album.as_ref().and_then(|a| a.release_date_original.as_deref())),
                 album: alb,
                 album_id: aid,
                 album_artist_id,
@@ -2279,11 +2390,13 @@ pub(crate) fn insert_playlist_row(
             id: id.to_string(),
             title: title.to_string(),
             subtitle: playlist_subtitle(owner, tracks_count),
+            track_count: Some(tracks_count),
             playlist_own_image: !cover_url.is_empty(),
             image_url: cover_url.to_string(),
             covers,
             is_favorite: crate::fav_cache_qt::is_favorite("playlist", id),
             playlist_owned: !following,
+            playlist_creator: playlist_creator(!following, owner).into(),
             playlist_following: following,
             // 0.0 = most-recently added, which is what this just made it. The
             // feed is kept sorted by this proxy, so the row lands at the head
@@ -2568,6 +2681,166 @@ pub fn play_from_visible(visible_ids_json: String, clicked_id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn purchased_album_sort_metadata_is_preserved() {
+        let album = serde_json::from_value(serde_json::json!({
+            "id": "a", "title": "A", "release_date_original": "1980-04-01",
+            "duration": 2500, "tracks_count": 11, "label": {"id": 1, "name": "Label"}
+        })).unwrap();
+        let row = map_purchased_album(album);
+        assert_eq!(row.release_sort_key, 19800401);
+        assert_eq!(row.duration_secs, 2500);
+        assert_eq!(row.track_count, Some(11));
+        assert_eq!(row.label, "Label");
+    }
+
+    #[test]
+    fn track_sort_metadata_uses_original_date_and_keeps_missing_dates_unknown() {
+        let track: Track = serde_json::from_value(serde_json::json!({
+            "id": 42, "duration": 234,
+            "album": {"id": "a", "title": "A", "release_date_original": "1980-04-01",
+                "release_date_stream": "2015-06-01", "label": {"id": 1, "name": "Label"}}
+        })).unwrap();
+        let row = map_track(track);
+        assert_eq!(row.release_sort_key, 19800401);
+        assert_eq!(row.label, "Label");
+        assert_eq!(row.duration_secs, 234);
+        let track: Track = serde_json::from_value(serde_json::json!({
+            "id": 43, "album": {"release_date_stream": "2015-06-01"}
+        })).unwrap();
+        assert_eq!(map_track(track).release_sort_key, 0);
+    }
+
+    #[test]
+    fn playlist_sort_metadata_retains_numeric_values_and_empty_track_count() {
+        let playlist: Playlist = serde_json::from_value(serde_json::json!({
+            "id": 42, "name": "List", "tracks_count": 0, "duration": 0,
+            "updated_at": 1700000000
+        })).unwrap();
+        let row = serde_json::to_value(map_playlist_row(&playlist, false)).unwrap();
+        assert_eq!(row["trackCount"], 0);
+        assert_eq!(row["updatedAt"], 1700000000);
+    }
+
+    #[test]
+    fn playlist_creator_filters_distinguish_ownership_and_editorial_names() {
+        assert_eq!(playlist_creator(true, "Qobuz fan"), "you");
+        assert_eq!(playlist_creator(false, "Qobuz"), "qobuz");
+        assert_eq!(playlist_creator(false, "Qobuz Latinoamérica"), "qobuz");
+        assert_eq!(playlist_creator(false, "My Qobuz playlist"), "others");
+        assert_eq!(playlist_creator(false, "Listener"), "others");
+        assert_eq!(playlist_creator(false, ""), "unknown");
+    }
+
+    #[tokio::test]
+    async fn favorites_paging_passes_ten_thousand_and_preserves_every_track() {
+        for reported_total in [0, 10_751] {
+            let mut offsets = Vec::new();
+            let (items, total) = collect_favorite_pages("tracks", |offset| {
+                offsets.push(offset);
+                let end = (offset + PAGE_SIZE).min(10_751);
+                let items: Vec<_> = (offset..end)
+                    .map(|id| serde_json::json!({"id": id}))
+                    .collect();
+                std::future::ready(Ok(serde_json::json!({
+                    "tracks": {"items": items, "total": reported_total}
+                })))
+            })
+            .await
+            .unwrap();
+            assert_eq!(items.len(), 10_751);
+            assert_eq!(total, reported_total);
+            assert_eq!(offsets.last(), Some(&10_500));
+            assert!(items.iter().enumerate().all(|(id, item)| item["id"] == id));
+        }
+    }
+
+    #[tokio::test]
+    async fn favorites_paging_stops_at_total_or_empty_page_and_propagates_errors() {
+        let mut calls = 0;
+        let (items, _) = collect_favorite_pages("tracks", |offset| {
+            calls += 1;
+            assert_eq!(offset, 0);
+            std::future::ready(Ok(serde_json::json!({"tracks": {
+                "total": PAGE_SIZE,
+                "items": (0..PAGE_SIZE).map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }})))
+        })
+        .await
+        .unwrap();
+        assert_eq!(calls, 1);
+        assert_eq!(items.len(), PAGE_SIZE as usize);
+        let (items, _) = collect_favorite_pages("tracks", |_| {
+            std::future::ready(Ok(serde_json::json!({"tracks":{"items":[],"total":0}})))
+        })
+        .await
+        .unwrap();
+        assert!(items.is_empty());
+        let error = collect_favorite_pages("tracks", |_| {
+            std::future::ready(Err("API failed".to_string()))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error, "API failed");
+    }
+
+    #[tokio::test]
+    async fn favorites_paging_rejects_a_server_ignoring_offset() {
+        let mut calls = 0;
+        let error = collect_favorite_pages("tracks", |_| {
+            calls += 1;
+            std::future::ready(Ok(serde_json::json!({"tracks": {
+                "total": 0,
+                "items": (0..PAGE_SIZE).map(|id| serde_json::json!({"id":id})).collect::<Vec<_>>()
+            }})))
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(calls, 2);
+        assert!(error.contains("repeated a page at offset 500"));
+    }
+
+    #[test]
+    fn album_sort_key_prefers_original_over_digital_reissue_dates() {
+        let album: Album = serde_json::from_value(serde_json::json!({
+            "id":"souls", "title":"The Book of Souls",
+            "release_date_original":"2015-09-04",
+            "dates":{"stream":"2026-09-08", "download":"2025-01-01"}
+        }))
+        .unwrap();
+        let item = map_album(album, 0);
+        assert_eq!(item.release_sort_key, 20150904);
+        assert!(item.year.ends_with("2015"));
+        assert_eq!(
+            serde_json::to_value(item).unwrap()["releaseSortKey"],
+            20150904
+        );
+    }
+
+    #[test]
+    fn purchased_albums_carry_visible_dates_and_chronological_keys() {
+        for (date, expected) in [
+            (Some("2015-09-04"), 20150904),
+            (Some("2021-09-03"), 20210903),
+            (None, 0),
+        ] {
+            let album = serde_json::from_value(serde_json::json!({
+                "id":"purchased", "title":"Purchased album", "release_date_original":date
+            }))
+            .unwrap();
+            let row = map_purchased_album(album);
+            assert_eq!(row.release_sort_key, expected);
+            assert_eq!(row.year, qbz_text_utils::dates::release_label(date));
+            if expected != 0 {
+                assert!(!row.year.is_empty());
+                assert_eq!(
+                    serde_json::to_value(row).unwrap()["releaseSortKey"],
+                    expected
+                );
+            }
+        }
+    }
 
     fn track(id: &str, title: &str) -> FeedItem {
         FeedItem {

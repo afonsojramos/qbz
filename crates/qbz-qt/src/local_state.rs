@@ -559,16 +559,18 @@ pub fn counts() -> LocalCounts {
     state(|s| s.counts.clone())
 }
 
-/// Whether the local library is usable at all (a per-user db with at least
-/// one registered folder). Drives the "nothing indexed yet" empty state.
+/// Whether any registered folder or indexed track makes the library usable.
+/// Offline downloads are indexed without registering a music folder.
 /// A server-only setup is ALSO usable — the browse union has content even
 /// with no registered on-disk folder.
 pub fn has_library() -> bool {
     let has_folders = with_db(|db| db.get_folders())
         .map(|f| !f.is_empty())
         .unwrap_or(false);
+    let indexed_tracks = with_db(|db| db.count_all_local_tracks()).unwrap_or(0);
     library_sources_available(
         has_folders,
+        indexed_tracks,
         crate::local_plex::is_configured(),
         crate::local_plex::cached_track_count(),
         crate::media_servers_qt::cached_track_count(),
@@ -577,11 +579,12 @@ pub fn has_library() -> bool {
 
 fn library_sources_available(
     has_folders: bool,
+    indexed_tracks: u64,
     plex_enabled: bool,
     plex_tracks: i64,
     remote_tracks: i64,
 ) -> bool {
-    has_folders || (plex_enabled && plex_tracks > 0) || remote_tracks > 0
+    has_folders || indexed_tracks > 0 || (plex_enabled && plex_tracks > 0) || remote_tracks > 0
 }
 
 #[cfg(test)]
@@ -646,11 +649,21 @@ mod phase_a_tests {
 
     #[test]
     fn remote_only_installation_has_a_library() {
-        assert!(library_sources_available(true, false, 0, 0));
-        assert!(library_sources_available(false, true, 5_137, 0));
-        assert!(library_sources_available(false, false, 0, 4_924));
-        assert!(library_sources_available(false, false, 0, 6_678));
-        assert!(!library_sources_available(false, false, 0, 0));
+        assert!(library_sources_available(true, 0, false, 0, 0));
+        assert!(library_sources_available(false, 0, true, 5_137, 0));
+        assert!(library_sources_available(false, 0, false, 0, 4_924));
+        assert!(library_sources_available(false, 0, false, 0, 6_678));
+        assert!(!library_sources_available(false, 0, false, 0, 0));
+    }
+
+    #[test]
+    fn offline_only_installation_has_a_library_without_folders_or_servers() {
+        // #758: 7 albums / 97 indexed downloaded tracks, no music folders.
+        assert!(library_sources_available(false, 97, false, 0, 0));
+        assert!(library_sources_available(false, 1, false, 0, 0));
+        // Removing the last download restores the genuine empty state.
+        assert!(!library_sources_available(false, 0, false, 0, 0));
+        assert!(!library_sources_available(false, 0, false, 20, 0));
     }
 
     #[test]
@@ -890,7 +903,7 @@ mod phase_a_tests {
         assert!(local.contains("visible: root.view.tracksGroup !== \"off\""));
         assert!(local.contains("completeAlphabet: true"));
         assert!(library.contains("activeTab === \"tracks\" && tracksGroup !== \"off\""));
-        assert!(library.contains("completeAlphabet: true"));
+        assert!(library.contains("completeAlphabet: !root.dateGrouping"));
         assert!(strip.contains("model: root.completeAlphabet ? 27"));
         assert!(strip.contains("\"#ABCDEFGHIJKLMNOPQRSTUVWXYZ\".charAt(position)"));
         assert!(strip.contains("enabled: cell.entry.index >= 0"));

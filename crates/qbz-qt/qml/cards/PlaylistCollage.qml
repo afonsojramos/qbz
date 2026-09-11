@@ -60,6 +60,7 @@ import "../theme"
 
 Item {
     id: root
+    property bool gridArtwork: false
 
     // Remote cover urls (feed row `covers`); only the first four distinct
     // entries are drawn.
@@ -308,6 +309,7 @@ Item {
         Repeater {
             model: 4
             delegate: RoundedImage {
+                gridArtwork: root.gridArtwork
                 required property int index
                 readonly property rect cell: root.cellOf(index)
                 visible: index < root.drawnTiles

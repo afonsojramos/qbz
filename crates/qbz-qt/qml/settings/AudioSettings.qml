@@ -272,10 +272,20 @@ Column {
     // =========================== BIT-PERFECT =============================
     GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("BIT-PERFECT", QbzSession.trRev) }
     SettingRow { kioskHost: root.kioskHost;
-        // Hidden where no backend can honour it: on Windows until WASAPI
-        // exclusive lands (Phase B publishes backendIsWasapi), and on macOS,
-        // whose only backend is System default. Linux is unchanged - visible
-        // always, enabled only on ALSA.
+        // Visible wherever a backend can honour it, enabled only on that
+        // backend. Per platform:
+        //
+        // LINUX: unchanged since 2026-08-27 - always visible, enabled on ALSA.
+        //
+        // MACOS: System default IS the CoreAudio exclusive backend. With
+        // `exclusive_mode` set, qbz-audio backend.rs
+        // `create_output_stream_with_exclusive_guard` pins the device, takes
+        // Hog Mode and switches its nominal rate to the track (PR #391,
+        // shipped in 1.2.11 and never removed). fc0d35e29 hid this row on
+        // macOS on the wrong premise that no backend there could honour it;
+        // #748 restored it. `backendIsCoreAudio` is published by
+        // settings_qt.rs only on macOS, so the `=== true` idiom keeps every
+        // other platform exactly where it was.
         //
         // WINDOWS: hidden on purpose, even now that Phase B publishes
         // `backendIsWasapi`. The exclusive path is chosen by the BACKEND
@@ -286,13 +296,13 @@ Column {
         // control at all when the thing being judged IS bit-perfect. Whether
         // Windows should instead mirror the Linux split (backend = transport,
         // toggle = hw/plughw) is an open design question for the owner.
-        visible: QbzShell.isLinux
+        visible: QbzShell.isLinux || root.doc.backendIsCoreAudio === true
         label: QbzSession.tr("Exclusive mode", QbzSession.trRev)
         description: QbzSession.tr("Lock the device so no other app can resample it.", QbzSession.trRev)
-        rowEnabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
+        rowEnabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true || root.doc.backendIsCoreAudio === true
         QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.exclusiveMode === true
-            enabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true
+            enabled: root.doc.backendIsAlsa === true || root.doc.backendIsWasapi === true || root.doc.backendIsCoreAudio === true
             onToggled: function (v) { QbzBridge.settingsBool("exclusive-mode", v) }
         }
     }

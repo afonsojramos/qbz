@@ -111,6 +111,7 @@ Rectangle {
                 Component {
                     id: desktopCover
                     PlaylistCollage {
+                    gridArtwork: true
                         anchors.fill: parent
                         layout: "pm"
                         urls: root.item.covers || []

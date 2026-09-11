@@ -97,6 +97,13 @@ pub mod qbz_tray {
         #[qinvokable]
         fn arm_quit_watchdog(self: Pin<&mut QbzTray>);
 
+        #[qinvokable]
+        fn confirm_quit_enabled(self: &QbzTray) -> bool;
+        #[qinvokable]
+        fn disable_quit_confirmation(self: Pin<&mut QbzTray>);
+        #[qsignal]
+        fn close_requested(self: Pin<&mut QbzTray>);
+
         /// Show + raise + focus the main window -> `Main.qml`'s
         /// `showFromTray()`.
         #[qsignal]
@@ -166,6 +173,20 @@ impl Default for QbzTrayRust {
 
 static QT_THREAD: OnceLock<CxxQtThread<QbzTray>> = OnceLock::new();
 
+unsafe extern "C" {
+    fn qbz_install_lifecycle_filter(request: extern "C" fn(bool));
+}
+
+extern "C" fn request_lifecycle(quit: bool) {
+    ui(move |mut tray| {
+        if quit {
+            tray.as_mut().quit_requested();
+        } else {
+            tray.as_mut().close_requested();
+        }
+    });
+}
+
 /// Queue a tray-bridge mutation onto the Qt event loop (no-op before boot
 /// registers the thread). **Every tray verb reaches QML through here** — the
 /// ksni item runs on its own thread and must never touch a QObject directly.
@@ -180,6 +201,9 @@ impl qbz_tray::QbzTray {
         if QT_THREAD.set(self.qt_thread()).is_err() {
             log::warn!("[qbz-qt] tray Qt thread already registered");
         }
+        // SAFETY: boot runs on the GUI thread after QGuiApplication exists;
+        // callback has static lifetime and queues all QML work.
+        unsafe { qbz_install_lifecycle_filter(request_lifecycle) };
         // If `tray_qt::init` ran before this point its queued closure was
         // dropped on the floor -- `ui()` above is a no-op until the line
         // right here. Pick the work up now; we are already on the GUI thread.
@@ -198,19 +222,13 @@ impl qbz_tray::QbzTray {
     /// (`hideToTray` / `showFromTray`), so the macOS Dock-icon policy hangs
     /// here rather than growing a third visibility owner.
     ///
-    /// Hiding drops the Dock icon only when the user asked for it; showing
-    /// ALWAYS restores it, with no setting check — a user who turns the option
-    /// off while the app sits in the menu bar must still get their icon back,
-    /// and restoring an icon that is already there is free.
+    /// A live tray keeps hidden windows reachable, so hiding removes the Dock
+    /// icon. Showing always restores it. Minimizing does not call this method.
     pub fn set_window_shown(self: Pin<&mut Self>, shown: bool) {
         crate::tray_qt::set_window_shown(shown);
         if shown {
             crate::tray_qt::set_mac_dock_hidden(false);
-        } else if crate::settings_qt::tray()
-            .get_settings()
-            .map(|t| t.mac_hide_dock)
-            .unwrap_or(false)
-        {
+        } else if *self.as_ref().tray_live() {
             crate::tray_qt::set_mac_dock_hidden(true);
         }
     }
@@ -230,5 +248,13 @@ impl qbz_tray::QbzTray {
     /// See the declaration above and `main.rs::arm_hard_exit_watchdog`.
     pub fn arm_quit_watchdog(self: Pin<&mut Self>) {
         crate::arm_hard_exit_watchdog("QML quit arm");
+    }
+
+    pub fn confirm_quit_enabled(&self) -> bool {
+        crate::settings_qt::pref_bool("confirm_quit", true)
+    }
+
+    pub fn disable_quit_confirmation(self: Pin<&mut Self>) {
+        crate::settings_qt::save_pref("confirm_quit", serde_json::json!(false));
     }
 }

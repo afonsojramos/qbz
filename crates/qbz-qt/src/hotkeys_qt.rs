@@ -507,6 +507,16 @@ pub fn token_from_qt_key(key: i32, modifiers: i32, text: &str) -> Option<String>
         let base = (b'0' + (key - QT_KEY_0) as u8) as char;
         return Some(base.to_string());
     }
+    // Some platforms provide no text for Ctrl/Cmd+punctuation (notably
+    // Settings: Ctrl+,). Keep shifted symbols on the text/layout path.
+    if mods_from_qt(modifiers).0
+        && modifiers & QT_SHIFT == 0
+        && (text.is_empty() || text.chars().all(char::is_control))
+    {
+        if let Some(c) = char::from_u32(key as u32).filter(char::is_ascii_punctuation) {
+            return Some(c.to_string());
+        }
+    }
     // The text fallback: exactly one char, printable (non-control). This is
     // where the shifted symbols come from (`Shift+/` delivers "?").
     let mut chars = text.chars();
@@ -803,6 +813,21 @@ pub fn build_groups(keymap: Keymap, overrides: &BTreeMap<String, String>) -> Vec
                 contextual: a.context != Context::None,
             });
         }
+        // The window verbs (close/quit) are handled by the native lifecycle
+        // layer, not the hotkey dispatcher, but they belong in the cheatsheet's
+        // Navigation list. Display-only rows: not in ACTIONS, so `action_for_key`
+        // never claims them and the customize editor never offers a rebind.
+        if cat == Category::Navigation {
+            for (label_en, canonical) in [("Close Window", "Ctrl+W"), ("Quit", "Ctrl+Q")] {
+                rows.push(GroupRow {
+                    id: String::new(),
+                    label: qbz_i18n::t(label_en),
+                    shortcut: format_display(canonical),
+                    modified: false,
+                    contextual: false,
+                });
+            }
+        }
         groups.push(Group {
             label: qbz_i18n::t(cat.label_en()),
             rows,
@@ -829,9 +854,13 @@ pub fn modified_count_with(keymap: Keymap, overrides: &BTreeMap<String, String>)
 /// never "{}").
 pub fn groups_json(keymap: Keymap, overrides: &BTreeMap<String, String>) -> String {
     let groups = build_groups(keymap, overrides);
+    // Fill columns SEQUENTIALLY (ceil per column) rather than round-robin, so
+    // the blocks read in category order top-to-bottom, left-to-right — which is
+    // what puts Immersive directly under Interface.
+    let per = groups.len().div_ceil(3).max(1);
     let mut cols: [Vec<Group>; 3] = Default::default();
     for (i, g) in groups.into_iter().enumerate() {
-        cols[i % 3].push(g);
+        cols[(i / per).min(2)].push(g);
     }
     let [c0, c1, c2] = cols;
     serde_json::json!({ "col1": c0, "col2": c1, "col3": c2 }).to_string()
@@ -917,6 +946,23 @@ pub fn action_for_key(
         Context::Mini => None,
         _ => Some(action),
     }
+}
+
+/// Focus-taking commands remain available while editing. Plain Vim keys
+/// and standard clipboard/edit shortcuts continue to belong to the field.
+pub fn action_for_text_input(
+    keymap: Keymap,
+    overrides: &BTreeMap<String, String>,
+    key: i32,
+    modifiers: i32,
+    text: &str,
+    immersive_open: bool,
+) -> Option<&'static ActionDef> {
+    if !mods_from_qt(modifiers).0 || matches!(key, 0x41 | 0x43 | 0x56 | 0x58 | 0x59 | 0x5a) {
+        return None;
+    }
+    action_for_key(keymap, overrides, key, modifiers, text, immersive_open)
+        .filter(|action| matches!(action.id, "nav.search" | "nav.settings" | "ui.openLink"))
 }
 
 /// Resolve a key event over the MINI window's context — a SIBLING of
@@ -1045,6 +1091,58 @@ mod tests {
 
     fn no_overrides() -> BTreeMap<String, String> {
         BTreeMap::new()
+    }
+
+    #[test]
+    fn focus_commands_work_while_editing_without_stealing_text_keys() {
+        for modifiers in [QT_CONTROL, QT_META] {
+            for (key, id) in [
+                (0x46, "nav.search"),
+                (0x4c, "ui.openLink"),
+                (0x2c, "nav.settings"),
+            ] {
+                for _ in 0..3 {
+                    assert_eq!(
+                        action_for_text_input(
+                            Keymap::Default,
+                            &no_overrides(),
+                            key,
+                            modifiers,
+                            "",
+                            false
+                        )
+                        .map(|a| a.id),
+                        Some(id)
+                    );
+                }
+            }
+        }
+        for keymap in [Keymap::Default, Keymap::Vim] {
+            for key in [0x41, 0x43, 0x56, 0x58, 0x59, 0x5a, QT_KEY_SPACE, 0x2f] {
+                for modifiers in [0, QT_SHIFT, QT_CONTROL] {
+                    assert!(action_for_text_input(
+                        keymap,
+                        &no_overrides(),
+                        key,
+                        modifiers,
+                        "",
+                        false
+                    )
+                    .is_none());
+                }
+            }
+        }
+        let mut overrides = no_overrides();
+        overrides.insert("nav.search".into(), "Ctrl+g".into());
+        assert_eq!(
+            action_for_text_input(Keymap::Default, &overrides, 0x47, QT_CONTROL, "", false)
+                .map(|a| a.id),
+            Some("nav.search")
+        );
+        assert!(
+            action_for_text_input(Keymap::Default, &overrides, 0x46, QT_CONTROL, "", false)
+                .is_none()
+        );
     }
 
     // --- Grammar round-trips (§3.5) ---------------------------------------
@@ -1245,7 +1343,7 @@ mod tests {
     // --- Round-robin split {Playback,Immersive}/{Navigation,Mini}/{Interface}
 
     #[test]
-    fn groups_split_round_robin_into_three_columns() {
+    fn groups_split_sequentially_into_three_columns() {
         let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let labels = |col: &str| -> Vec<String> {
             doc[col]
@@ -1255,9 +1353,9 @@ mod tests {
                 .map(|g| g["label"].as_str().unwrap().to_string())
                 .collect()
         };
-        assert_eq!(labels("col1"), vec!["Playback", "Immersive"]);
-        assert_eq!(labels("col2"), vec!["Navigation", "Mini Player"]);
-        assert_eq!(labels("col3"), vec!["Interface"]);
+        assert_eq!(labels("col1"), vec!["Playback", "Navigation"]);
+        assert_eq!(labels("col2"), vec!["Interface", "Immersive"]);
+        assert_eq!(labels("col3"), vec!["Mini Player"]);
     }
 
     #[test]
@@ -1269,8 +1367,9 @@ mod tests {
         assert_eq!(row["shortcut"], "Space");
         assert_eq!(row["modified"], false);
         assert_eq!(row["contextual"], false);
-        // The immersive seek rows are contextual.
-        let seek = &doc["col1"][1]["rows"][0];
+        // The immersive seek rows are contextual. Sequential fill puts the
+        // Immersive block second in column 2 (under Interface).
+        let seek = &doc["col2"][1]["rows"][0];
         assert_eq!(seek["id"], "focus.seekForward");
         assert_eq!(seek["contextual"], true);
         // Full shape, never "{}" (trap 15).

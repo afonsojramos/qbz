@@ -6862,3 +6862,232 @@ msgstr "Дерево"
 
 msgid "Forward"
 msgstr "Вперёд"
+
+msgid "SACD images use sidecar metadata."
+msgstr "Образы SACD используют метаданные в отдельном файле."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "Номера дорожек SACD нельзя изменить."
+
+msgid "Group: Year"
+msgstr "Группа: Год"
+
+msgid "Group: Decade"
+msgstr "Группа: Десятилетие"
+
+msgid "Popularity"
+msgstr "Популярность"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Только покупки"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Только подписки"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Только Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Скрыть локальные альбомы в библиотеке"
+
+#: library toolbar
+msgid "By you"
+msgstr "Ваши"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "От Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "От других"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Поиск по вашим трекам"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Поиск по вашим релизам"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Поиск по вашим плейлистам"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Поиск по вашим исполнителям"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Поиск по вашим лейблам"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Показывать только покупки. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Показывать только избранное. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Показывать только подписки. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Показывать только Hi-Res. Применяется вместе с другими включёнными фильтрами."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Скрыть здесь локальные альбомы. Они останутся доступны в локальной библиотеке."
+
+msgid "Alphabetical"
+msgstr "По алфавиту"
+
+msgid "Date updated"
+msgstr "Дата обновления"
+
+msgid "Track count"
+msgstr "Количество треков"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "Проверка сервера…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "Вход…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "Проверка доступа к библиотеке…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "Сервер доступен. Войдите для подключения."
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "Сервер доступен. Учётные данные не проверены."
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "Подключено. Синхронизация библиотеки…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "Подключено. Библиотека обновлена."
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "Подключено. Сервер обновляет библиотеку."
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "Подключение сохранено. Синхронизируйте для проверки доступа."
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "Время ожидания подключения истекло. Проверьте адрес сервера и повторите попытку."
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "Ошибка входа: {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "Вход выполнен, но доступ к библиотеке не удался: {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "Ошибка синхронизации библиотеки: {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Запрос кода Quick Connect…"
+
+msgid "Waiting for authorization…"
+msgstr "Ожидание авторизации…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "Quick Connect отключён на этом сервере."
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Срок действия Quick Connect истёк. Запросите новый код."
+
+msgid "Quick Connect failed: {}"
+msgstr "Ошибка Quick Connect: {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "Введите этот код в разделе «Настройки > Quick Connect» клиента Jellyfin, в котором уже выполнен вход. QBZ ждёт до 5 минут."
+
+#: qbz-qt/qml/Main.qml
+msgid "Close QBZ?"
+msgstr "Закрыть QBZ?"
+
+#: qbz-qt/qml/Main.qml
+msgid "Yes"
+msgstr "Да"
+
+#: qbz-qt/qml/Main.qml
+msgid "No"
+msgstr "Нет"
+
+#: qbz-qt/qml/Main.qml
+msgid "Don't show again"
+msgstr "Больше не показывать"
+
+msgid "Quit"
+msgstr "Выход"
+
+msgid "Close Window"
+msgstr "Закрыть окно"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Это может занять несколько минут, когда MusicBrainz загружен."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Это занимает больше времени, чем обычно — MusicBrainz может быть загружен. Попробуйте ещё раз через минуту."
+
+msgid "Remove from Mixtape"
+msgstr "Удалить из микстейпа"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Показывать сворачиваемый My QBZ на боковой панели"
+
+msgid "Show Mixtapes"
+msgstr "Показывать микстейпы"
+
+msgid "Show Collections"
+msgstr "Показывать коллекции"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Скрыть стандартный пункт меню My QBZ"
+
+msgid "No mixtapes yet."
+msgstr "Пока нет микстейпов."
+
+msgid "No collections yet."
+msgstr "Пока нет коллекций."
+
+msgid "Show in sidebar"
+msgstr "Показать в боковой панели"
+
+msgid "New Mixtape"
+msgstr "Новый микстейп"
+
+msgid "New Collection"
+msgstr "Новая коллекция"
+
+msgid "Name (Z-A)"
+msgstr "Название (Я-А)"
+
+msgid "Search My QBZ"
+msgstr "Поиск в My QBZ"

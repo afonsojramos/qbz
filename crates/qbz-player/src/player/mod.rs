@@ -356,27 +356,47 @@ pub(crate) fn extract_audio_metadata_full(data: &[u8]) -> Result<AudioMetadata, 
         .default_track()
         .ok_or_else(|| "Symphonia: no supported audio tracks".to_string())?;
 
-    let sample_rate = track
-        .codec_params
-        .sample_rate
-        .ok_or_else(|| "No sample rate in codec params".to_string())?;
+    audio_metadata_from_codec_params(&track.codec_params)
+}
 
-    // ALAC and some other formats don't include channel info in initial codec params
-    // Default to stereo (2 channels) which is the most common case
-    let channels = track
-        .codec_params
-        .channels
-        .map(|c| c.count() as u16)
-        .unwrap_or(2);
-
-    // Get bits per sample for bit depth
-    let bit_depth = track.codec_params.bits_per_sample;
-
+/// ALAC's codec configuration is authoritative. The MP4 sample entry may
+/// contain a placeholder rate (1 Hz in real hi-res files), and Symphonia's
+/// demuxer does not propagate ALAC's bit depth into CodecParameters. Its
+/// decoder already reads the cookie; every source and device setup must agree.
+fn audio_metadata_from_codec_params(
+    params: &symphonia::core::codecs::CodecParameters,
+) -> Result<AudioMetadata, String> {
+    if params.codec == symphonia::core::codecs::CODEC_TYPE_ALAC {
+        let cookie = params
+            .extra_data
+            .as_deref()
+            .ok_or("ALAC configuration missing")?;
+        // ALACSpecificConfig, optionally followed by a 24-byte channel layout.
+        if !matches!(cookie.len(), 24 | 48) {
+            return Err("Invalid ALAC configuration length".into());
+        }
+        let bit_depth = u32::from(cookie[5]);
+        let channels = u16::from(cookie[9]);
+        let sample_rate = u32::from_be_bytes(cookie[20..24].try_into().unwrap());
+        if cookie[4] != 0
+            || !(1..=32).contains(&bit_depth)
+            || !(1..=8).contains(&channels)
+            || sample_rate == 0
+        {
+            return Err("Invalid ALAC signal format".into());
+        }
+        return Ok(AudioMetadata {
+            sample_rate,
+            channels,
+            bit_depth: Some(bit_depth),
+            codec: params.codec,
+        });
+    }
     Ok(AudioMetadata {
-        sample_rate,
-        channels,
-        bit_depth,
-        codec: track.codec_params.codec,
+        sample_rate: params.sample_rate.ok_or("No sample rate in codec params")?,
+        channels: params.channels.map(|c| c.count() as u16).unwrap_or(2),
+        bit_depth: params.bits_per_sample,
+        codec: params.codec,
     })
 }
 
@@ -545,16 +565,35 @@ fn create_output_stream_with_config(
             // a PlaybackError. Rate-limited: ALSA can repeat EPIPE every
             // period on a wedged device, and each recorded message is one
             // bus event (and one forked hook script) after the drain.
-            let mut last_reported: Option<std::time::Instant> = None;
+            //
+            // #660: the same limiter also caps the LOG line (cpal fires the
+            // POLLERR error ~1.7 M times per second on a wedged PCM), and a
+            // wedge is latched once for the audio thread to rebuild the
+            // stream — see qbz_audio::stream_health.
+            let mut limiter = qbz_audio::stream_health::FloodLimiter::new(
+                qbz_audio::stream_health::LOG_WINDOW,
+            );
+            let mut wedge_latched = false;
             match builder
                 .with_supported_config(&supported_config)
                 .with_buffer_size(cpal_buffer_size)
                 .with_error_callback(move |err| {
-                    log::error!("Audio stream error: {err}");
-                    let now = std::time::Instant::now();
-                    if last_reported.map_or(true, |t| now.duration_since(t).as_secs() >= 5) {
-                        last_reported = Some(now);
+                    let fault = qbz_audio::stream_health::classify(&err);
+                    if let Some(suppressed) = limiter.admit(std::time::Instant::now()) {
+                        if suppressed == 0 {
+                            log::error!("Audio stream error: {err}");
+                        } else {
+                            log::error!(
+                                "Audio stream error: {err} ({suppressed} more suppressed)"
+                            );
+                        }
                         state.record_stream_error(format!("Audio stream error: {err}"));
+                    }
+                    if let qbz_audio::stream_health::StreamFault::Wedged(reason) = fault {
+                        if !wedge_latched {
+                            wedge_latched = true;
+                            qbz_audio::stream_health::raise_wedged(format!("CPAL: {reason}"));
+                        }
                     }
                 })
                 .open_stream()
@@ -605,6 +644,18 @@ enum StreamType {
 }
 
 impl StreamType {
+    fn output_format(&self) -> (u32, u16) {
+        match self {
+            Self::Rodio { sink, .. } => (
+                sink.config().sample_rate().get(),
+                sink.config().channel_count().get(),
+            ),
+            Self::Direct(sink) => (sink.sample_rate(), sink.channels()),
+            #[cfg(target_os = "linux")]
+            Self::Jack(sink) => (sink.sample_rate(), sink.channels()),
+        }
+    }
+
     /// Construct a shared-mode Rodio stream (no exclusive guard).
     fn rodio(sink: MixerDeviceSink) -> Self {
         StreamType::Rodio {
@@ -841,6 +892,28 @@ fn coreaudio_shared_rate_mismatch(
     let nominal_rate = coreaudio_nominal_rate(settings)?;
 
     (stream_rate != nominal_rate).then_some((stream_rate, nominal_rate))
+}
+
+/// How the audio thread answers a wedged output stream (#660): cpal's ALSA
+/// worker spins on `alsa::poll() returned POLLERR` (a PCM left in XRUN /
+/// SUSPENDED / DISCONNECTED state after CPU starvation, a suspend, or a
+/// device that went away) and never recovers; dropping the stream is the only
+/// exit. The first wedge is rebuilt at once; a second one inside the backoff
+/// window means the device itself is broken, so the thread releases it and
+/// stops instead of rebuilding in a loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WedgeRecovery {
+    Rebuild,
+    Stop,
+}
+
+const WEDGE_REBUILD_BACKOFF: Duration = Duration::from_secs(10);
+
+fn wedge_recovery(last_rebuild: Option<Instant>, now: Instant) -> WedgeRecovery {
+    match last_rebuild {
+        Some(last) if now.duration_since(last) < WEDGE_REBUILD_BACKOFF => WedgeRecovery::Stop,
+        _ => WedgeRecovery::Rebuild,
+    }
 }
 
 /// Inputs needed by both `Play` and `Stream` handlers to decide whether the
@@ -1208,7 +1281,7 @@ impl PlaybackBufferReporter {
 }
 
 /// Event payload for playback state updates
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct PlaybackEvent {
     pub is_playing: bool,
     pub position: u64,
@@ -1325,6 +1398,9 @@ pub struct SharedState {
     /// 0 = Unknown (no stream active yet), 1 = Disabled (CPAL/Rodio / shared
     /// system path), 2 = DirectHardware (ALSA hw:), 3 = PluginFallback (plughw:).
     bit_perfect_mode: Arc<AtomicU8>,
+    // Actual QBZ-owned stream configuration, packed atomically: rate + channels.
+    // Does not claim the physical DAC format downstream of a system mixer.
+    output_stream_format: Arc<AtomicU64>,
     /// Monotonic play generation (PR #583). Bumped by `Player::begin_play` on
     /// every new play intent. Lives in the shared state so the audio thread
     /// can detect that a queued `PlayStreaming` was superseded by a newer play
@@ -1392,6 +1468,7 @@ impl SharedState {
             buffer_progress: Arc::new(AtomicU32::new(0)),
             buffer_state: Arc::new(std::sync::Mutex::new(PlaybackBufferSlot::default())),
             bit_perfect_mode: Arc::new(AtomicU8::new(0)),
+            output_stream_format: Arc::new(AtomicU64::new(0)),
             play_generation: Arc::new(AtomicU64::new(0)),
             engine_empty_generation: Arc::new(AtomicU64::new(0)),
             engine_empty_track_id: Arc::new(AtomicU64::new(0)),
@@ -1716,6 +1793,22 @@ impl SharedState {
         }
     }
 
+    pub fn output_stream_format(&self) -> Option<(u32, u16)> {
+        let value = self.output_stream_format.load(Ordering::Acquire);
+        let rate = value as u32;
+        let channels = (value >> 32) as u16;
+        (rate > 0 && channels > 0).then_some((rate, channels))
+    }
+    fn publish_output_stream_format(&self, stream: Option<&StreamType>) {
+        let value = stream
+            .map(|stream| {
+                let (rate, channels) = stream.output_format();
+                u64::from(rate) | (u64::from(channels) << 32)
+            })
+            .unwrap_or(0);
+        self.output_stream_format.store(value, Ordering::Release);
+    }
+
     pub fn set_stream_quality(&self, sample_rate: u32, bit_depth: u32) {
         self.sample_rate.store(sample_rate, Ordering::SeqCst);
         self.bit_depth.store(bit_depth, Ordering::SeqCst);
@@ -1897,6 +1990,14 @@ impl SharedState {
         self.playback_start_millis
             .store(now_millis, Ordering::SeqCst);
         self.position_at_start.store(position, Ordering::SeqCst);
+    }
+
+    /// Resuming an already running stream must not rebase its live clock on
+    /// the stored pause position (which may still be zero).
+    fn resume_playback_timer(&self) {
+        if !self.is_playing() {
+            self.start_playback_timer(self.position.load(Ordering::SeqCst));
+        }
     }
 
     /// Mark playback as paused, saving current position
@@ -2245,6 +2346,8 @@ impl Player {
             const PAUSE_SUSPEND_DELAY_MS: u64 = 2000;
             let mut pause_suspend_deadline: Option<Instant> = None;
             let mut last_empty_check = Instant::now();
+            // #660: when the last wedged-stream rebuild happened (backoff input).
+            let mut last_wedge_rebuild: Option<Instant> = None;
             // Latch so the low-memory oversized-track promotion skip logs
             // once per track instead of on every 500 ms idle tick. Reset
             // whenever the streaming source is absent or still downloading
@@ -3986,8 +4089,7 @@ impl Player {
 
                             if let Some(ref engine) = *current_engine {
                                 engine.play();
-                                let current_pos = thread_state.position.load(Ordering::SeqCst);
-                                thread_state.start_playback_timer(current_pos);
+                                thread_state.resume_playback_timer();
                                 thread_state.is_playing.store(true, Ordering::SeqCst);
                                 log::info!("Audio thread: resumed");
                             }
@@ -4808,6 +4910,86 @@ impl Player {
                 };
 
             loop {
+                // #660: observe a wedged output stream at the TOP of every loop
+                // iteration, before the command wait. Under QConnect the
+                // renderer-state command flow keeps recv_timeout returning
+                // Ok(...), so the Timeout arm (where this used to live) never
+                // fired — on the Pi a wedged cpal worker spun a core for 20+ s
+                // until an unrelated command arrived. Here it runs regardless of
+                // command flow and of is_playing. The stream is always dropped
+                // (that joins cpal's spinning worker); we only rebuild when we
+                // were actually playing.
+                if let Some(reason) = qbz_audio::stream_health::take_wedged() {
+                    let now = Instant::now();
+                    let was_playing = thread_state.is_playing.load(Ordering::SeqCst);
+                    let resume_at = thread_state.current_position();
+                    if let Some(engine) = current_engine.take() {
+                        engine.stop();
+                    }
+                    drop(stream_opt.take());
+                    qbz_audio::stream_health::clear_wedged();
+                    gapless_pending = None;
+                    gapless_request_armed = false;
+                    if !was_playing {
+                        log::warn!(
+                            "Audio thread: output stream wedged while stopped ({reason}); released it"
+                        );
+                    } else {
+                        match wedge_recovery(last_wedge_rebuild, now) {
+                            WedgeRecovery::Rebuild => {
+                                last_wedge_rebuild = Some(now);
+                                log::warn!(
+                                    "Audio thread: output stream wedged ({reason}); rebuilding it and resuming at {resume_at}s"
+                                );
+                                let sr = current_track_sample_rate.unwrap_or(48000);
+                                let ch = current_track_channels.unwrap_or(2);
+                                stream_opt =
+                                    init_device(&current_device_name, &thread_state, sr, ch);
+                                if stream_opt.is_some() {
+                                    consecutive_sink_failures = 0;
+                                    handle_command(
+                                        AudioCommand::Seek(resume_at),
+                                        &mut current_engine,
+                                        &mut current_audio_data,
+                                        &mut current_streaming_source,
+                                        &mut current_direct_dsd,
+                                        &mut stream_opt,
+                                        &mut current_device_name,
+                                        &mut consecutive_sink_failures,
+                                        &mut pause_suspend_deadline,
+                                        &mut current_track_sample_rate,
+                                        &mut current_track_channels,
+                                        &mut current_normalization_gain,
+                                        &mut current_gain_atomic,
+                                        &mut gapless_pending,
+                                        &mut gapless_request_armed,
+                                    );
+                                }
+                                if current_engine.is_none() {
+                                    log::error!(
+                                        "Audio thread: could not rebuild the output stream after it wedged ({reason})"
+                                    );
+                                    thread_state
+                                        .record_stream_error(format!("Audio output stopped: {reason}"));
+                                    thread_state.pause_playback_timer();
+                                    thread_state.is_playing.store(false, Ordering::SeqCst);
+                                }
+                            }
+                            WedgeRecovery::Stop => {
+                                last_wedge_rebuild = Some(now);
+                                log::error!(
+                                    "Audio thread: output stream wedged again within {}s ({reason}); releasing the device and stopping",
+                                    WEDGE_REBUILD_BACKOFF.as_secs()
+                                );
+                                thread_state
+                                    .record_stream_error(format!("Audio output stopped: {reason}"));
+                                thread_state.pause_playback_timer();
+                                thread_state.is_playing.store(false, Ordering::SeqCst);
+                            }
+                        }
+                    }
+                }
+                thread_state.publish_output_stream_format(stream_opt.as_ref());
                 if thread_state.is_playing.load(Ordering::SeqCst) {
                     match rx.recv_timeout(Duration::from_millis(100)) {
                         Ok(command) => handle_command(
@@ -5231,7 +5413,11 @@ impl Player {
                         pause_suspend_deadline = None;
                     }
 
-                    match rx.recv() {
+                    // #660: a bounded wait (not a blocking recv) so the loop
+                    // keeps iterating and the top-of-loop wedge check runs even
+                    // while stopped — a stream can wedge with is_playing already
+                    // false and cpal's worker would otherwise spin unseen.
+                    match rx.recv_timeout(Duration::from_millis(250)) {
                         Ok(command) => handle_command(
                             command,
                             &mut current_engine,
@@ -5249,13 +5435,15 @@ impl Player {
                             &mut gapless_pending,
                             &mut gapless_request_armed,
                         ),
-                        Err(_) => {
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => {
                             log::info!("Audio thread: channel closed, exiting");
                             break;
                         }
                     }
                 }
             }
+            thread_state.publish_output_stream_format(None);
         });
 
         // Two-level playback cache: L1 in memory, L2 on disk (~800 MB). The
@@ -7133,6 +7321,7 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::compute_needs_new_stream;
+    use super::{wedge_recovery, WedgeRecovery, WEDGE_REBUILD_BACKOFF};
     use super::external_content_type;
     #[cfg(target_os = "linux")]
     use super::{hardware_volume_event_callback, reported_volume_after_command};
@@ -7145,6 +7334,157 @@ mod tests {
         AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
     };
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn duplicate_resume_preserves_live_clock_and_real_pause_can_resume() {
+        let state = SharedState::new();
+        state.duration.store(290, Ordering::SeqCst);
+        state.start_playback_timer(67);
+        state.is_playing.store(true, Ordering::SeqCst);
+        let started = state.playback_start_millis.load(Ordering::SeqCst);
+        assert_eq!(
+            state.position(),
+            0,
+            "stored pause position intentionally stale"
+        );
+        state.resume_playback_timer();
+        assert_eq!(state.playback_start_millis.load(Ordering::SeqCst), started);
+        assert_eq!(state.position_at_start.load(Ordering::SeqCst), 67);
+        assert!(state.current_position() >= 67);
+        state.pause_playback_timer();
+        state.is_playing.store(false, Ordering::SeqCst);
+        let paused = state.position();
+        state.resume_playback_timer();
+        assert_eq!(state.position_at_start.load(Ordering::SeqCst), paused);
+        assert_ne!(state.playback_start_millis.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn output_telemetry_is_independent_of_source_quality_and_clears_on_release() {
+        let state = SharedState::new();
+        state.set_stream_quality(192000, 24);
+        assert_eq!(state.output_stream_format(), None);
+        state
+            .output_stream_format
+            .store(48000 | (2_u64 << 32), Ordering::Release);
+        assert_eq!(state.output_stream_format(), Some((48000, 2)));
+        assert_eq!(state.get_sample_rate(), 192000);
+        state.publish_output_stream_format(None);
+        assert_eq!(state.output_stream_format(), None);
+    }
+
+    #[test]
+    #[ignore = "requires QBZ_ALAC_PROBE_PATH to a real ALAC file"]
+    fn real_alac_metadata_matches_decoded_signal() {
+        use symphonia::core::io::MediaSourceStream;
+        let path = std::env::var("QBZ_ALAC_PROBE_PATH").expect("real ALAC file path");
+        let bytes = std::fs::read(path).unwrap();
+        let meta = super::extract_audio_metadata_full(&bytes).unwrap();
+        let mss = MediaSourceStream::new(Box::new(std::io::Cursor::new(bytes)), Default::default());
+        let mut hint = symphonia::core::probe::Hint::new();
+        hint.with_extension("m4a");
+        let mut format = symphonia::default::get_probe()
+            .format(&hint, mss, &Default::default(), &Default::default())
+            .unwrap()
+            .format;
+        let track = format.default_track().unwrap();
+        let id = track.id;
+        let cookie = track.codec_params.extra_data.as_ref().unwrap();
+        let bits = cookie[5] as u32;
+        let mut decoder = symphonia::default::get_codecs()
+            .make(&track.codec_params, &Default::default())
+            .unwrap();
+        loop {
+            let packet = format.next_packet().unwrap();
+            if packet.track_id() != id {
+                continue;
+            }
+            let audio = decoder.decode(&packet).unwrap();
+            eprintln!(
+                "metadata={}Hz/{:?}bit/{}ch, decoded={}Hz/{}bit/{}ch",
+                meta.sample_rate,
+                meta.bit_depth,
+                meta.channels,
+                audio.spec().rate,
+                bits,
+                audio.spec().channels.count()
+            );
+            assert_eq!(meta.sample_rate, audio.spec().rate);
+            assert_eq!(meta.bit_depth, Some(bits));
+            assert_eq!(meta.channels as usize, audio.spec().channels.count());
+            break;
+        }
+    }
+
+    // Synthetic 32-frame stereo 24-bit ramp encoded with ffmpeg ALAC at
+    // 192 kHz, with the MP4 sample-entry rate replaced by the real-world
+    // placeholder 1 Hz. The ALAC cookie and every audio sample are untouched.
+    #[test]
+    fn alac_placeholder_rate_preserves_signal_in_memory_and_streaming() {
+        let bytes = include_bytes!("../../testdata/alac_24_192_placeholder.m4a");
+        let meta = super::extract_audio_metadata_full(bytes).unwrap();
+        assert_eq!(
+            (meta.sample_rate, meta.bit_depth, meta.channels),
+            (192000, Some(24), 2)
+        );
+        let expected: Vec<f32> = [-8388608, -4194304, -1, 0, 1, 4194304, 8388607, 1234567]
+            .into_iter()
+            .cycle()
+            .take(64)
+            .map(|v| v as f32 / 8388608.0)
+            .collect();
+        let memory = super::streaming_source::InMemorySource::new(bytes.to_vec()).unwrap();
+        assert_eq!(memory.sample_rate(), 192000);
+        assert_eq!(memory.collect::<Vec<_>>(), expected);
+        let (buffer, writer) =
+            BufferedMediaSource::new(StreamingConfig::default(), Some(bytes.len() as u64));
+        writer.push_chunk(bytes).unwrap();
+        writer.complete().unwrap();
+        let streaming =
+            super::streaming_source::IncrementalStreamingSource::new(std::sync::Arc::new(buffer))
+                .unwrap();
+        assert_eq!(streaming.get_sample_rate(), 192000);
+        assert_eq!(streaming.get_channels(), 2);
+        assert_eq!(streaming.collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn alac_metadata_rejects_invalid_config_and_keeps_other_codecs_unchanged() {
+        use symphonia::core::codecs::{CodecParameters, CODEC_TYPE_ALAC, CODEC_TYPE_FLAC};
+        let mut params = CodecParameters::new();
+        params
+            .for_codec(CODEC_TYPE_FLAC)
+            .with_sample_rate(44100)
+            .with_bits_per_sample(16);
+        let meta = super::audio_metadata_from_codec_params(&params).unwrap();
+        assert_eq!((meta.sample_rate, meta.bit_depth), (44100, Some(16)));
+        params.for_codec(CODEC_TYPE_ALAC);
+        assert!(super::audio_metadata_from_codec_params(&params).is_err());
+        for len in [0, 23, 25, 47, 49] {
+            params.with_extra_data(vec![0; len].into_boxed_slice());
+            assert!(super::audio_metadata_from_codec_params(&params).is_err());
+        }
+        for rate in [44100_u32, 48000, 96000, 192000] {
+            for bits in [16_u8, 24] {
+                let mut cookie = vec![0; 24];
+                cookie[5] = bits;
+                cookie[9] = 2;
+                cookie[20..24].copy_from_slice(&rate.to_be_bytes());
+                params.with_extra_data(cookie.clone().into_boxed_slice());
+                let meta = super::audio_metadata_from_codec_params(&params).unwrap();
+                assert_eq!(
+                    (meta.sample_rate, meta.bit_depth),
+                    (rate, Some(bits as u32))
+                );
+                for index in [5, 9] {
+                    let mut bad = cookie.clone();
+                    bad[index] = 0;
+                    params.with_extra_data(bad.into_boxed_slice());
+                    assert!(super::audio_metadata_from_codec_params(&params).is_err());
+                }
+            }
+        }
+    }
 
     struct FakeDsdSource {
         words: std::vec::IntoIter<i32>,
@@ -7241,6 +7581,24 @@ mod tests {
         fn io_error(&self) -> Option<&str> {
             self.error.as_deref()
         }
+    }
+
+    #[test]
+    fn wedge_recovery_rebuilds_once_then_backs_off() {
+        // #660: a wedged CPAL stream (POLLERR loop) is rebuilt at once; a
+        // second wedge inside the backoff window means the device itself is
+        // gone or broken, so the thread releases it and stops instead of
+        // rebuilding in a loop.
+        let t0 = std::time::Instant::now();
+        assert_eq!(wedge_recovery(None, t0), WedgeRecovery::Rebuild);
+        assert_eq!(
+            wedge_recovery(Some(t0), t0 + std::time::Duration::from_secs(3)),
+            WedgeRecovery::Stop
+        );
+        assert_eq!(
+            wedge_recovery(Some(t0), t0 + WEDGE_REBUILD_BACKOFF),
+            WedgeRecovery::Rebuild
+        );
     }
 
     #[test]

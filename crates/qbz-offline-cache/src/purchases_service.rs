@@ -1606,6 +1606,7 @@ mod tests {
                 streamable: None,
                 streamable_at: None,
                 release_date_stream: None,
+                release_date_original: None,
             }),
             ..Default::default()
         }
@@ -2037,6 +2038,7 @@ mod tests {
                 streamable: None,
                 streamable_at: None,
                 release_date_stream: None,
+                release_date_original: None,
             }),
             ..Default::default()
         }
@@ -2979,6 +2981,7 @@ mod entitlement_index_tests {
                     streamable: None,
                     streamable_at: None,
                     release_date_stream: None,
+                    release_date_original: None,
                 }),
                 ..Default::default()
             }],

@@ -9,7 +9,7 @@
 //! today — it is the single place to wire the real UI language once Slint
 //! gets translation support, and no caller needs to change when it does.
 
-use chrono::{Locale, NaiveDate};
+use chrono::{Datelike, Locale, NaiveDate};
 
 /// UI language used to render date labels. Maps the active runtime language
 /// (`qbz_i18n::current_language()`, set at startup and on live switch) to the
@@ -70,4 +70,66 @@ pub fn full_release_label(date: Option<&str>) -> String {
             .to_string();
     }
     String::new()
+}
+
+/// Locale-independent chronological key. Zero means unknown; display labels
+/// must never be used as sorting data. A year-only value uses January 1.
+pub fn release_sort_key(date: Option<&str>) -> u32 {
+    let Some(raw) = date.map(str::trim) else {
+        return 0;
+    };
+    if raw.len() == 4 && raw.bytes().all(|b| b.is_ascii_digit()) {
+        return raw
+            .parse::<u32>()
+            .ok()
+            .filter(|y| *y > 0)
+            .map(|y| y * 10_000 + 101)
+            .unwrap_or(0);
+    }
+    let Some(head) = raw.get(..10) else {
+        return 0;
+    };
+    match NaiveDate::parse_from_str(head, "%Y-%m-%d") {
+        Ok(date) if date.year() > 0 => {
+            date.year() as u32 * 10_000 + date.month() * 100 + date.day()
+        }
+        _ => 0,
+    }
+}
+
+/// Unknown dates stay last in either direction; stable sort preserves ties.
+pub fn compare_release_dates(a: u32, b: u32, newest: bool) -> std::cmp::Ordering {
+    match (a == 0, b == 0) {
+        (true, false) => std::cmp::Ordering::Greater,
+        (false, true) => std::cmp::Ordering::Less,
+        _ if newest => b.cmp(&a),
+        _ => a.cmp(&b),
+    }
+}
+
+#[cfg(test)]
+mod release_sort_tests {
+    use super::*;
+
+    #[test]
+    fn original_dates_sort_chronologically_not_by_month_label() {
+        let dates = [
+            "2015-09-04",
+            "1980-04-01",
+            "2021-09-03",
+            "1985-08-01",
+            "1981-02-01",
+        ];
+        let mut keys: Vec<_> = dates.iter().map(|d| release_sort_key(Some(d))).collect();
+        keys.push(0);
+        keys.sort_by(|a, b| compare_release_dates(*a, *b, false));
+        assert_eq!(keys, [19800401, 19810201, 19850801, 20150904, 20210903, 0]);
+        keys.sort_by(|a, b| compare_release_dates(*a, *b, true));
+        assert_eq!(keys, [20210903, 20150904, 19850801, 19810201, 19800401, 0]);
+        assert_eq!(release_sort_key(Some("2021-09-03T12:00:00Z")), 20210903);
+        assert_eq!(release_sort_key(Some("1985")), 19850101);
+        for bad in [None, Some(""), Some("Sep 4, 2015"), Some("2021-02-30")] {
+            assert_eq!(release_sort_key(bad), 0);
+        }
+    }
 }

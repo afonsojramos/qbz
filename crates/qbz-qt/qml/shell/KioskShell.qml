@@ -583,6 +583,12 @@ Rectangle {
     // central text-input gate (hotkeys_bridge.rs:295-299) is the counterpart
     // of the first guard. The textInputFocused predicate is computed exactly
     // as the desktop shell computes it (AppShell.qml:91).
+    InputFocusDismiss { id: inputFocusDismiss }
+    Connections {
+        target: QbzShell
+        function onCurrentViewChanged() { inputFocusDismiss.dismiss() }
+    }
+
     Keys.onPressed: function (event) {
         var w = root.Window.window
         var afi = w !== null ? w.activeFocusItem : null

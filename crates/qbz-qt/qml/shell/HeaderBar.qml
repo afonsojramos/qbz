@@ -1372,8 +1372,10 @@ Rectangle {
 
             // One menu row (MenuItem).
             component AppMenuItem: Rectangle {
+                id: mi
                 property string name: ""
                 property string label: ""
+                property string shortcut: ""
                 property bool checkedItem: false
                 signal clicked()
 
@@ -1381,12 +1383,15 @@ Rectangle {
                 height: 34
                 color: miArea.containsMouse ? theme.surfaceHover : "transparent"
                 Row {
-                    anchors.fill: parent
+                    anchors.left: parent.left
                     anchors.leftMargin: 12
-                    anchors.rightMargin: 18
+                    anchors.right: rightCluster.left
+                    anchors.rightMargin: rightCluster.width > 0 ? 10 : 0
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: parent.height
                     spacing: 10
                     QbzIcon {
-                        name: parent.parent.name
+                        name: mi.name
                         width: 15
                         height: 15
                         anchors.verticalCenter: parent.verticalCenter
@@ -1394,19 +1399,32 @@ Rectangle {
                     }
                     Text {
                         id: miLabel
+                        width: parent.width - 15 - parent.spacing
                         height: parent.height
-                        text: parent.parent.label
+                        text: mi.label
                         color: theme.textSecondary
                         font.pixelSize: 13
                         verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
                     }
-                    Item {
-                        visible: parent.parent.checkedItem
-                        width: visible ? parent.width - 15 - miLabel.implicitWidth - 14 - 2 * parent.spacing : 0
-                        height: 1
+                }
+                // Right cluster: the shortcut (muted + a size smaller than the
+                // label) floated right, then the optional check glyph.
+                Row {
+                    id: rightCluster
+                    anchors.right: parent.right
+                    anchors.rightMargin: 18
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: 8
+                    Text {
+                        visible: mi.shortcut !== ""
+                        text: mi.shortcut
+                        color: theme.textMuted
+                        font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
                     }
                     QbzIcon {
-                        visible: parent.parent.checkedItem
+                        visible: mi.checkedItem
                         name: "check"
                         width: 14
                         height: 14
@@ -1430,6 +1448,7 @@ Rectangle {
             AppMenuItem {
                 name: "settings-2"
                 label: QbzSession.tr("Settings", QbzSession.trRev)
+                shortcut: QbzHotkeys.shortcutFor("nav.settings")
                 onClicked: {
                     appMenu.close()
                     QbzShell.navigateTo("settings")
@@ -1440,6 +1459,7 @@ Rectangle {
             AppMenuItem {
                 name: "link"
                 label: QbzSession.tr("Open Music Link", QbzSession.trRev)
+                shortcut: QbzHotkeys.shortcutFor("ui.openLink")
                 onClicked: {
                     appMenu.close()
                     QbzLink.show()
@@ -1448,6 +1468,7 @@ Rectangle {
             AppMenuItem {
                 name: "keyboard"
                 label: QbzSession.tr("Keyboard Shortcuts", QbzSession.trRev)
+                shortcut: QbzHotkeys.shortcutFor("ui.showShortcuts")
                 onClicked: {
                     appMenu.close()
                     QbzHotkeys.openCheatsheet()
@@ -1508,6 +1529,7 @@ Rectangle {
             AppMenuItem {
                 name: "x"
                 label: QbzSession.tr("Close", QbzSession.trRev)
+                shortcut: QbzHotkeys.formatShortcut("Ctrl+W")
                 // The same ONE close choreography as the drawn X above
                 // (A-26, §5.7). appMenu.close() FIRST, like the Log Out row:
                 // when close-to-tray only HIDES the window, a popup left open
@@ -1516,6 +1538,19 @@ Rectangle {
                     appMenu.close()
                     if (root.hostWindow)
                         root.hostWindow.closeOrHide(null)
+                }
+            }
+            // Quit — the real exit (bypasses close-to-tray). Routes through the
+            // window's requestQuit (confirmation, session flush), same as
+            // Ctrl/Cmd+Q. Close above only closes/hides the window.
+            AppMenuItem {
+                name: "power"
+                label: QbzSession.tr("Quit", QbzSession.trRev)
+                shortcut: QbzHotkeys.formatShortcut("Ctrl+Q")
+                onClicked: {
+                    appMenu.close()
+                    if (root.hostWindow)
+                        root.hostWindow.requestQuit()
                 }
             }
         }

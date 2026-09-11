@@ -132,6 +132,16 @@ pub mod qbz_hotkeys {
         #[qinvokable]
         fn refresh(self: Pin<&mut QbzHotkeys>);
 
+        /// Formatted, platform-aware shortcut for an action id (⌘ on macOS,
+        /// user overrides applied) — the header app-menu rows read this so they
+        /// never hardcode a per-OS combo. Empty for an unbound / unknown id.
+        #[qinvokable]
+        fn shortcut_for(self: Pin<&mut QbzHotkeys>, id: QString) -> QString;
+        /// Format a canonical shortcut ("Ctrl+W") for THIS platform — for the
+        /// window verbs (close/quit) that live outside the action table.
+        #[qinvokable]
+        fn format_shortcut(self: Pin<&mut QbzHotkeys>, canonical: QString) -> QString;
+
         /// nav.search (Ctrl+f) — divergence K6 / contract §4.3: the AppShell
         /// Connections listens and calls HeaderBar.focusSearch()
         /// (`searchInput.forceActiveFocus()`, HeaderBar.qml:644). EXCEEDS
@@ -360,7 +370,21 @@ impl qbz_hotkeys::QbzHotkeys {
         // QML per §1.4.4 and passed in. Null activeFocusItem passes (the
         // semantically right case).
         if text_input_focused {
-            return false;
+            // Keep ordinary typing off the preferences-on-disk lookup path.
+            if !crate::hotkeys_qt::mods_from_qt(modifiers).0 {
+                return false;
+            }
+            let overrides = crate::hotkeys_qt::load_overrides();
+            return crate::hotkeys_qt::action_for_text_input(
+                crate::hotkeys_qt::active_keymap(),
+                &overrides,
+                key,
+                modifiers,
+                &text,
+                crate::immersive_bridge::is_open(),
+            )
+            .map(|action| self.as_mut().run_action(action.id))
+            .unwrap_or(false);
         }
 
         // (C2) Ctrl+A select-all — separate NON-REBINDABLE branch (§4.6,
@@ -400,8 +424,18 @@ impl qbz_hotkeys::QbzHotkeys {
             "playback.prev" => crate::transport_previous(),
             "nav.back" => crate::nav_qt::back(),
             "nav.forward" => crate::nav_qt::forward(),
-            "nav.search" => self.as_mut().focus_search_requested(), // K6 QML seam
-            "nav.settings" => crate::navigate_to("settings"),
+            "nav.search" => {
+                if crate::link_resolver_bridge::is_open() {
+                    crate::link_resolver_bridge::close_modal();
+                }
+                self.as_mut().focus_search_requested();
+            }
+            "nav.settings" => {
+                if crate::link_resolver_bridge::is_open() {
+                    crate::link_resolver_bridge::close_modal();
+                }
+                crate::navigate_to("settings");
+            }
             "ui.sidebar" => crate::shell_bridge::ui(|s| s.cycle_sidebar()),
             "ui.focusMode" => crate::immersive_bridge::toggle(),
             "ui.queue" => crate::shell_bridge::ui(|s| s.toggle_queue()),
@@ -504,6 +538,18 @@ impl qbz_hotkeys::QbzHotkeys {
     pub fn open_cheatsheet(mut self: Pin<&mut Self>) {
         self.as_mut().set_cheatsheet_open(true);
         publish_groups(self.as_mut());
+    }
+
+    pub fn shortcut_for(self: Pin<&mut Self>, id: QString) -> QString {
+        let keymap = crate::hotkeys_qt::active_keymap();
+        let overrides = crate::hotkeys_qt::load_overrides();
+        let bindings = crate::hotkeys_qt::active_bindings_with(keymap, &overrides);
+        let shortcut = bindings.get(&id.to_string()).cloned().unwrap_or_default();
+        QString::from(crate::hotkeys_qt::format_display(&shortcut).as_str())
+    }
+
+    pub fn format_shortcut(self: Pin<&mut Self>, canonical: QString) -> QString {
+        QString::from(crate::hotkeys_qt::format_display(&canonical.to_string()).as_str())
     }
 
     pub fn open_customize(mut self: Pin<&mut Self>) {

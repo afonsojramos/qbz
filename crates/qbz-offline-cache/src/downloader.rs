@@ -408,7 +408,7 @@ pub(crate) async fn try_cmaf_offline_download(
         let album_group_key = format!("{}|{}", metadata.album, album_artist);
         let lib_opt = library_db.lock().await;
         if let Some(lib_guard) = lib_opt.as_ref() {
-            let _ = lib_guard.insert_qobuz_cached_track_with_grouping(
+            let result = lib_guard.insert_qobuz_cached_track_with_grouping(
                 track_id,
                 &metadata.title,
                 &metadata.artist,
@@ -428,6 +428,9 @@ pub(crate) async fn try_cmaf_offline_download(
                 bundle.sampling_rate.map(|r| r as f64),
                 artwork_path.as_deref(),
             );
+            if let Err(error) = result {
+                log::warn!("[offline-library] track={track_id} metadata insert failed: {error}");
+            }
         }
     } else if let Err(e) = metadata {
         log::warn!(
@@ -666,7 +669,7 @@ pub fn spawn_track_cache_download(
                 let album_group_key = format!("{}|{}", metadata.album, album_artist);
                 let lib_opt = library_db.lock().await;
                 if let Some(lib_guard) = lib_opt.as_ref() {
-                    let _ = lib_guard.insert_qobuz_cached_track_with_grouping(
+                    let result = lib_guard.insert_qobuz_cached_track_with_grouping(
                         track_id,
                         &metadata.title,
                         &metadata.artist,
@@ -683,6 +686,11 @@ pub fn spawn_track_cache_download(
                         sample_rate_detected,
                         artwork_path_v1.as_deref(),
                     );
+                    if let Err(error) = result {
+                        log::warn!(
+                            "[offline-library] track={track_id} metadata insert failed: {error}"
+                        );
+                    }
                 }
 
                 if let Some(db_guard) = db.lock().await.as_ref() {

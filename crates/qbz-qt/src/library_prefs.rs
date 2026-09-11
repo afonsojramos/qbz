@@ -36,6 +36,14 @@ pub struct Prefs {
     pub albums_view: String,
     #[serde(default = "d_default")]
     pub albums_sort: String,
+    #[serde(default = "d_default")]
+    pub labels_sort: String,
+    #[serde(default = "d_default")]
+    pub artists_sort: String,
+    #[serde(default = "d_default")]
+    pub playlists_sort: String,
+    #[serde(default = "d_default")]
+    pub tracks_sort: String,
     #[serde(default = "d_off")]
     pub albums_group: String,
     #[serde(default = "d_off")]
@@ -53,6 +61,31 @@ pub struct Prefs {
     /// or "all" (the entire local library + Plex).
     #[serde(default = "d_favorites")]
     pub all_local_scope: String,
+
+    // Per-tab source filters (were session-only; persisted now so a chosen
+    // filter survives a restart, still independent per tab). Qt-only keys —
+    // the frozen Slint document never had them, and serde defaults keep an
+    // older file readable.
+    #[serde(default)]
+    pub all_show_purchases: bool,
+    #[serde(default)]
+    pub all_show_favorites: bool,
+    #[serde(default)]
+    pub all_show_following: bool,
+    #[serde(default)]
+    pub all_hide_local: bool,
+    #[serde(default)]
+    pub albums_show_purchases: bool,
+    #[serde(default)]
+    pub albums_show_favorites: bool,
+    #[serde(default)]
+    pub albums_hires_only: bool,
+    #[serde(default)]
+    pub tracks_show_purchases: bool,
+    #[serde(default)]
+    pub tracks_show_favorites: bool,
+    #[serde(default)]
+    pub tracks_hires_only: bool,
 }
 
 fn d_grid() -> String {
@@ -76,6 +109,10 @@ impl Default for Prefs {
         Self {
             albums_view: d_grid(),
             albums_sort: d_default(),
+            labels_sort: d_default(),
+            artists_sort: d_default(),
+            playlists_sort: d_default(),
+            tracks_sort: d_default(),
             albums_group: d_off(),
             tracks_group: d_off(),
             playlists_view: d_grid(),
@@ -83,6 +120,16 @@ impl Default for Prefs {
             artists_view: d_grid(),
             all_show_local: true,
             all_local_scope: d_favorites(),
+            all_show_purchases: false,
+            all_show_favorites: false,
+            all_show_following: false,
+            all_hide_local: false,
+            albums_show_purchases: false,
+            albums_show_favorites: false,
+            albums_hires_only: false,
+            tracks_show_purchases: false,
+            tracks_show_favorites: false,
+            tracks_hires_only: false,
         }
     }
 }
@@ -112,6 +159,10 @@ pub fn to_json() -> String {
     serde_json::json!({
         "albumsView": p.albums_view,
         "albumsSort": p.albums_sort,
+        "labelsSort": p.labels_sort,
+        "artistsSort": p.artists_sort,
+        "playlistsSort": p.playlists_sort,
+        "tracksSort": p.tracks_sort,
         "albumsGroup": p.albums_group,
         "tracksGroup": p.tracks_group,
         "playlistsView": p.playlists_view,
@@ -119,6 +170,16 @@ pub fn to_json() -> String {
         "artistsView": p.artists_view,
         "allShowLocal": p.all_show_local,
         "allLocalScope": p.all_local_scope,
+        "allShowPurchases": p.all_show_purchases,
+        "allShowFavorites": p.all_show_favorites,
+        "allShowFollowing": p.all_show_following,
+        "allHideLocal": p.all_hide_local,
+        "albumsShowPurchases": p.albums_show_purchases,
+        "albumsShowFavorites": p.albums_show_favorites,
+        "albumsHiresOnly": p.albums_hires_only,
+        "tracksShowPurchases": p.tracks_show_purchases,
+        "tracksShowFavorites": p.tracks_show_favorites,
+        "tracksHiresOnly": p.tracks_hires_only,
     })
     .to_string()
 }
@@ -179,6 +240,10 @@ pub fn set(key: &str, value: &str) {
     match key {
         "albumsView" => update(|p| p.albums_view = v),
         "albumsSort" => update(|p| p.albums_sort = v),
+        "labelsSort" => update(|p| p.labels_sort = v),
+        "artistsSort" => update(|p| p.artists_sort = v),
+        "playlistsSort" => update(|p| p.playlists_sort = v),
+        "tracksSort" => update(|p| p.tracks_sort = v),
         "albumsGroup" => update(|p| p.albums_group = v),
         "tracksGroup" => update(|p| p.tracks_group = v),
         "playlistsView" => update(|p| p.playlists_view = v),
@@ -186,6 +251,16 @@ pub fn set(key: &str, value: &str) {
         "artistsView" => update(|p| p.artists_view = v),
         "allShowLocal" => update(|p| p.all_show_local = v == "true"),
         "allLocalScope" => update(|p| p.all_local_scope = normalize_scope(&v).to_string()),
+        "allShowPurchases" => update(|p| p.all_show_purchases = v == "true"),
+        "allShowFavorites" => update(|p| p.all_show_favorites = v == "true"),
+        "allShowFollowing" => update(|p| p.all_show_following = v == "true"),
+        "allHideLocal" => update(|p| p.all_hide_local = v == "true"),
+        "albumsShowPurchases" => update(|p| p.albums_show_purchases = v == "true"),
+        "albumsShowFavorites" => update(|p| p.albums_show_favorites = v == "true"),
+        "albumsHiresOnly" => update(|p| p.albums_hires_only = v == "true"),
+        "tracksShowPurchases" => update(|p| p.tracks_show_purchases = v == "true"),
+        "tracksShowFavorites" => update(|p| p.tracks_show_favorites = v == "true"),
+        "tracksHiresOnly" => update(|p| p.tracks_hires_only = v == "true"),
         other => log::warn!("[qbz-qt] library pref: unknown key '{other}' (value '{value}')"),
     }
 }

@@ -192,6 +192,13 @@ Rectangle {
 
     readonly property bool loading: doc.loading === true
     readonly property bool found: doc.found === true
+    // The collapsible My QBZ opt-in gates the sidebar hide/show toggle in the
+    // hero overflow — the concept is meaningless while the flat entry is used.
+    // GUARDED parse, the NavFlyout.qml:65-70 precedent.
+    readonly property bool collapsibleMyqbzOn: {
+        try { return JSON.parse(QbzBridge.settingsJson).collapsibleMyqbz === true }
+        catch (e) { return false }
+    }
     readonly property string kind: doc.kind || ""
     readonly property int itemCount: doc.itemCount || 0
     readonly property string viewMode: doc.viewMode || "list"
@@ -768,6 +775,7 @@ Rectangle {
                                 showExpander: root.rowExpander
                                 dotPhase: root.dotPhase
                                 rev: root.patchRev
+                                detailKind: root.kind
                             }
 
                             // Inline tracks (.slint :1151-1218): padding
@@ -813,6 +821,45 @@ Rectangle {
                                             text: root.trs("No results found")
                                             color: theme.textMuted
                                             font.pixelSize: 12
+                                        }
+                                    }
+                                    // Sub-header for the expanded track list.
+                                    // The item's OWN columns (Item/Type/Source/
+                                    // Quality/Tracks/Year) name the collection
+                                    // rows, not these child tracks — so a small,
+                                    // muted, column-aligned label band sits over
+                                    // the inline tracks instead. Reuses the
+                                    // shared TrackListHeader with the SAME arms
+                                    // the inline TrackRow sets (menu only), so
+                                    // "#", "Title", "Duration", "Quality" land on
+                                    // their columns by construction. Shown only
+                                    // once the tracks have loaded (never over the
+                                    // spinner or the empty state).
+                                    Item {
+                                        visible: !rowCell.expandLoading
+                                            && rowCell.tracksLoaded
+                                            && rowCell.inlineTracks.length > 0
+                                        width: parent.width
+                                        height: visible ? 22 : 0
+                                        TrackListHeader {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            showArtwork: false
+                                            showSource: false
+                                            showAlbum: false
+                                            showFavorite: false
+                                            showDownload: false
+                                            showMenu: true
+                                            showReorder: false
+                                        }
+                                        // Discreet hairline under the labels.
+                                        Rectangle {
+                                            anchors.left: parent.left
+                                            anchors.right: parent.right
+                                            anchors.bottom: parent.bottom
+                                            height: 1
+                                            color: theme.surfaceElevated
                                         }
                                     }
                                     Repeater {
@@ -1264,6 +1311,15 @@ Rectangle {
             m.push({ "label": root.kind === "mixtape"
                         ? t("Convert to Collection", r) : t("Convert to Mixtape", r),
                      "icon": "cassette-tape", "action": "convert" })
+        // Sidebar visibility — only meaningful with the collapsible tree on.
+        // The label reflects the CURRENT state (the mechanism playlists carry).
+        if (root.collapsibleMyqbzOn) {
+            m.push({ "sep": true })
+            m.push({ "label": root.doc.hidden === true
+                        ? t("Show in sidebar", r) : t("Hide from sidebar", r),
+                     "icon": root.doc.hidden === true ? "eye" : "eye-off",
+                     "action": "toggle-hidden" })
+        }
         m.push({ "sep": true })
         m.push({ "label": t("Delete", r), "icon": "trash-2", "action": "delete", "danger": true })
         return m
@@ -1276,6 +1332,8 @@ Rectangle {
         else if (a === "clear-cover") QbzMyQbz.removeCover()
         else if (a === "play-mode") QbzMyQbz.togglePlayMode()
         else if (a === "convert") QbzMyQbz.convertKind()
+        else if (a === "toggle-hidden")
+            QbzMyQbz.setCollectionHidden(root.doc.id, root.doc.hidden !== true)
         else if (a === "delete") QbzMyQbz.openDelete()
     }
 

@@ -256,6 +256,10 @@ pub struct DaemonRendererEngine {
 }
 
 impl DaemonRendererEngine {
+    pub fn playback_event(&self) -> qbz_player::player::PlaybackEvent {
+        self.runtime.core().player().get_playback_event()
+    }
+
     /// Compatibility alias for the pre-delegation owner constructor. New
     /// integration code should call [`Self::owner`] or [`Self::delegated`] so
     /// the credential origin is explicit at the construction boundary.

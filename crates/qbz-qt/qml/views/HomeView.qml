@@ -600,6 +600,7 @@ Rectangle {
                     height: 246
 
                     AlbumCard {
+                        id: railAlbumCard
                         albumId: modelData.id
                         source: modelData.source || ""
                         sources: modelData.sources || []
@@ -645,7 +646,8 @@ Rectangle {
                         width: 200
                         height: 200
                         pending: (modelData.artUrl || "") !== ""
-                        coverSource: root.sectionArtOf(modelData)
+                        artworkItem: railAlbumCard.artworkImmediate ? railAlbumCard : null
+                        coverSource: railAlbumCard.artworkImmediate ? "" : root.sectionArtOf(modelData)
                         phase: root.skelPhase
                         cellIndex: index
                         // A cover whose download fails republishes the
@@ -944,6 +946,7 @@ Rectangle {
                         }
                     }
                     Loader {
+                        id: pinnedCardLoader
                         anchors.fill: parent
                         sourceComponent: modelData.itemKind === "artist" ? pArtist
                             : modelData.itemKind === "playlist" ? pPlaylist : pAlbum
@@ -958,7 +961,8 @@ Rectangle {
                         height: 200
                         pending: modelData.itemKind !== "artist"
                             && (modelData.artUrl || "") !== ""
-                        coverSource: modelData.artPath || ""
+                        artworkItem: pinnedCardLoader.item && pinnedCardLoader.item.artworkImmediate ? pinnedCardLoader.item : null
+                        coverSource: artworkItem && artworkItem.artworkImmediate ? "" : (modelData.artPath || "")
                         phase: root.skelPhase
                         cellIndex: index
                         settleMs: 6000
@@ -1061,6 +1065,7 @@ Rectangle {
                     height: 234
 
                     RadioCard {
+                        id: radioArtworkCard
                         seedTitle: modelData.title
                         seedSubtitle: modelData.artist
                         label: QbzSession.tr("RADIO", QbzSession.trRev)
@@ -1086,7 +1091,8 @@ Rectangle {
                         y: 29
                         blockRadius: 4
                         pending: (modelData.artUrl || "") !== ""
-                        coverSource: root.forYouArtOf(modelData)
+                        artworkItem: radioArtworkCard.artworkImmediate ? radioArtworkCard : null
+                        coverSource: radioArtworkCard.artworkImmediate ? "" : root.forYouArtOf(modelData)
                         phase: root.skelPhase
                         cellIndex: index
                         settleMs: 6000

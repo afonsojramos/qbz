@@ -139,7 +139,11 @@ Rectangle {
         id: focusDefer
         interval: 30
         repeat: false
-        onTriggered: input.forceActiveFocus()
+        onTriggered: {
+            // A close/navigation can win the race with this deferred request.
+            if (root.visible && root.enabled && (!root.expandable || root.open))
+                input.forceActiveFocus()
+        }
     }
 
     // --- Closed: the magnifier toggle (fades, so both directions are smooth)

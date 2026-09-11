@@ -15,6 +15,12 @@
 #     and pass (schema migration, accumulator: paused/seek/stall deltas add
 #     nothing, natural/skip/stop/shutdown closes, orphan close on reopen,
 #     paused writes nothing, clear + VACUUM, is_play/is_skip bounds).
+#   + the DLNA device-description tolerance suite (qbz-cast): a renderer whose
+#     SCPDURL/controlURL/eventSubURL is empty or relative must still parse.
+#     The local rupnp compatibility patch must preserve current http (#745).
+#   + the fatal-signal reporter check (qbz-log): a real child process is
+#     segfaulted on purpose; the handler must name the signal and the process
+#     must still die OF that signal.
 #   --workspace today = the 42 members of crates/Cargo.toml minus qbz-qt: the
 #   audio/player/cache/DSD/disc/rip core, qbz-app/core/models/theme/i18n,
 #   the Qobuz client and the source seam, Plex/Jellyfin/Subsonic + media
@@ -129,6 +135,22 @@ cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- controller
 cargo test --manifest-path crates/Cargo.toml -p qconnect-app --lib -- queue_resolution::tests::manual_skip
 cargo test --manifest-path crates/Cargo.toml -p qconnect-protocol --lib -- decoder::tests::controller_
 cargo test --manifest-path crates/Cargo.toml -p qbz-log --lib -- repeat::tests::
+
+say "gate: DLNA device-description tolerance present and green (#745)"
+# The local rupnp patch accepts legacy service URLs without downgrading http.
+# Invalid/oversized URLs must remain rejected.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 4 )) || { echo "DLNA description tolerance suite has $n tests (expected >= 4)"; exit 1; }
+cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_description_tolerance
+# Normal v1/v3 renderers must retain the same transport/volume SOAP contract.
+cargo test --manifest-path crates/Cargo.toml -p qbz-cast --test dlna_wire_compatibility
+
+say "gate: a fatal signal reports itself (#749 / packaged-AppDir SIGSEGV)"
+# The intermittent startup segfault in the shipped AppDir left nothing but
+# `status -11`. The reporter must keep naming the signal AND must keep the wait
+# status a signal, so CI, the smoke harness and core dumps still see a crash.
+cargo test --manifest-path crates/Cargo.toml -p qbz-log --test fatal_signal
 
 say "gate: qbzd resolves no Slint crate"
 hits=$(cargo tree --manifest-path crates/Cargo.toml -p qbzd -e normal \

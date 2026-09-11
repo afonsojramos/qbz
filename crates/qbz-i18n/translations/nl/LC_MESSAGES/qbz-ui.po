@@ -6831,3 +6831,232 @@ msgstr "Boomstructuur"
 
 msgid "Forward"
 msgstr "Vooruit"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACD-images gebruiken metadata in een sidecarbestand."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACD-tracknummers kunnen niet worden gewijzigd."
+
+msgid "Group: Year"
+msgstr "Groeperen: Jaar"
+
+msgid "Group: Decade"
+msgstr "Groeperen: Decennium"
+
+msgid "Popularity"
+msgstr "Populariteit"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Alleen aankopen"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Alleen gevolgd"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Alleen Hi-Res"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Lokale albums verbergen in bibliotheek"
+
+#: library toolbar
+msgid "By you"
+msgstr "Door jou"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Door Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Door anderen"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Zoek in je nummers"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Zoek in je uitgaven"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Zoek in je afspeellijsten"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Zoek in je artiesten"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Zoek in je labels"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Toon alleen aankopen. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Toon alleen favorieten. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Toon alleen gevolgde items. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Toon alleen Hi-Res-items. Wordt gecombineerd met de andere actieve filters."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Verberg lokale albums hier. Ze blijven beschikbaar in de lokale bibliotheek."
+
+msgid "Alphabetical"
+msgstr "Alfabetisch"
+
+msgid "Date updated"
+msgstr "Datum bijgewerkt"
+
+msgid "Track count"
+msgstr "Aantal nummers"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "Server controleren…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "Aanmelden…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "Bibliotheektoegang controleren…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "Server bereikbaar. Meld je aan om te verbinden."
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "Server bereikbaar. Aanmeldgegevens zijn niet gecontroleerd."
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "Verbonden. Bibliotheek synchroniseren…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "Verbonden. Bibliotheek is bijgewerkt."
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "Verbonden. De server werkt zijn bibliotheek bij."
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "Verbinding opgeslagen. Synchroniseer om de toegang te controleren."
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "Verbinding verlopen. Controleer het serveradres en probeer het opnieuw."
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "Aanmelden mislukt: {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "Aangemeld, maar toegang tot de bibliotheek mislukt: {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "Bibliotheeksynchronisatie mislukt: {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Quick Connect-code aanvragen…"
+
+msgid "Waiting for authorization…"
+msgstr "Wachten op autorisatie…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "Quick Connect is uitgeschakeld op deze server."
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Quick Connect is verlopen. Vraag een nieuwe code aan."
+
+msgid "Quick Connect failed: {}"
+msgstr "Quick Connect mislukt: {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "Voer deze code in bij Instellingen > Quick Connect in een Jellyfin-client die al is aangemeld. QBZ wacht maximaal 5 minuten."
+
+#: qbz-qt/qml/Main.qml
+msgid "Close QBZ?"
+msgstr "QBZ afsluiten?"
+
+#: qbz-qt/qml/Main.qml
+msgid "Yes"
+msgstr "Ja"
+
+#: qbz-qt/qml/Main.qml
+msgid "No"
+msgstr "Nee"
+
+#: qbz-qt/qml/Main.qml
+msgid "Don't show again"
+msgstr "Niet opnieuw tonen"
+
+msgid "Quit"
+msgstr "Afsluiten"
+
+msgid "Close Window"
+msgstr "Venster sluiten"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Dit kan enkele minuten duren wanneer MusicBrainz het druk heeft."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Dit duurt langer dan normaal — MusicBrainz heeft het mogelijk druk. Probeer het zo opnieuw."
+
+msgid "Remove from Mixtape"
+msgstr "Verwijderen uit mixtape"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Inklapbare My QBZ in de zijbalk tonen"
+
+msgid "Show Mixtapes"
+msgstr "Mixtapes tonen"
+
+msgid "Show Collections"
+msgstr "Collecties tonen"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Standaard My QBZ-menu-item verbergen"
+
+msgid "No mixtapes yet."
+msgstr "Nog geen mixtapes."
+
+msgid "No collections yet."
+msgstr "Nog geen verzamelingen."
+
+msgid "Show in sidebar"
+msgstr "Tonen in zijbalk"
+
+msgid "New Mixtape"
+msgstr "Nieuwe mixtape"
+
+msgid "New Collection"
+msgstr "Nieuwe verzameling"
+
+msgid "Name (Z-A)"
+msgstr "Naam (Z-A)"
+
+msgid "Search My QBZ"
+msgstr "My QBZ doorzoeken"

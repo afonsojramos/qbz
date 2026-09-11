@@ -267,114 +267,6 @@ Column {
     SettingsDivider { }
     SettingsSpacer { }
 
-    // ============================ NAVIGATION ============================
-    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("NAVIGATION", QbzSession.trRev) }
-
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Show navigation in sidebar", QbzSession.trRev)
-        description: QbzSession.tr("Move the Discover, Library, Local Library and My QBZ sections out of the header and into the sidebar.", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.navInSidebar === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-in-sidebar", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        // ADR-010: only mounted when navigation is NOT in the sidebar.
-        visible: root.doc.navInSidebar !== true
-        label: QbzSession.tr("Compact header navigation", QbzSession.trRev)
-        description: QbzSession.tr("Use the icon-only section navigation in the header even while the sidebar is open.", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.navHeaderCompact === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-header-compact", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("My QBZ", QbzSession.trRev)
-        description: QbzSession.tr("Rename the My QBZ hub. Leave the name blank (or hit reset) to restore the default.", QbzSession.trRev)
-        Row {
-            spacing: 8
-            QbzLineEdit { kioskHost: root.kioskHost;
-                width: 150
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.doc.myQbzLabel || ""
-                placeholder: QbzSession.tr("My QBZ", QbzSession.trRev)
-                onCommitted: function (v) { QbzBridge.settingsString("myqbz-label", v) }
-            }
-            SettingsButton { kioskHost: root.kioskHost;
-                anchors.verticalCenter: parent.verticalCenter
-                iconName: "rotate-ccw"
-                onClicked: QbzBridge.settingsString("myqbz-label", "")
-            }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Invert swipe navigation direction", QbzSession.trRev)
-        description: QbzSession.tr("Swap the two-finger touchpad swipe: left goes back, right goes forward.", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.invertSwipeNavigation === true
-            onToggled: function (v) { QbzBridge.settingsBool("invert-swipe-navigation", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Click on menu item navigates to first tab", QbzSession.trRev)
-        description: QbzSession.tr("Clicking a section in the sidebar or title bar opens its first tab — including your chosen Local Library default — instead of only showing its menu", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.navClickFirstTab === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-click-first-tab", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Show Purchases", QbzSession.trRev)
-        description: QbzSession.tr("Show the Purchases section in the sidebar for browsing and downloading your purchased music", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.showPurchases === true
-            onToggled: function (v) { QbzBridge.settingsBool("show-purchases", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        // Nothing to place while the section itself is off (owner
-        // 2026-08-21) — absent rather than rendered-and-inert.
-        visible: root.doc.showPurchases === true
-        label: QbzSession.tr("Purchases in title bar", QbzSession.trRev)
-        description: QbzSession.tr("Place the Purchases entry in the custom title bar instead of the sidebar", QbzSession.trRev)
-        rowEnabled: !root.tbLocked
-        QbzToggle { kioskHost: root.kioskHost;
-            enabled: !root.tbLocked
-            checked: root.doc.navTbPurchases === true
-            onToggled: function (v) { QbzBridge.settingsBool("nav-tb-purchases", v) }
-        }
-    }
-
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
-
-    // ============================== SEARCH ==============================
-    GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("SEARCH", QbzSession.trRev) }
-
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Intelligent Search", QbzSession.trRev)
-        description: QbzSession.tr("Smart search cache, ranking, and the search preview dropdown. On by default.", QbzSession.trRev)
-        QbzToggle { kioskHost: root.kioskHost;
-            checked: root.doc.intelligentSearch === true
-            onToggled: function (v) { QbzBridge.settingsBool("intelligent-search", v) }
-        }
-    }
-    SettingRow { kioskHost: root.kioskHost;
-        label: QbzSession.tr("Immersive search", QbzSession.trRev)
-        description: QbzSession.tr("What selecting a result in the Immersive search does. Disabled turns the in-immersive search off.", QbzSession.trRev)
-        QbzSelect { kioskHost: root.kioskHost;
-            menuWidth: 200
-            options: root.doc.immersiveSearchActions || []
-            currentIndex: root.doc.immersiveSearchActionIndex || 0
-            onSelected: function (i) { QbzBridge.settingsSelect("immersive-search-action", i) }
-        }
-    }
-
-    SettingsSpacer { }
-    SettingsDivider { }
-    SettingsSpacer { }
-
     // ========================= PLAYER & VISUALS =========================
     GroupHeader { kioskHost: root.kioskHost; text: QbzSession.tr("PLAYER & VISUALS", QbzSession.trRev) }
 
@@ -548,6 +440,7 @@ Column {
     }
     SettingRow { kioskHost: root.kioskHost;
         label: QbzSession.tr("Show track in window title", QbzSession.trRev)
+        visible: !QbzShell.isMacos || QbzShell.systemTitleBar
         QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.windowTitleShow === true
             onToggled: function (v) { QbzBridge.settingsBool("window-title-show", v) }
@@ -604,28 +497,10 @@ Column {
         // Absent while there is no tray icon to close to (owner
         // 2026-08-21). The value still round-trips through the store, so
         // turning the tray back on restores the answer the user gave.
-        visible: root.doc.trayEnable === true
+        visible: root.doc.trayEnable === true && root.doc.isMacos !== true
         QbzToggle { kioskHost: root.kioskHost;
             checked: root.doc.trayCloseToTray === true
             onToggled: function (v) { QbzBridge.settingsBool("tray-close-to-tray", v) }
-        }
-    }
-    // macOS only: switch the activation policy to .accessory while closed to
-    // the menu bar (no Dock icon). Off = Spotify-style, keep the Dock icon.
-    // `visible` is inherited Item.visible and the parent is a Column, which
-    // skips invisible children — so on Linux this leaves no gap at all. The
-    // enable condition is DOUBLED on the row and on the toggle because
-    // SettingRow's `rowEnabled` only dims its own label column
-    // (controls/SettingRow.qml:26); it does not reach the control.
-    SettingRow { kioskHost: root.kioskHost;
-        visible: root.doc.isMacos === true
-        label: QbzSession.tr("Hide Dock icon when closed to menu bar", QbzSession.trRev)
-        description: QbzSession.tr("Run as a menu-bar-only app while the window is closed. Off keeps the Dock icon (like Spotify)", QbzSession.trRev)
-        rowEnabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
-        QbzToggle { kioskHost: root.kioskHost;
-            enabled: root.doc.trayEnable === true && root.doc.trayCloseToTray === true
-            checked: root.doc.trayMacHideDock === true
-            onToggled: function (v) { QbzBridge.settingsBool("tray-mac-hide-dock", v) }
         }
     }
     SettingRow { kioskHost: root.kioskHost;

@@ -275,7 +275,20 @@ Rectangle {
         var id = QbzPlayer.npTrackId
         if (!/^[0-9]+$/.test(id))
             return
-        trackInfo.openFor(id)
+        // A local/media-server track has a numeric library ROW id (not a Qobuz
+        // catalog id), so it cannot use the Qobuz Track Info modal — that one
+        // fed a local id rendered empty. Route it to the Local Media Info modal
+        // (source/server/format/paths). The (i) button and the song-card title
+        // both land here, so both are fixed.
+        var isLocal = false
+        try {
+            var q = JSON.parse(QbzQueue.queueJson)
+            isLocal = !!(q && q.current && q.current.isLocal)
+        } catch (e) {}
+        if (isLocal)
+            QbzLocal.openMediaInfoForTrack(parseInt(id, 10))
+        else
+            trackInfo.openFor(id)
     }
 
     TrackInfoModal { id: trackInfo }
@@ -306,13 +319,53 @@ Rectangle {
         // LEFT-INSET by the docked-cover width so it begins right of the
         // dock (AppShell.slint's large-active padding).
         Item {
+            id: seekRow
             width: parent.width
             height: 32
+
+            // FLUIDITY (#660-reporter follow-up): the fill + handle used to
+            // track the BACKEND-reported npProgress, and a drag called
+            // QbzPlayer.seek() on every move. So the handle lagged the cursor
+            // by the seek round-trip and the backend was flooded with seeks —
+            // "slow and clunky, clicks not exact". Now a press starts a LOCAL
+            // scrub: the handle/fill follow the cursor instantly and ONE seek
+            // is committed on release (a plain click commits at the click
+            // point). `settling` holds the visual at the committed fraction
+            // until npProgress catches up so it never flashes back. The audio
+            // path and the seek call itself are unchanged.
+            property bool scrubbing: false
+            property bool settling: false
+            property real scrubFraction: 0
+            // Live hover position (fraction) for the time tooltip; -1 = none.
+            property real hoverFraction: -1
+            readonly property real visualProgress: (scrubbing || settling)
+                ? scrubFraction
+                : Math.min(Math.max(QbzPlayer.npProgress, 0), 1)
+
+            Timer {
+                id: settleTimeout
+                interval: 1500
+                onTriggered: seekRow.settling = false
+            }
+            Connections {
+                target: QbzPlayer
+                enabled: seekRow.settling
+                function onNpProgressChanged() {
+                    if (Math.abs(QbzPlayer.npProgress - seekRow.scrubFraction) < 0.02) {
+                        seekRow.settling = false
+                        settleTimeout.stop()
+                    }
+                }
+            }
+
             Text {
                 x: root.dockWidth > 0 ? root.dockWidth + 6 : 6
                 anchors.verticalCenter: parent.verticalCenter
                 visible: QbzPlayer.npHasTrack
-                text: root.fmt(QbzPlayer.npElapsedSecs)
+                // While scrubbing, the elapsed readout follows the cursor.
+                text: (seekRow.scrubbing || seekRow.settling)
+                    ? root.fmt(seekRow.scrubFraction * QbzPlayer.npDurationSecs)
+                    : root.fmt(QbzPlayer.npElapsedSecs)
                 color: theme.textMuted
                 font.pixelSize: 11
             }
@@ -330,7 +383,7 @@ Rectangle {
                     anchors.fill: parent
                     visible: root.waveformVisible
                     values: QbzPlayer.npSeekWaveform
-                    playedProgress: QbzPlayer.npProgress
+                    playedProgress: seekRow.visualProgress
                     cacheProgress: QbzPlayer.npCacheProgress
                     baseColor: theme.surfaceElevated
                     cacheColor: Qt.rgba(theme.textMuted.r, theme.textMuted.g,
@@ -359,7 +412,7 @@ Rectangle {
                 }
                 Rectangle {
                     visible: !root.waveformVisible
-                    width: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1)
+                    width: parent.width * seekRow.visualProgress
                     height: parent.height
                     radius: 2
                     color: theme.accent
@@ -370,7 +423,7 @@ Rectangle {
                     height: 12
                     radius: 6
                     color: theme.textPrimary
-                    x: parent.width * Math.min(Math.max(QbzPlayer.npProgress, 0), 1) - width / 2
+                    x: parent.width * seekRow.visualProgress - width / 2
                     anchors.verticalCenter: parent.verticalCenter
                 }
             }
@@ -399,10 +452,106 @@ Rectangle {
                     ? Qt.ArrowCursor
                     : (root.beyondSeekable(mouseX / width) ? Qt.ForbiddenCursor
                                                            : Qt.PointingHandCursor)
-                // Lock the seek target to what has downloaded while streaming
-                // (SeekBar.slint:96-99).
-                onPressed: if (QbzPlayer.npHasTrack) QbzPlayer.seek(root.seekTarget(mouseX / width))
-                onPositionChanged: if (pressed && QbzPlayer.npHasTrack) QbzPlayer.seek(root.seekTarget(mouseX / width))
+                id: seekArea
+                // A press starts a LOCAL scrub (the handle follows the cursor
+                // with zero round-trip lag); the real seek is committed ONCE on
+                // release — a plain click commits at the click point. seekTarget
+                // clamps to what has downloaded while streaming (SeekBar.slint:
+                // 96-99), so a scrub cannot pass the buffered edge.
+                onPressed: {
+                    if (!QbzPlayer.npHasTrack)
+                        return
+                    seekRow.settling = false
+                    seekRow.scrubbing = true
+                    seekRow.scrubFraction = root.seekTarget(mouseX / width)
+                }
+                onPositionChanged: {
+                    if (!QbzPlayer.npHasTrack)
+                        return
+                    if (pressed)
+                        seekRow.scrubFraction = root.seekTarget(mouseX / width)
+                    else
+                        seekRow.hoverFraction = root.clamp01(mouseX / width)
+                }
+                onReleased: {
+                    if (!seekRow.scrubbing)
+                        return
+                    seekRow.scrubbing = false
+                    if (QbzPlayer.npHasTrack) {
+                        // Hold the visual at the committed point until the
+                        // backend position catches up, so it never flashes back.
+                        seekRow.settling = true
+                        settleTimeout.restart()
+                        QbzPlayer.seek(seekRow.scrubFraction)
+                    }
+                }
+                onCanceled: {
+                    seekRow.scrubbing = false
+                    seekRow.settling = false
+                }
+                onExited: seekRow.hoverFraction = -1
+            }
+
+            // Scrub / hover time bubble (best-effort parity with the web
+            // player). It floats above the rail with a downward caret. It is
+            // parented to the window OVERLAY, not to the bar: AppShell mounts
+            // the content frame AFTER the NowPlayingBar, so in ambient mode the
+            // frame's drop shadow drew OVER a bar-child tooltip (the "noise").
+            // The overlay is the top-most layer, above that shadow. Opaque fill
+            // for the same reason (a real blur needs a shader, which draws
+            // nothing on the software renderer).
+            Item {
+                id: seekTip
+                parent: Overlay.overlay
+                z: 10000
+                readonly property real frac: seekRow.scrubbing
+                    ? seekRow.scrubFraction
+                    : seekRow.hoverFraction
+                readonly property color tipFill: theme.surfaceElevated
+                visible: QbzPlayer.npHasTrack && frac >= 0
+                    && (seekRow.scrubbing || seekArea.containsMouse)
+                width: bubble.width
+                height: bubble.height + caret.height
+                // Map the handle's top point into overlay coordinates so the
+                // caret still lands on the rail from the top layer. Re-maps when
+                // `frac` changes (the bar itself is static at the window foot).
+                readonly property point anchor: Overlay.overlay
+                    ? seekTrack.mapToItem(Overlay.overlay, seekTrack.width * frac, 0)
+                    : Qt.point(0, 0)
+                x: Math.max(4, Math.min(
+                    (Overlay.overlay ? Overlay.overlay.width : width) - width - 4,
+                    anchor.x - width / 2))
+                // Caret tip sits right on the rail — no gap (removed per owner).
+                y: anchor.y - height + 3
+
+                Rectangle {
+                    id: bubble
+                    width: tipText.implicitWidth + 14
+                    height: 18
+                    radius: 4
+                    color: seekTip.tipFill
+                    border.width: 1
+                    border.color: theme.borderMuted
+                    Text {
+                        id: tipText
+                        anchors.centerIn: parent
+                        text: root.fmt((seekTip.frac < 0 ? 0 : seekTip.frac) * QbzPlayer.npDurationSecs)
+                        color: theme.textPrimary
+                        font.pixelSize: 11
+                    }
+                }
+                // Downward caret: a rotated square whose lower half shows below
+                // the bubble as the notch. Same fill, no border, so the bubble's
+                // border reads as one clean edge above it.
+                Rectangle {
+                    id: caret
+                    width: 9
+                    height: 9
+                    rotation: 45
+                    color: seekTip.tipFill
+                    anchors.horizontalCenter: bubble.horizontalCenter
+                    y: bubble.height - height / 2
+                }
             }
         }
 

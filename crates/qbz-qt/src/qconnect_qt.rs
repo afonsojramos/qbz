@@ -64,8 +64,8 @@ use qconnect_app::{
     OwnerAuthorityToken, QConnectQueueState, QConnectRendererState, QconnectApp, QconnectAppEvent,
     QconnectDisabledToken, QconnectEnableIntent, QconnectEnableToken, QconnectEventSink,
     QconnectFileAudioQualitySnapshot, QconnectLifecycleState, QconnectRemoteSyncState,
-    QconnectSessionState, QueueCommandType, RendererBufferState, RendererPlaybackSnapshot,
-    RendererReport, RendererReportType, SessionLoopHost,
+    QconnectSessionState, QueueCommandType, RendererPlaybackSnapshot, RendererReport,
+    RendererReportType, SessionLoopHost,
 };
 use qconnect_lan::EndpointPolicy;
 use qconnect_transport_ws::{NativeWsTransport, WsTransportConfig};
@@ -904,7 +904,16 @@ impl ControllerManualBlock {
     }
 
     /// Record a just-sent insert so the next reconcile can confirm its echo.
-    fn note_sent(&mut self, anchor: Option<u64>, ids: Vec<u64>) {
+    fn note_sent(
+        &mut self,
+        renderer: &QConnectRendererState,
+        queue: &QConnectQueueState,
+        anchor: Option<u64>,
+        ids: Vec<u64>,
+    ) {
+        // Seed the queue generation before recording the first Play next batch;
+        // otherwise the first Play later reconcile discards it as a new queue.
+        self.reconcile(renderer, queue);
         if let (Some(anchor), false) = (anchor, ids.is_empty()) {
             self.pending.push((anchor, ids));
         }
@@ -1779,7 +1788,7 @@ impl QtQconnectService {
             }
         }
 
-        let (mut current_qid, mut next_qid) =
+        let (mut current_qid, mut next_qid, mut queue_version) =
             resolve_queue_item_ids_by_track_id(&app, &sync_state, track_id).await;
         if current_qid.is_none() {
             // Becoming the active local renderer is not necessarily a core
@@ -1789,7 +1798,7 @@ impl QtQconnectService {
             // the cloud reject us every two seconds. Reconcile first, then
             // report only once the cloud snapshot can name this track.
             self.sync_local_queue_if_changed().await;
-            (current_qid, next_qid) =
+            (current_qid, next_qid, queue_version) =
                 resolve_queue_item_ids_by_track_id(&app, &sync_state, track_id).await;
             if current_qid.is_none() {
                 log::debug!(
@@ -1798,7 +1807,6 @@ impl QtQconnectService {
                 return;
             }
         }
-        let queue_version = app.queue_state_snapshot().await.version;
 
         let report = build_renderer_playback_report(
             Uuid::new_v4().to_string(),
@@ -1824,10 +1832,9 @@ impl QtQconnectService {
             app.update_renderer_position(position_ms as u64).await;
         }
 
-        // Report the live output format so the controller shows the correct
-        // quality badge (CD / Hi-Res). Reads the player's current output
-        // (sample_rate/bit_depth); channels default to stereo. Both reports dedup
-        // internally in qconnect-app, so calling them every report tick is cheap.
+        // File quality comes from the decoder; device quality comes only from
+        // the QBZ-owned output stream. A PCM container does not establish
+        // the effective device bit depth. Reports deduplicate in qconnect-app.
         let player = self.runtime.core().player();
         let sample_rate = player.state.get_sample_rate();
         let bit_depth = player.state.get_bit_depth();
@@ -1840,16 +1847,18 @@ impl QtQconnectService {
             {
                 log::warn!("[QConnect] Failed to report file audio quality: {err}");
             }
-            if let Err(err) = app
-                .report_device_audio_quality_if_changed(
-                    queue_version,
-                    snapshot.sampling_rate,
-                    snapshot.bit_depth,
-                    snapshot.nb_channels,
-                )
-                .await
-            {
-                log::warn!("[QConnect] Failed to report device audio quality: {err}");
+            if let Some((output_rate, output_channels)) = player.state.output_stream_format() {
+                if let Err(err) = app
+                    .report_device_audio_quality_if_changed(
+                        queue_version,
+                        output_rate as i32,
+                        0, // Effective device bit depth is not known from a PCM container.
+                        output_channels as i32,
+                    )
+                    .await
+                {
+                    log::warn!("[QConnect] Failed to report device audio quality: {err}");
+                }
             }
         }
     }
@@ -2475,20 +2484,16 @@ impl QtQconnectService {
         }
 
         let count = ordered_ids.len();
-        let track_ids: Vec<i64> = ordered_ids.iter().map(|id| *id as i64).collect();
         let start_index = projected_start.unwrap_or(0);
-        let payload = json!({
-            "track_ids": track_ids,
-            "queue_position": start_index,
-            "shuffle_mode": false,
-            "shuffle_pivot_index": start_index,
-            "context_uuid": Uuid::new_v4().to_string(),
-            "autoplay_reset": true,
-            "autoplay_loading": false,
-        });
+        let local_shuffle = self.runtime.core().get_queue_state().await.shuffle;
         let command = app
-            .build_queue_command(QueueCommandType::CtrlSrvrQueueLoadTracks, payload)
+            .build_local_queue_sync_command(
+                &ordered_ids,
+                start_index,
+                !takeover_retry && !local_shuffle,
+            )
             .await;
+        let append = command.command_type == QueueCommandType::CtrlSrvrQueueAddTracks;
         match app.send_queue_command(command).await {
             Ok(action_uuid) => {
                 if takeover_retry {
@@ -2496,10 +2501,10 @@ impl QtQconnectService {
                     arm_local_queue_takeover(&mut state, ordered_ids, action_uuid);
                 }
                 log::info!(
-                    "[QConnect] Pushed local queue to Connect ({count} tracks, start={start_index})"
+                    "[QConnect] Synced local queue to Connect ({count} tracks, start={start_index}, append={append})"
                 );
                 dev_push_event(format!(
-                    "-> QueueLoadTracks {count} tracks start={start_index}"
+                    "-> queue sync {count} tracks start={start_index} append={append}"
                 ));
                 lock_inner(&self.inner).last_pushed_queue_ids = Some(source_ordered_ids);
             }
@@ -2900,8 +2905,12 @@ impl QtQconnectService {
     /// manual-block tail past it.
     async fn note_controller_insert(&self, anchor: Option<i64>, ids: &[u64]) {
         let anchor = anchor.and_then(|v| u64::try_from(v).ok());
+        let Ok(Some((renderer, queue, _session))) = self.effective_remote_renderer_snapshot().await
+        else {
+            return;
+        };
         let mut guard = self.controller_manual.lock().await;
-        guard.note_sent(anchor, ids.to_vec());
+        guard.note_sent(&renderer, &queue, anchor, ids.to_vec());
     }
 
     /// Controller play-LATER routing (#442): when QBZ is CONTROLLING a peer
@@ -3539,6 +3548,13 @@ impl QtQconnectService {
     /// Toggle play/pause on the active PEER renderer. Mirrors the Tauri
     /// `toggle_remote_renderer_playback_if_active`.
     pub async fn toggle_remote_renderer_playback_if_active(&self) -> Result<bool, String> {
+        self.request_remote_renderer_playback_if_active(None).await
+    }
+
+    pub(crate) async fn request_remote_renderer_playback_if_active(
+        &self,
+        requested: Option<bool>,
+    ) -> Result<bool, String> {
         let Some(_runtime_action) = self.begin_runtime_action_if_running()? else {
             return Ok(false);
         };
@@ -3566,9 +3582,11 @@ impl QtQconnectService {
             return Ok(false);
         };
 
-        let next_playing_state = match renderer.playing_state {
-            Some(PLAYING_STATE_PLAYING) => PLAYING_STATE_PAUSED,
-            _ => PLAYING_STATE_PLAYING,
+        let playing = renderer.playing_state == Some(PLAYING_STATE_PLAYING);
+        let next_playing_state = if requested.unwrap_or(!playing) {
+            PLAYING_STATE_PLAYING
+        } else {
+            PLAYING_STATE_PAUSED
         };
         // BARE play/pause: send ONLY `playing_state` — no `current_position`, no
         // `current_queue_item`. Evidence (controller-of-iOS log 2026-06-05,
@@ -4610,10 +4628,17 @@ async fn resolve_queue_item_ids_by_track_id(
     app: &Arc<QtQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
     track_id: u64,
-) -> (Option<u64>, Option<u64>) {
+) -> (Option<u64>, Option<u64>, qconnect_app::QueueVersion) {
     let queue = app.queue_state_snapshot().await;
-    let (current_qid, next_qid, next_track_id) =
-        qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, track_id);
+    let (current_qid, next_qid, next_track_id) = {
+        let state = sync_state.lock().await;
+        qconnect_app::resolve_report_queue_items(
+            &queue,
+            track_id,
+            state.last_renderer_queue_item_id,
+            state.last_renderer_next_queue_item_id,
+        )
+    };
 
     if let Some(current_qid) = current_qid {
         let mut state = sync_state.lock().await;
@@ -4621,9 +4646,9 @@ async fn resolve_queue_item_ids_by_track_id(
         state.last_renderer_next_queue_item_id = next_qid;
         state.last_renderer_track_id = Some(track_id);
         state.last_renderer_next_track_id = next_track_id;
-        (Some(current_qid), next_qid)
+        (Some(current_qid), next_qid, queue.version)
     } else {
-        (None, None)
+        (None, None, queue.version)
     }
 }
 
@@ -4758,7 +4783,6 @@ async fn deferred_renderer_join(
     if let Some(capabilities) = device_info.capabilities.as_mut() {
         capabilities.max_audio_quality = Some(qconnect_max_audio_quality_wire());
     }
-    let queue_version_ref = app.queue_state_snapshot().await.version;
     if !authority.is_current(stamp) {
         return;
     }
@@ -4776,21 +4800,37 @@ async fn deferred_renderer_join(
     // SET_ACTIVE command). Only a post-drop RECONNECTION rejoins as active, so a
     // network blip mid-render does not lose the render.
     let join_as_active = join_reason == qconnect_app::JOIN_SESSION_REASON_RECONNECTION;
+    let queue = app.queue_state_snapshot().await;
+    let renderer = app.renderer_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
+    let event = if join_as_active {
+        runtime.core().player().get_playback_event()
+    } else {
+        qbz_player::player::PlaybackEvent::default()
+    };
+    let snapshot = qconnect_app::playback_snapshot_from_event(
+        &event,
+        &queue,
+        renderer
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id),
+        renderer.next_track.as_ref().map(|item| item.queue_item_id),
+    );
+    let queue_version_ref = queue.version;
+    let initial_report = qconnect_app::build_renderer_playback_report(
+        Uuid::new_v4().to_string(),
+        queue.version,
+        snapshot,
+    );
     let renderer_join_payload = json!({
         "session_uuid": session_uuid,
         "device_info": serde_json::to_value(&device_info).unwrap_or_default(),
         "is_active": join_as_active,
         "reason": join_reason,
-        "initial_state": {
-            "playing_state": PLAYING_STATE_STOPPED,
-            "buffer_state": RendererBufferState::Ok.as_i32(),
-            "current_position": 0,
-            "duration": 0,
-            "queue_version": {
-                "major": queue_version_ref.major,
-                "minor": queue_version_ref.minor
-            }
-        }
+        "initial_state": initial_report.payload.clone()
     });
     let renderer_join_report = RendererReport::new(
         RendererReportType::RndrSrvrJoinSession,
@@ -4809,57 +4849,8 @@ async fn deferred_renderer_join(
         return;
     }
 
-    // 2. Initial StateUpdated report. At join time (e.g. reconnect mid-playback)
-    // we may already have a current track, so resolve the real duration + current/
-    // next queue_item_ids instead of hardcoding nulls.
-    let renderer = app.renderer_state_snapshot().await;
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let queue = app.queue_state_snapshot().await;
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
-    let (current_qid, next_qid, _) = current_track_id
-        .map(|tid| {
-            qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, tid)
-        })
-        .unwrap_or((None, None, None));
-    let duration_ms = match current_track_id {
-        Some(track_id) => runtime
-            .core()
-            .get_track(track_id)
-            .await
-            .map(|track| qconnect_app::qconnect_millis_from_secs(u64::from(track.duration)))
-            .unwrap_or(0),
-        None => 0,
-    };
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let mut state_report_payload = json!({
-        "playing_state": PLAYING_STATE_STOPPED,
-        "buffer_state": RendererBufferState::Ok.as_i32(),
-        "current_position": 0,
-        "duration": duration_ms,
-        "queue_version": {
-            "major": queue_version_ref.major,
-            "minor": queue_version_ref.minor
-        }
-    });
-    if let Some(qid) = current_qid {
-        state_report_payload["current_queue_item_id"] = json!(qid);
-    }
-    if let Some(qid) = next_qid {
-        state_report_payload["next_queue_item_id"] = json!(qid);
-    }
-    let state_report = RendererReport::new(
-        RendererReportType::RndrSrvrStateUpdated,
-        Uuid::new_v4().to_string(),
-        queue_version_ref,
-        state_report_payload,
-    );
+    // Publish the same observation as JoinSession; no fabricated stopped/OK edge.
+    let state_report = initial_report;
     if !authority.is_current(stamp) {
         return;
     }
@@ -5098,6 +5089,39 @@ mod tests {
             manual_next_count: 0,
         };
         (tracks, local)
+    }
+
+    #[test]
+    fn first_remote_next_batch_remains_the_anchor_for_later_batches() {
+        let (mut queue, renderer) = remote_selection_fixture();
+        let mut manual = super::ControllerManualBlock::default();
+        let current = renderer.current_track.as_ref().unwrap().queue_item_id;
+        let make = |track_id, queue_item_id| {
+            let mut item = renderer.current_track.as_ref().unwrap().clone();
+            item.track_id = track_id;
+            item.queue_item_id = queue_item_id;
+            item
+        };
+        manual.note_sent(&renderer, &queue, Some(current), vec![10, 11]);
+        queue.queue_items.splice(1..1, [make(10, 20), make(11, 21)]);
+        queue.version.minor += 1;
+        manual.reconcile(&renderer, &queue);
+        assert_eq!(manual.later_anchor(&renderer, &queue), Some(21));
+        manual.note_sent(&renderer, &queue, Some(21), vec![12, 13]);
+        queue.queue_items.splice(3..3, [make(12, 22), make(13, 23)]);
+        queue.version.minor += 1;
+        manual.reconcile(&renderer, &queue);
+        assert_eq!(manual.later_anchor(&renderer, &queue), Some(23));
+        queue.queue_items.extend([make(30, 24), make(31, 25)]);
+        queue.version.minor += 1;
+        manual.reconcile(&renderer, &queue);
+        assert_eq!(manual.later_anchor(&renderer, &queue), Some(23));
+        queue.shuffle_mode = true;
+        assert_eq!(manual.later_anchor(&renderer, &queue), Some(current));
+        queue.shuffle_mode = false;
+        queue.version.major += 1;
+        manual.reconcile(&renderer, &queue);
+        assert_eq!(manual.later_anchor(&renderer, &queue), Some(current));
     }
 
     #[test]

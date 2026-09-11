@@ -6841,3 +6841,232 @@ msgstr "Arborescence"
 
 msgid "Forward"
 msgstr "Suivant"
+
+msgid "SACD images use sidecar metadata."
+msgstr "Les images SACD utilisent des métadonnées dans un fichier annexe."
+
+msgid "SACD track numbers cannot be changed."
+msgstr "Les numéros de piste SACD ne peuvent pas être modifiés."
+
+msgid "Group: Year"
+msgstr "Grouper : Année"
+
+msgid "Group: Decade"
+msgstr "Grouper : Décennie"
+
+msgid "Popularity"
+msgstr "Popularité"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "Achats uniquement"
+
+#: library toolbar
+msgid "Following only"
+msgstr "Éléments suivis uniquement"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Hi-Res uniquement"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "Masquer les albums locaux de la bibliothèque"
+
+#: library toolbar
+msgid "By you"
+msgstr "Par vous"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Par Qobuz"
+
+#: library toolbar
+msgid "By others"
+msgstr "Par les autres"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "Rechercher dans vos titres"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "Rechercher dans vos sorties"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "Rechercher dans vos playlists"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "Rechercher dans vos artistes"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "Rechercher dans vos labels"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "Afficher uniquement les achats. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "Afficher uniquement les favoris. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "Afficher uniquement les éléments suivis. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Afficher uniquement le contenu Hi-Res. Se combine avec les autres filtres actifs."
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "Masquer les albums locaux ici. Ils restent disponibles dans la bibliothèque locale."
+
+msgid "Alphabetical"
+msgstr "Alphabétique"
+
+msgid "Date updated"
+msgstr "Date de modification"
+
+msgid "Track count"
+msgstr "Nombre de pistes"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "Vérification du serveur…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "Connexion en cours…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "Vérification de l’accès à la bibliothèque…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "Serveur accessible. Connectez-vous pour continuer."
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "Serveur accessible. Les identifiants n’ont pas été vérifiés."
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "Connecté. Synchronisation de la bibliothèque…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "Connecté. La bibliothèque est à jour."
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "Connecté. Le serveur actualise sa bibliothèque."
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "Connexion enregistrée. Synchronisez pour vérifier l’accès."
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "Délai de connexion dépassé. Vérifiez l’adresse du serveur et réessayez."
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "Échec de la connexion : {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "Connecté, mais l’accès à la bibliothèque a échoué : {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "Échec de la synchronisation de la bibliothèque : {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Demande du code Quick Connect…"
+
+msgid "Waiting for authorization…"
+msgstr "En attente d’autorisation…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "Quick Connect est désactivé sur ce serveur."
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Quick Connect a expiré. Demandez un nouveau code."
+
+msgid "Quick Connect failed: {}"
+msgstr "Échec de Quick Connect : {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "Saisissez ce code dans Paramètres > Quick Connect depuis un client Jellyfin déjà connecté. QBZ attend jusqu’à 5 minutes."
+
+#: qbz-qt/qml/Main.qml
+msgid "Close QBZ?"
+msgstr "Fermer QBZ ?"
+
+#: qbz-qt/qml/Main.qml
+msgid "Yes"
+msgstr "Oui"
+
+#: qbz-qt/qml/Main.qml
+msgid "No"
+msgstr "Non"
+
+#: qbz-qt/qml/Main.qml
+msgid "Don't show again"
+msgstr "Ne plus afficher"
+
+msgid "Quit"
+msgstr "Quitter"
+
+msgid "Close Window"
+msgstr "Fermer la fenêtre"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "Cela peut prendre quelques minutes lorsque MusicBrainz est occupé."
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "Cela prend plus de temps que d'habitude — MusicBrainz est peut-être occupé. Réessayez dans un instant."
+
+msgid "Remove from Mixtape"
+msgstr "Retirer de la mixtape"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "Afficher My QBZ repliable dans la barre latérale"
+
+msgid "Show Mixtapes"
+msgstr "Afficher les mixtapes"
+
+msgid "Show Collections"
+msgstr "Afficher les collections"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "Masquer l'entrée de menu My QBZ standard"
+
+msgid "No mixtapes yet."
+msgstr "Aucune mixtape pour le moment."
+
+msgid "No collections yet."
+msgstr "Aucune collection pour le moment."
+
+msgid "Show in sidebar"
+msgstr "Afficher dans la barre latérale"
+
+msgid "New Mixtape"
+msgstr "Nouvelle mixtape"
+
+msgid "New Collection"
+msgstr "Nouvelle collection"
+
+msgid "Name (Z-A)"
+msgstr "Nom (Z-A)"
+
+msgid "Search My QBZ"
+msgstr "Rechercher dans My QBZ"

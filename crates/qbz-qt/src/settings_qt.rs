@@ -894,6 +894,35 @@ pub fn set_sidebar_state(state: i32) -> i32 {
     state
 }
 
+/// Persisted open-sidebar width (#771), clamped to the panel's range;
+/// absent = the pre-#771 240.
+pub fn sidebar_width() -> i32 {
+    crate::panel_resize::clamp_sidebar_width(pref_i32(
+        "sidebar_width",
+        crate::panel_resize::SIDEBAR_MIN_WIDTH,
+    ))
+}
+
+pub fn set_sidebar_width(width: i32) -> i32 {
+    let width = crate::panel_resize::clamp_sidebar_width(width);
+    save_pref("sidebar_width", serde_json::Value::Number(width.into()));
+    width
+}
+
+/// Persisted queue/lyrics column width (#771), clamped; absent = 300.
+pub fn queue_panel_width() -> i32 {
+    crate::panel_resize::clamp_queue_width(pref_i32(
+        "queue_panel_width",
+        crate::panel_resize::QUEUE_MIN_WIDTH,
+    ))
+}
+
+pub fn set_queue_panel_width(width: i32) -> i32 {
+    let width = crate::panel_resize::clamp_queue_width(width);
+    save_pref("queue_panel_width", serde_json::Value::Number(width.into()));
+    width
+}
+
 /// Section-nav placement defaults — the Slint `ShellState` literals
 /// (state.slint:4124 / :4129). Sidebar ON, compact-header OFF.
 pub const NAV_IN_SIDEBAR_DEFAULT: bool = true;
@@ -908,6 +937,37 @@ pub fn nav_in_sidebar() -> bool {
 /// the sidebar is not fully closed. No effect while `nav_in_sidebar` is ON.
 pub fn nav_header_compact() -> bool {
     pref_bool("nav_header_compact", NAV_HEADER_COMPACT_DEFAULT)
+}
+
+/// The collapsible "My QBZ" sidebar section (opt-in, OFF by default). When ON it
+/// reveals the three sub-toggles below; a fresh profile keeps the flat entry.
+pub fn collapsible_myqbz() -> bool {
+    pref_bool("collapsible_myqbz", false)
+}
+pub fn myqbz_show_mixtapes() -> bool {
+    pref_bool("myqbz_show_mixtapes", true)
+}
+pub fn myqbz_show_collections() -> bool {
+    pref_bool("myqbz_show_collections", true)
+}
+pub fn hide_standard_myqbz() -> bool {
+    pref_bool("hide_standard_myqbz", false)
+}
+
+// Sidebar tree collapse state — persisted so a collapsed section stays
+// collapsed across restarts (owner request 2026-09-10). All default EXPANDED
+// (false). The playlist tree and the three My QBZ sections each keep their own.
+pub fn sidebar_playlists_collapsed() -> bool {
+    pref_bool("sidebar_playlists_collapsed", false)
+}
+pub fn myqbz_collapsed() -> bool {
+    pref_bool("myqbz_collapsed", false)
+}
+pub fn myqbz_mixtapes_collapsed() -> bool {
+    pref_bool("myqbz_mixtapes_collapsed", false)
+}
+pub fn myqbz_collections_collapsed() -> bool {
+    pref_bool("myqbz_collections_collapsed", false)
 }
 
 /// Playlist rows draw a 2x2 micro-collage of track covers (Slint
@@ -1943,6 +2003,12 @@ pub struct SettingsDoc {
     /// for why they are hidden rather than disabled.
     #[serde(rename = "backendIsWasapi")]
     pub backend_is_wasapi: bool,
+    /// True on macOS when the active backend is System default, i.e. the
+    /// CoreAudio path that honours `exclusive_mode` through Hog Mode
+    /// (PR #391). AudioSettings QML shows and enables the Exclusive-mode row
+    /// on it (#748). Never true off macOS, so `=== true` gates stay inert.
+    #[serde(rename = "backendIsCoreAudio")]
+    pub backend_is_coreaudio: bool,
     #[serde(rename = "backendIsPipewire")]
     pub backend_is_pipewire: bool,
     #[serde(rename = "backendIsJack")]
@@ -2086,6 +2152,23 @@ pub struct SettingsDoc {
     pub nav_in_sidebar: bool,
     #[serde(rename = "navHeaderCompact")]
     pub nav_header_compact: bool,
+    #[serde(rename = "collapsibleMyqbz")]
+    pub collapsible_myqbz: bool,
+    #[serde(rename = "myqbzShowMixtapes")]
+    pub myqbz_show_mixtapes: bool,
+    #[serde(rename = "myqbzShowCollections")]
+    pub myqbz_show_collections: bool,
+    #[serde(rename = "hideStandardMyqbz")]
+    pub hide_standard_myqbz: bool,
+    // Persisted sidebar-tree collapse state (default expanded).
+    #[serde(rename = "sidebarPlaylistsCollapsed")]
+    pub sidebar_playlists_collapsed: bool,
+    #[serde(rename = "myqbzCollapsed")]
+    pub myqbz_collapsed: bool,
+    #[serde(rename = "myqbzMixtapesCollapsed")]
+    pub myqbz_mixtapes_collapsed: bool,
+    #[serde(rename = "myqbzCollectionsCollapsed")]
+    pub myqbz_collections_collapsed: bool,
     #[serde(rename = "myQbzLabel")]
     pub my_qbz_label: String,
     #[serde(rename = "sidebarPlaylistCollage")]
@@ -2493,6 +2576,8 @@ pub async fn publish_snapshot() {
             backend_index: backend_index as i32 + 1,
             backend_is_alsa: active_backend == AudioBackendType::Alsa,
             backend_is_wasapi: active_backend == AudioBackendType::WasapiExclusive,
+            backend_is_coreaudio: cfg!(target_os = "macos")
+                && active_backend == AudioBackendType::SystemDefault,
             backend_is_pipewire: active_backend == AudioBackendType::PipeWire,
             backend_is_jack: active_backend == AudioBackendType::Jack,
             devices,
@@ -2617,6 +2702,14 @@ pub async fn publish_snapshot() {
             ),
             nav_in_sidebar: nav_in_sidebar(),
             nav_header_compact: nav_header_compact(),
+            collapsible_myqbz: collapsible_myqbz(),
+            myqbz_show_mixtapes: myqbz_show_mixtapes(),
+            myqbz_show_collections: myqbz_show_collections(),
+            hide_standard_myqbz: hide_standard_myqbz(),
+            sidebar_playlists_collapsed: sidebar_playlists_collapsed(),
+            myqbz_collapsed: myqbz_collapsed(),
+            myqbz_mixtapes_collapsed: myqbz_mixtapes_collapsed(),
+            myqbz_collections_collapsed: myqbz_collections_collapsed(),
             my_qbz_label: myqbz_label(),
             sidebar_playlist_collage: pref_bool("sidebar_playlist_collage", true),
             queue_track_artwork: pref_bool("queue_track_artwork", false),
@@ -3447,6 +3540,49 @@ pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str,
             crate::shell_bridge::ui(move |mut b| b.as_mut().set_nav_header_compact(value));
             Ok(Apply::None)
         }
+        // Collapsible My QBZ sidebar opt-ins. Persisted here; the sidebar reads
+        // them live from the republished settingsJson (Phase 3 wires the tree).
+        "collapsible-myqbz" => {
+            save_pref("collapsible_myqbz", serde_json::json!(value));
+            // When turned ON, populate the tree now: `publish_sidebar_tree()`
+            // no-ops while the opt-in is OFF, so without this the sidebar would
+            // stay empty until the next mixtape mutation. (Turning OFF needs no
+            // push — the sidebar hides the tree off the republished settings.)
+            if value {
+                crate::myqbz_qt::publish_sidebar_tree();
+            }
+            Ok(Apply::None)
+        }
+        "myqbz-show-mixtapes" => {
+            save_pref("myqbz_show_mixtapes", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-show-collections" => {
+            save_pref("myqbz_show_collections", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "hide-standard-myqbz" => {
+            save_pref("hide_standard_myqbz", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        // Sidebar-tree collapse state — persisted and read live from the
+        // republished settingsJson by Sidebar.qml (no bridge property needed).
+        "sidebar-playlists-collapsed" => {
+            save_pref("sidebar_playlists_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-collapsed" => {
+            save_pref("myqbz_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-mixtapes-collapsed" => {
+            save_pref("myqbz_mixtapes_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
+        "myqbz-collections-collapsed" => {
+            save_pref("myqbz_collections_collapsed", serde_json::json!(value));
+            Ok(Apply::None)
+        }
         "sidebar-playlist-collage" => {
             save_pref("sidebar_playlist_collage", serde_json::json!(value));
             // LIVE: the sidebar rows swap collage <-> list-music glyph off the
@@ -3801,6 +3937,16 @@ async fn select_alsa_hardware_volume_control(
     publish_snapshot().await;
 }
 
+/// Backend-switch cascade for `exclusive_mode`: the flag survives a switch
+/// only onto a backend that honours it. That used to read "ALSA alone", which
+/// on macOS wiped the CoreAudio Hog Mode setting every time Auto / System
+/// default was re-selected — the #748 reporter's DB workaround died to
+/// exactly this. One predicate with the Settings row and the EXCL LED
+/// (`output_labels::backend_honours_exclusive`).
+fn backend_switch_clears_exclusive(backend: AudioBackendType) -> bool {
+    !crate::output_labels::backend_honours_exclusive(Some(backend), cfg!(target_os = "macos"))
+}
+
 pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str, index: usize) {
     match key {
         "alsa-hardware-volume-control" => {
@@ -3859,7 +4005,7 @@ pub async fn settings_select(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
                 let _ = with_audio(|s| s.set_dac_passthrough(false));
                 let _ = with_audio(|s| s.set_pw_force_bitperfect(false));
             }
-            if backend != AudioBackendType::Alsa {
+            if backend_switch_clears_exclusive(backend) {
                 let _ = with_audio(|s| s.set_exclusive_mode(false));
             }
             // GAPLESS IS DELIBERATELY NOT CASCADED — owner decision, 2026-07-31:
@@ -4556,5 +4702,34 @@ mod local_tab_order_tests {
         audio.backend_type = Some(AudioBackendType::PipeWire);
         audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
         assert!(!requires_alsa_direct_unity(&audio));
+    }
+}
+
+#[cfg(test)]
+mod exclusive_gate_tests {
+    use super::*;
+
+    #[test]
+    fn settings_doc_publishes_backend_is_coreaudio_under_the_name_qml_reads() {
+        // AudioSettings.qml gates the Exclusive-mode row on
+        // `root.doc.backendIsCoreAudio === true`; the serde rename is the
+        // contract between the two files.
+        let doc = SettingsDoc {
+            backend_is_coreaudio: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&doc).expect("SettingsDoc serialises");
+        assert_eq!(json["backendIsCoreAudio"], serde_json::Value::Bool(true));
+    }
+
+    #[test]
+    fn backend_switch_clears_exclusive_unless_the_backend_honours_it() {
+        assert!(!backend_switch_clears_exclusive(AudioBackendType::Alsa));
+        assert!(backend_switch_clears_exclusive(AudioBackendType::PipeWire));
+        // #748: System default is CoreAudio exclusive on macOS and inert elsewhere.
+        assert_eq!(
+            backend_switch_clears_exclusive(AudioBackendType::SystemDefault),
+            !cfg!(target_os = "macos")
+        );
     }
 }

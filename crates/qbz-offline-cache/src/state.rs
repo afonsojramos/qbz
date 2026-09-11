@@ -111,6 +111,30 @@ impl OfflineCacheState {
         Ok(())
     }
 
+    /// SQLite and filesystem work stays off the async executor. Hold the
+    /// source index through insertion so removal cannot race a stale snapshot.
+    pub async fn restore_library_rows(
+        &self,
+        track_id: Option<u64>,
+    ) -> Result<crate::library_sync::LibrarySyncReport, String> {
+        let cache = self.db.clone();
+        let library = self.library_db.clone();
+        let root = self.get_cache_path();
+        tokio::task::spawn_blocking(move || {
+            // Download post-processing takes library before cache.
+            let library = library.blocking_lock();
+            let cache = cache.blocking_lock();
+            crate::library_sync::restore_missing_library_rows(
+                cache.as_ref().ok_or("Offline index is closed")?,
+                library.as_ref().ok_or("Offline library is closed")?,
+                &root,
+                track_id,
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
     pub async fn teardown(&self) {
         // Close library connection first (before main teardown)
         {

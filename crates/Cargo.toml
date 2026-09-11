@@ -65,7 +65,7 @@ members = [
 default-members = ["qbz-qt"]
 
 [workspace.package]
-version = "2.1.0"
+version = "2.1.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/vicrodh/qbz"
@@ -124,6 +124,8 @@ strsim = "0.11"
 # contract. Drop this patch once a rust_cast release carries the fix upstream.
 [patch.crates-io]
 rust_cast = { path = "vendor/rust_cast" }
+# Narrow UPnP endpoint compatibility; retain current http for every consumer.
+rupnp = { path = "../third-party/rupnp" }
 
 [profile.release]
 # Strip symbol tables from release binaries. Measured on 2026-07-02:

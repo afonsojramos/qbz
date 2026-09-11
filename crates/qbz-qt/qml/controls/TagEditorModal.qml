@@ -29,6 +29,7 @@ Item {
     property bool syncSecondary: false
     property var tracks: []
     property var inspection: ({})
+    property bool fixedTrackNumbers: false
     property bool canDirectWrite: false
     property string directReason: ""
     property bool remoteSidecarOnly: false
@@ -107,6 +108,7 @@ Item {
         artworkResults = []
         tracks = cloneRows(doc.tracks)
         inspection = doc.inspection || ({})
+        fixedTrackNumbers = doc.fixedTrackNumbers === true
         canDirectWrite = doc.canDirectWrite === true
         directReason = doc.directWriteReason || ""
         remoteSidecarOnly = doc.remoteSidecarOnly === true
@@ -202,7 +204,8 @@ Item {
             if (match) {
                 next[i].title = match.title || next[i].title
                 next[i].discNumber = String(match.disc_number || next[i].discNumber)
-                next[i].trackNumber = String(match.track_number || next[i].trackNumber)
+                if (!fixedTrackNumbers)
+                    next[i].trackNumber = String(match.track_number || next[i].trackNumber)
                 next[i].artistCredit = match.artist_credit || next[i].artistCredit
                 if (match.artist_credits && match.artist_credits.length) {
                     next[i].artists = match.artist_credits.map(function(credit) { return credit.name })

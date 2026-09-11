@@ -7,7 +7,7 @@ arch=('x86_64' 'aarch64')
 url="https://github.com/vicrodh/qbz"
 license=('MIT')
 depends=('alsa-lib')
-makedepends=('rust' 'cmake' 'nasm' 'jack2')
+makedepends=('rust' 'cmake' 'nasm' 'jack')
 # makepkg's GCC LTO objects cannot be consumed from Rust rlibs by rustc's lld.
 options=('!lto' '!debug')
 install=qbzd.install

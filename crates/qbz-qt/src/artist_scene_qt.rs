@@ -1115,7 +1115,7 @@ fn map_album(album: &Album) -> SceneAlbum {
         .unwrap_or_default();
     SceneAlbum {
         album_id: album.id.clone(),
-        title: album.title.clone(),
+        title: crate::album_qt::format_album_title(&album.title, album.version.as_deref()),
         artist: album.artist.name.clone(),
         artist_id: album.artist.id.to_string(),
         // `image.small || image.large` — Tauri's exact order

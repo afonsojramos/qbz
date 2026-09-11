@@ -78,7 +78,41 @@ Column {
     readonly property string effectiveUser:
         root.userInput !== "" ? root.userInput : (root.state.username || "")
     readonly property bool canConnect:
-        root.effectiveUrl !== "" && root.effectiveUser !== "" && root.passInput !== ""
+        root.effectiveUrl.trim() !== "" && root.effectiveUser.trim() !== "" && root.passInput !== ""
+
+    readonly property var operation: (JSON.parse(QbzLocal.mediaStatus || "{}"))[root.server] || ({})
+    readonly property bool busy: operation.busy === true || operation.syncing === true
+    readonly property bool pairing: root.server === "jellyfin" && root.busy
+        && (operation.phase || "").indexOf("pairing") === 0
+    function cancelPairing() {
+        if (root.server === "jellyfin") QbzLocal.mediaCancelQuickConnect()
+    }
+    onVisibleChanged: { if (!visible) cancelPairing() }
+    Component.onDestruction: cancelPairing()
+    readonly property string statusText: {
+        // Each panel observes its own provider, including when both sync at once.
+        if (operation.syncing === true)
+            return QbzSession.tr("Connected. Syncing library…", QbzSession.trRev)
+        switch (operation.phase || "") {
+        case "pairing-start": return QbzSession.tr("Requesting Quick Connect code…", QbzSession.trRev)
+        case "pairing-waiting": return QbzSession.tr("Waiting for authorization…", QbzSession.trRev)
+        case "pairing-verifying": return QbzSession.tr("Checking library access…", QbzSession.trRev)
+        case "testing": return QbzSession.tr("Checking server…", QbzSession.trRev)
+        case "authenticating": return QbzSession.tr("Signing in…", QbzSession.trRev)
+        case "verifying": return QbzSession.tr("Checking library access…", QbzSession.trRev)
+        case "reachable": return root.server === "jellyfin"
+            ? QbzSession.tr("Server reachable. Sign in to connect.", QbzSession.trRev)
+            : QbzSession.tr("Server reachable. Credentials have not been checked.", QbzSession.trRev)
+        case "syncing": return QbzSession.tr("Connected. Syncing library…", QbzSession.trRev)
+        case "ready": return QbzSession.tr("Connected. Library is up to date.", QbzSession.trRev)
+        case "connected": return QbzSession.tr("Connected", QbzSession.trRev)
+        case "refreshing": return QbzSession.tr("Connected. The server is refreshing its library.", QbzSession.trRev)
+        case "failed": case "sync-failed": return operation.error || ""
+        default: return root.state.hasCredential === true
+            ? QbzSession.tr("Saved connection. Sync to check access.", QbzSession.trRev)
+            : QbzSession.tr("Sign in to sync this server's library.", QbzSession.trRev)
+        }
+    }
 
     QbzTheme { id: theme }
 
@@ -186,6 +220,7 @@ Column {
     // =============================== body =================================
     Column {
         visible: root.state.enabled === true && root.state.collapsed !== true
+        onVisibleChanged: { if (!visible) root.cancelPairing() }
         width: parent.width
         spacing: 4
 
@@ -197,6 +232,7 @@ Column {
             Row {
                 spacing: 8
                 QbzLineEdit { kioskHost: root.kioskHost;
+                    enabled: !root.busy
                     width: 240
                     text: root.state.serverUrl || ""
                     placeholder: root.urlPlaceholder
@@ -207,7 +243,7 @@ Column {
                     anchors.verticalCenter: parent.verticalCenter
                     label: QbzSession.tr("Test", QbzSession.trRev)
                     hasIcon: false
-                    btnEnabled: root.effectiveUrl !== ""
+                    btnEnabled: root.effectiveUrl.trim() !== "" && !root.busy
                     onClicked: QbzLocal.mediaTest(root.server, root.effectiveUrl)
                 }
             }
@@ -216,6 +252,7 @@ Column {
         SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Username", QbzSession.trRev)
             QbzLineEdit { kioskHost: root.kioskHost;
+                    enabled: !root.busy
                 width: 240
                 text: root.state.username || ""
                 placeholder: QbzSession.tr("Account name", QbzSession.trRev)
@@ -228,6 +265,7 @@ Column {
             label: QbzSession.tr("Password", QbzSession.trRev)
             description: root.credentialNote
             QbzLineEdit { kioskHost: root.kioskHost;
+                    enabled: !root.busy
                 width: 240
                 // NEVER prefilled: the document does not carry it, and asking
                 // for it again is the honest cost of not shipping it to QML.
@@ -244,15 +282,46 @@ Column {
         // --- Connect ------------------------------------------------------
         SettingRow { kioskHost: root.kioskHost;
             label: QbzSession.tr("Connection", QbzSession.trRev)
-            description: root.state.hasCredential === true
-                ? QbzSession.tr("Connected. Type a password to reconnect.", QbzSession.trRev)
-                : QbzSession.tr("Sign in to sync this server's library.", QbzSession.trRev)
+            description: root.statusText
             QbzPrimaryButton {
                 label: QbzSession.tr("Connect", QbzSession.trRev)
-                btnEnabled: root.canConnect && !QbzLocal.mediaSyncing
+                btnEnabled: root.canConnect && !root.busy
                 btnHeight: 34
                 onClicked: QbzLocal.mediaConnect(
                     root.server, root.effectiveUrl, root.effectiveUser, root.passInput)
+            }
+        }
+
+        SettingRow { kioskHost: root.kioskHost;
+            id: quickConnectRow
+            objectName: "quickConnectRow"
+            visible: root.server === "jellyfin"
+            label: QbzSession.tr("Quick Connect", QbzSession.trRev)
+            description: QbzSession.tr("Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes.", QbzSession.trRev)
+            Row {
+                spacing: 12
+                Text {
+                    objectName: "quickConnectCode"
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: root.pairing && (root.operation.pairing_code || "") !== ""
+                    text: root.operation.pairing_code || ""
+                    color: theme.textPrimary
+                    font.pixelSize: root.kioskHost ? 28 : 24
+                    font.weight: Font.DemiBold
+                    Accessible.name: text
+                }
+                IconTextButton {
+                    objectName: "quickConnectButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    label: root.pairing ? QbzSession.tr("Cancel", QbzSession.trRev)
+                        : QbzSession.tr("Quick Connect", QbzSession.trRev)
+                    hasIcon: false
+                    btnEnabled: root.pairing || (!root.busy && root.effectiveUrl.trim() !== "")
+                    onClicked: {
+                        if (root.pairing) root.cancelPairing()
+                        else QbzLocal.mediaQuickConnect(root.effectiveUrl)
+                    }
+                }
             }
         }
 
@@ -271,28 +340,30 @@ Column {
                 // The progress text replaces the buttons while a sweep runs —
                 // one control, one state, and no button to click twice.
                 Text {
-                    visible: QbzLocal.mediaSyncing
+                    visible: root.operation.syncing === true
                     anchors.verticalCenter: parent.verticalCenter
-                    text: QbzLocal.mediaSyncProgress !== ""
-                        ? QbzSession.tr("Syncing…", QbzSession.trRev) + " " + QbzLocal.mediaSyncProgress
+                    text: (root.operation.progress || "") !== ""
+                        ? QbzSession.tr("Syncing…", QbzSession.trRev) + " " + (root.operation.progress || "")
                         : QbzSession.tr("Syncing…", QbzSession.trRev)
                     color: theme.textSecondary
                     font.pixelSize: root.kioskHost ? (12) * 1.2 : (12)
                 }
                 IconTextButton {
-                    visible: !QbzLocal.mediaSyncing
+                    visible: root.operation.syncing !== true
                     anchors.verticalCenter: parent.verticalCenter
                     label: QbzSession.tr("Sync now", QbzSession.trRev)
                     hasIcon: false
+                    btnEnabled: !root.busy
                     onClicked: QbzLocal.mediaSync(root.server, false)
                 }
                 // FULL is separate because it is the expensive one and the
                 // answer to "the delta missed something", not the default.
                 IconTextButton {
-                    visible: !QbzLocal.mediaSyncing && root.state.lastSyncAt > 0
+                    visible: root.operation.syncing !== true && root.state.lastSyncAt > 0
                     anchors.verticalCenter: parent.verticalCenter
                     label: QbzSession.tr("Full re-sync", QbzSession.trRev)
                     hasIcon: false
+                    btnEnabled: !root.busy
                     onClicked: QbzLocal.mediaSync(root.server, true)
                 }
             }

@@ -102,6 +102,13 @@ fn editor_remote_source(track: &LocalTrack) -> String {
 /// was unnecessarily strict (a renamed/missing row can still be corrected in
 /// a valid album sidecar) and broke mounted network libraries in particular.
 fn editor_directory(track: &LocalTrack) -> Option<String> {
+    if let Some(reference) = qbz_disc::SacdRef::parse(&track.file_path) {
+        return reference
+            .image
+            .parent()
+            .filter(|path| path.is_dir())
+            .map(|path| path.to_string_lossy().into_owned());
+    }
     let group = Path::new(&track.album_group_key);
     if group.is_dir() {
         return Some(group.to_string_lossy().into_owned());
@@ -228,6 +235,7 @@ struct EditorSeed {
     artwork: ArtworkSeed,
     sidecar_exists: bool,
     remote_sidecar_only: bool,
+    fixed_track_numbers: bool,
     can_direct_write: bool,
     direct_write_reason: String,
     inspection: InspectionDoc,
@@ -236,6 +244,10 @@ struct EditorSeed {
 
 fn build_seed(open: &EditorSession) -> EditorSeed {
     let tracks = &open.tracks;
+    let sacd_image = tracks
+        .first()
+        .and_then(|track| qbz_disc::SacdRef::parse(&track.file_path))
+        .map(|reference| reference.image);
     let remote_target = match &open.target {
         EditorTarget::Remote { target } => Some(target),
         _ => None,
@@ -243,7 +255,7 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
     let cue_based = tracks
         .iter()
         .any(|track| track.cue_file_path.is_some() || track.cue_start_secs.is_some());
-    let paths = if remote_target.is_some() {
+    let paths = if remote_target.is_some() || sacd_image.is_some() {
         Vec::new()
     } else {
         tracks
@@ -251,7 +263,7 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
             .map(|track| track.file_path.clone())
             .collect::<Vec<_>>()
     };
-    let inspection = if remote_target.is_some() {
+    let inspection = if remote_target.is_some() || sacd_image.is_some() {
         InspectionDoc {
             file_count: 0,
             canonical_layers: Vec::new(),
@@ -264,7 +276,7 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
     } else {
         InspectionDoc::from_result(qbz_library::inspect_album_tag_layers(&paths))
     };
-    let snapshots = if remote_target.is_some() {
+    let snapshots = if remote_target.is_some() || sacd_image.is_some() {
         Vec::new()
     } else {
         qbz_library::read_editor_tag_snapshots(&paths)
@@ -277,7 +289,10 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         .and_then(crate::remote_metadata_qt::sidecar)
         .or_else(|| {
             (remote_target.is_none())
-                .then(|| qbz_library::read_album_sidecar(Path::new(&open.directory)))
+                .then(|| match sacd_image.as_ref() {
+                    Some(image) => qbz_library::read_sacd_sidecar(image),
+                    None => qbz_library::read_album_sidecar(Path::new(&open.directory)),
+                })
                 .and_then(Result::ok)
                 .flatten()
         });
@@ -288,10 +303,15 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         && tracks
             .iter()
             .all(|track| Path::new(&track.file_path).is_file());
-    let can_direct_write =
-        remote_target.is_none() && !cue_based && local_files && inspection.direct_write_supported;
+    let can_direct_write = remote_target.is_none()
+        && sacd_image.is_none()
+        && !cue_based
+        && local_files
+        && inspection.direct_write_supported;
     let direct_write_reason = if remote_target.is_some() {
         qbz_i18n::t("Media-server metadata is stored in a local sidecar.")
+    } else if sacd_image.is_some() {
+        qbz_i18n::t("SACD images use sidecar metadata.")
     } else if cue_based {
         qbz_i18n::t("CUE-based albums use sidecar metadata.")
     } else if !local_files {
@@ -443,9 +463,14 @@ fn build_seed(open: &EditorSession) -> EditorSeed {
         sidecar_exists: if remote_target.is_some() {
             sidecar.is_some()
         } else {
-            qbz_library::sidecar_path(Path::new(&open.directory)).exists()
+            sacd_image
+                .as_ref()
+                .map(|image| qbz_library::sacd_sidecar_path(image))
+                .unwrap_or_else(|| qbz_library::sidecar_path(Path::new(&open.directory)))
+                .exists()
         },
         remote_sidecar_only: remote_target.is_some(),
+        fixed_track_numbers: sacd_image.is_some(),
         can_direct_write,
         direct_write_reason,
         inspection,
@@ -628,7 +653,10 @@ pub fn open(album_id: String) {
     open_session(
         album_id,
         group_key.clone(),
-        group_key,
+        tracks
+            .first()
+            .and_then(editor_directory)
+            .unwrap_or(group_key),
         tracks,
         EditorTarget::Library,
         None,
@@ -926,6 +954,13 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
     }
     let year = parse_year(&draft.year)?;
     let direct = draft.persistence == "direct";
+    let sacd = open
+        .tracks
+        .iter()
+        .any(|track| qbz_disc::SacdRef::is_sacd_path(&track.file_path));
+    if direct && sacd {
+        return Err(qbz_i18n::t("SACD images use sidecar metadata."));
+    }
     if !matches!(draft.persistence.as_str(), "sidecar" | "direct") {
         return Err(qbz_i18n::t("Unknown metadata persistence mode."));
     }
@@ -1009,6 +1044,9 @@ fn validate_draft(draft: SaveDraft, open: EditorSession) -> Result<SavePayload, 
             return Err(qbz_i18n::t("Every track needs a title."));
         }
         let track_number = parse_optional_number(&row.track_number, &qbz_i18n::t("Track number"))?;
+        if sacd && track_number != track.track_number {
+            return Err(qbz_i18n::t("SACD track numbers cannot be changed."));
+        }
         let disc_number = parse_optional_number(&row.disc_number, &qbz_i18n::t("Disc number"))?;
         let artist_credit = if row.artist_credit.trim().is_empty() {
             track.artist.clone()
@@ -1269,11 +1307,27 @@ pub fn save(draft_json: &str) {
                 // A sidecar is removed only after every file was verified.
                 qbz_library::delete_album_sidecar(Path::new(&payload.session.directory))?;
             } else {
+                let sacd_image = payload
+                    .session
+                    .tracks
+                    .first()
+                    .and_then(|track| qbz_disc::SacdRef::parse(&track.file_path))
+                    .map(|reference| reference.image);
+                let mut persistent_cover = sacd_image
+                    .as_ref()
+                    .and_then(|image| qbz_library::read_sacd_sidecar(image).ok().flatten())
+                    .and_then(|sidecar| sidecar.extended_album)
+                    .and_then(|album| album.artwork_path);
                 if let Some(cover) = payload.front_cover.as_ref() {
-                    qbz_library::write_folder_front_cover(
-                        Path::new(&payload.session.directory),
-                        &cover.bytes,
-                    )?;
+                    if let Some(image) = sacd_image.as_ref() {
+                        persistent_cover =
+                            Some(qbz_library::write_sacd_front_cover(image, &cover.bytes)?);
+                    } else {
+                        qbz_library::write_folder_front_cover(
+                            Path::new(&payload.session.directory),
+                            &cover.bytes,
+                        )?;
+                    }
                     artwork_path =
                         qbz_library::MetadataExtractor::cache_artwork_bytes(&cover.bytes);
                     if artwork_path.is_none() {
@@ -1283,13 +1337,28 @@ pub fn save(draft_json: &str) {
                         ));
                     }
                     if let Some(extended) = payload.sidecar.extended_album.as_mut() {
-                        extended.artwork_path = artwork_path.clone();
+                        extended.artwork_path =
+                            persistent_cover.clone().or_else(|| artwork_path.clone());
                     }
                 }
-                qbz_library::write_album_sidecar(
-                    Path::new(&payload.session.directory),
-                    &payload.sidecar,
-                )?;
+                if sacd_image.is_some() {
+                    if let Some(extended) = payload.sidecar.extended_album.as_mut() {
+                        extended.artwork_path = persistent_cover;
+                    }
+                }
+                if let Some(reference) = payload
+                    .session
+                    .tracks
+                    .first()
+                    .and_then(|track| qbz_disc::SacdRef::parse(&track.file_path))
+                {
+                    qbz_library::write_sacd_sidecar(&reference.image, &payload.sidecar)?;
+                } else {
+                    qbz_library::write_album_sidecar(
+                        Path::new(&payload.session.directory),
+                        &payload.sidecar,
+                    )?;
+                }
             }
             let outcome = match &payload.session.target {
                 EditorTarget::Library => SaveOutcome::Library {
@@ -1959,9 +2028,53 @@ mod tests {
         assert_eq!(editor_remote_source(&track), "plex");
     }
 
+    /// A fixture directory INSIDE the temp dir. `std::env::temp_dir()` itself
+    /// ends in a separator on Windows (`C:\...\Temp\`) while `Path::parent`
+    /// never yields one, so comparing the two strings failed the Windows gate
+    /// on every run since 2026-08-28. Joining a component normalises both.
+    fn fixture_directory(name: &str) -> std::path::PathBuf {
+        let directory = std::env::temp_dir().join(name);
+        std::fs::create_dir_all(&directory).expect("fixture directory");
+        directory
+    }
+
+    #[test]
+    fn sacd_editor_resolves_image_directory_and_refuses_direct_writes() {
+        let mut open = session_fixture();
+        let directory = fixture_directory("qbz-editor-sacd-fixture");
+        let image = directory.join("Disc #1.iso");
+        for (index, track) in open.tracks.iter_mut().enumerate() {
+            track.file_path = qbz_disc::SacdRef {
+                image: image.clone(),
+                track: (index + 1) as u8,
+            }
+            .to_path_string();
+            track.track_number = Some(index as u32 + 1);
+            track.album_group_key = "sacd|||fingerprint".into();
+        }
+        open.directory = directory.to_string_lossy().into_owned();
+        assert_eq!(
+            editor_directory(&open.tracks[0]),
+            Some(open.directory.clone())
+        );
+        let seed = build_seed(&open);
+        assert!(!seed.can_direct_write);
+        assert!(seed.fixed_track_numbers);
+        assert!(seed.inspection.error.is_empty());
+        let rows = r#"[{"id":"10","title":"One","trackNumber":"1","discNumber":"1"},{"id":"20","title":"Two","trackNumber":"2","discNumber":"1"}]"#;
+        let draft: SaveDraft = serde_json::from_str(&draft_json(rows)).unwrap();
+        assert!(validate_draft(draft, open.clone()).is_ok());
+        let mut direct: SaveDraft = serde_json::from_str(&draft_json(rows)).unwrap();
+        direct.persistence = "direct".into();
+        assert!(validate_draft(direct, open.clone()).is_err());
+        let mut renumbered: SaveDraft = serde_json::from_str(&draft_json(rows)).unwrap();
+        renumbered.tracks[0].track_number = "2".into();
+        assert!(validate_draft(renumbered, open).is_err());
+    }
+
     #[test]
     fn editor_directory_uses_real_parent_for_non_path_group_identity() {
-        let directory = std::env::temp_dir();
+        let directory = fixture_directory("qbz-editor-location-fixture");
         let file = directory.join("qbz-editor-location-fixture.flac");
         let track = LocalTrack {
             file_path: file.to_string_lossy().into_owned(),

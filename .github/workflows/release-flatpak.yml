@@ -2,7 +2,7 @@
 #
 # Rewritten 2026-08-25 for the Slint -> Qt frontend switch: the bundle is a
 # REPACK of the bare binary from the shared build-qt-linux.yml on the KDE
-# runtime (org.kde.Platform 6.9 provides Qt). No cargo inside flatpak-builder,
+# runtime (org.kde.Platform 6.11 provides Qt). No cargo inside flatpak-builder,
 # no swap ceremony. Same shape as the Flathub manifest, which consumes the
 # published release tarball instead.
 
@@ -156,8 +156,8 @@ jobs:
       - name: Install runtimes
         run: |
           flatpak install --user -y --noninteractive flathub \
-            org.kde.Platform//6.9 \
-            org.kde.Sdk//6.9
+            org.kde.Platform//6.11 \
+            org.kde.Sdk//6.11
 
       - name: Build Flatpak
         id: build_flatpak

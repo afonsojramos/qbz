@@ -246,6 +246,15 @@ Item {
         }
     }
 
+    // The distance-based wheel animation writes contentY without setting
+    // Flickable.moving. Yield before its first frame, just as for a native drag.
+    Connections {
+        target: root.target ? root.target.children.find(function (child) {
+            return child.objectName === "qbzWheelScroll";
+        }) || null : null
+        function onUserScrollStarted() { root._disarm("wheel takeover"); }
+    }
+
     Connections {
         target: QbzShell
         function onRestoreScopeChanged() { root._begin() }

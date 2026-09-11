@@ -114,7 +114,7 @@ Item {
             // may additionally show the catalog mark in the mixed feed.
             source: cell.item.source
             sources: cell.item.sources || []
-            showSourceBadge: cell.view.showLocal
+            showSourceBadge: cell.view.showSourceBadges
         }
     }
     // Group separator. These are pseudo-rows injected into the SAME flat model
@@ -142,7 +142,7 @@ Item {
         TrackCard {
             item: cell.item
             artSource: cell.view.artMap[cell.item.artKey] || ""
-            showSourceBadge: cell.view.showLocal
+            showSourceBadge: cell.view.showSourceBadges
             confirmReleaseRemoval: function (item) {
                 cell.view.askRemoveReleaseFavorites(item)
             }
@@ -202,6 +202,8 @@ Item {
     // (ArtistGridCard/LabelCard). A bare Rectangle: it does not take pointer
     // events, so the card's hover/click areas keep working underneath.
     QbzSkeleton {
+        artworkItem: cell.item.kind !== "group-header" && cardLoader.item
+            && cardLoader.item.artworkImmediate ? cardLoader.item : null
         variant: "art"
         width: 200
         height: 200
@@ -209,7 +211,8 @@ Item {
                   || cell.item.kind === "track"
                   || cell.item.kind === "playlist")
             && cell.item.imageUrl !== ""
-            && (cell.view.artMap[cell.item.artKey] || "") === ""
+            && (cardLoader.item && cardLoader.item.artworkImmediate
+                ? opacity > 0.004 : (cell.view.artMap[cell.item.artKey] || "") === "")
             // TrackCard's unavailable scrim is semantic content. A pending
             // artwork skeleton must never paint over it and turn the honest
             // state back into an ambiguous grey tile.

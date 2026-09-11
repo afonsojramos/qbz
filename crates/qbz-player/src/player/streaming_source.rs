@@ -704,10 +704,9 @@ impl IncrementalStreamingSource {
         let codec_params = track.codec_params.clone();
 
         // Extract sample rate and channels from codec params
-        let sample_rate = codec_params
-            .sample_rate
-            .ok_or_else(|| "No sample rate in codec params".to_string())?;
-        let channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+        let metadata = super::audio_metadata_from_codec_params(&codec_params)?;
+        let sample_rate = metadata.sample_rate;
+        let channels = metadata.channels;
 
         let decoder = get_codecs()
             .make(&codec_params, &DecoderOptions::default())
@@ -1026,10 +1025,9 @@ impl InMemorySource {
         let track_id = track.id;
         let codec_params = track.codec_params.clone();
 
-        let sample_rate = codec_params
-            .sample_rate
-            .ok_or_else(|| "No sample rate in codec params".to_string())?;
-        let channels = codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+        let metadata = super::audio_metadata_from_codec_params(&codec_params)?;
+        let sample_rate = metadata.sample_rate;
+        let channels = metadata.channels;
 
         let decoder = get_codecs()
             .make(&codec_params, &DecoderOptions::default())
@@ -1257,7 +1255,10 @@ mod tests {
         assert_eq!(prealloc_capacity(None), None);
         assert_eq!(prealloc_capacity(Some(0)), None);
         // Known size reserves exactly that (no doubling slack).
-        assert_eq!(prealloc_capacity(Some(60 * 1024 * 1024)), Some(60 * 1024 * 1024));
+        assert_eq!(
+            prealloc_capacity(Some(60 * 1024 * 1024)),
+            Some(60 * 1024 * 1024)
+        );
         assert_eq!(prealloc_capacity(Some(1)), Some(1));
         // Absurd sizes are capped at 1 GiB.
         assert_eq!(

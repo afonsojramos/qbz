@@ -41,9 +41,9 @@ Item {
     }
 
     // One shared input seam for every page that uses the house scrollbar:
-    // physical-wheel acceleration is Qt's native process policy (main.rs),
-    // while this observer supplies only a missing touchpad tail.
+    // wheel distance/easing and touchpad momentum share one input handler.
     QbzKineticScroll {
+        id: wheelScroll
         target: root.target
         onUserScrollStarted: root.userScrollStarted()
     }
@@ -93,6 +93,7 @@ Item {
             // Public Flickable semantics already cancel on a contentY write;
             // make the takeover explicit so scrollbar drag remains exact even
             // if the first pressed position equals the current one.
+            wheelScroll.stopWheel();
             root.target.cancelFlick();
             position(mouseY);
         }

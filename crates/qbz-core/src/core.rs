@@ -6,7 +6,11 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use qbz_integrations::musicbrainz::cache::{MusicBrainzCache, QobuzArtistMatch};
+use qbz_integrations::musicbrainz::cache::MusicBrainzCache;
+use qbz_integrations::musicbrainz::identity::{
+    self, ArtistCandidate, BoxFuture, FetchError, IsrcCredits, SceneIdentityRow,
+    SceneQobuzCandidate, SourceIdentityRow,
+};
 use qbz_integrations::musicbrainz::genre::{extract_affinity_seeds, genre_summary, is_broad_genre};
 use qbz_integrations::musicbrainz::location::compute_affinity_score;
 use qbz_integrations::musicbrainz::{
@@ -1100,6 +1104,19 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     pub async fn sync_current_to_id(&self, id: u64) -> Option<(QueueTrack, bool)> {
         let queue = self.queue.write().await;
         let result = queue.sync_current_to_id(id);
+        if matches!(result, Some((_, true))) {
+            self.emit(CoreEvent::QueueUpdated {
+                state: queue.get_state(),
+            })
+            .await;
+        }
+        result
+    }
+
+    /// Reconcile an observed engine handover without guessing a duplicate occurrence.
+    pub async fn sync_gapless_successor(&self, id: u64) -> Option<(QueueTrack, bool)> {
+        let queue = self.queue.write().await;
+        let result = queue.sync_gapless_successor(id);
         if matches!(result, Some((_, true))) {
             self.emit(CoreEvent::QueueUpdated {
                 state: queue.get_state(),
@@ -2365,16 +2382,67 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         Arc::clone(&self.musicbrainz)
     }
 
-    /// Resolve an artist name to a MusicBrainz id. Returns `None` if no
-    /// confident match is found.
+    /// The authenticated Qobuz catalog territory (ISO 3166-1 alpha-2), the
+    /// scope of every MBID → Qobuz-id identity row. `None` before login —
+    /// callers then display but persist nothing (an invented constant would
+    /// let one territory's duplicate poison another's).
+    pub async fn catalog_scope(&self) -> Option<String> {
+        let client = self.client.read().await;
+        let client = client.as_ref()?;
+        client
+            .session()
+            .await
+            .and_then(|s| s.country_code)
+            .map(|c| c.trim().to_uppercase())
+            .filter(|c| !c.is_empty())
+    }
+
+    /// Resolve an artist NAME to a MusicBrainz id under the containment rule
+    /// (`identity::select_exact_name`): exactly one result in the quoted-name
+    /// window with the same name and score >= 90, else `None`. Used where
+    /// only a name exists (playlist suggestions, local artist images). The
+    /// search WINDOW is cached as evidence and re-gated on every hit; the
+    /// legacy name-keyed `resolved_artists` table is neither read nor written
+    /// — a name alone is not an identity (#768).
     pub async fn musicbrainz_resolve_artist(
         &self,
         name: &str,
     ) -> Result<Option<ResolvedArtist>, CoreError> {
-        self.musicbrainz
-            .resolve_artist(name)
+        let store = CoreIdentityStore(&self.musicbrainz_cache);
+        identity::resolve_artist_by_name(Some(&store), self.musicbrainz.as_ref(), name)
             .await
             .map_err(|e| CoreError::Internal(e.to_string()))
+    }
+
+    /// Resolve the SOURCE artist of an Artist Page — a Qobuz artist id, its
+    /// name and the ISRCs of its own Popular Tracks — to a MusicBrainz id
+    /// (`identity::resolve_source_artist`). Verified mappings are cached by
+    /// Qobuz artist id (Qobuz artist ids are catalog-global: territory
+    /// decides availability, not which artist an id names), bounded to
+    /// `MAX_SOURCE_ISRCS` MusicBrainz lookups through the shared client.
+    pub async fn musicbrainz_resolve_source_artist(
+        &self,
+        qobuz_artist_id: u64,
+        name: &str,
+        isrcs: &[String],
+    ) -> identity::SourceResolution {
+        if !self.musicbrainz.is_enabled().await {
+            return identity::SourceResolution {
+                identity: identity::SourceIdentity::Unavailable,
+                resolved: None,
+                requests: 0,
+                cache: "disabled",
+            };
+        }
+        let store = CoreIdentityStore(&self.musicbrainz_cache);
+        identity::resolve_source_artist(
+            Some(&store),
+            self.musicbrainz.as_ref(),
+            qobuz_artist_id,
+            name,
+            isrcs,
+        )
+        .await
     }
 
     /// Generate playlist "Suggested Songs" via the artist_vectors engine.
@@ -2891,25 +2959,6 @@ fn scene_fatal_qobuz(err: &CoreError) -> Option<SceneDiscoveryError> {
     }
 }
 
-/// Longest we will honour a `Retry-After` before giving up on that request.
-/// MusicBrainz's per-IP limiter recovers in ~1 s; anything asking for more
-/// than this is an outage, not a hiccup, and the user is staring at a bar.
-const SCENE_MAX_BACKOFF_SECS: u64 = 10;
-
-/// Sleep `secs` (capped), waking every 250 ms so a cancellation lands promptly
-/// instead of after a ten-second nap. Returns `false` when cancelled.
-async fn scene_backoff(secs: u64, cancel: &CancelToken) -> bool {
-    let total = secs.min(SCENE_MAX_BACKOFF_SECS);
-    let slices = total * 4;
-    for _ in 0..slices {
-        if cancel.is_cancelled() {
-            return false;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    }
-    !cancel.is_cancelled()
-}
-
 /// Drop blacklisted rows from a scene response and keep `total_candidates`
 /// honest. Returns how many were removed.
 ///
@@ -2941,8 +2990,8 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
     /// account switch. The post-filter on read covers newly-BLOCKED artists;
     /// this covers the two cases it cannot: un-blocking (the validation loop
     /// had already substituted a different same-name Qobuz artist for that
-    /// MBID) and a change of account territory (which decides what validates
-    /// at all and is not yet part of the cache key).
+    /// MBID). The account territory is part of the v2 key, so a territory
+    /// change no longer needs this.
     pub fn invalidate_scene_cache(&self) {
         if let Ok(guard) = self.musicbrainz_cache.lock() {
             if let Some(cache) = guard.as_ref() {
@@ -3050,29 +3099,54 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         // pre-resolution identity saves up to five MusicBrainz round-trips on
         // every hit. First page only, matching Tauri — paginated pages are
         // cheap to recompute and would multiply the key space by the offset.
-        let cache_key = location::build_scene_cache_key_v1(&location::SceneCacheKey {
-            source_mbid,
-            area_id: area_id.unwrap_or(area_name),
-            country,
-            seeds: &source_seeds,
-            page_size: limit,
-            catalog_scope: None,
+        // The catalog territory is part of the key (v2) — which same-name
+        // Qobuz artist validates depends on it. Without a scope (not logged
+        // in) the scene is computed but neither read from nor written to the
+        // materialised cache, rather than keyed on an invented constant.
+        let scope = self.catalog_scope().await;
+        let store = CoreIdentityStore(&self.musicbrainz_cache);
+        let catalog = SceneQobuz {
+            core: self,
+            fatal: std::sync::Mutex::new(None),
+        };
+        let cache_key = scope.as_deref().map(|scope| {
+            location::build_scene_cache_key_v1(&location::SceneCacheKey {
+                source_mbid,
+                area_id: area_id.unwrap_or(area_name),
+                country,
+                seeds: &source_seeds,
+                page_size: limit,
+                catalog_scope: Some(scope),
+            })
         });
+        if cache_key.is_none() {
+            log::info!("[scene] no catalog scope (not logged in): scene cache bypassed");
+        }
 
-        if offset == 0 {
+        if let (0, Some(cache_key)) = (offset, cache_key.as_deref()) {
             let mut cached = None;
             if let Ok(guard) = self.musicbrainz_cache.lock() {
                 if let Some(cache) = guard.as_ref() {
-                    cached = cache.get_scene_cache(&cache_key).ok().flatten();
+                    cached = cache.get_scene_cache(cache_key).ok().flatten();
                 }
             }
             if let Some(mut hit) = cached {
                 let removed = apply_scene_blacklist(&mut hit, blacklist);
+                // The materialised scene is NOT an identity authority: every
+                // row's Qobuz projection is re-derived from the identifier-
+                // keyed identity cache (verified rows live 30 days, a
+                // provisional unique-name row 7 days, then one cheap Qobuz
+                // re-search). A provisional match therefore never silently
+                // becomes a 30-day association because the page was cached.
+                let dropped = self
+                    .revalidate_scene_rows(&mut hit, &store, &catalog, scope.as_deref(), blacklist)
+                    .await?;
                 log::info!(
-                    "[scene] cache hit for {} ({} artists, {} blacklisted out)",
+                    "[scene] cache hit for {} ({} artists, {} blacklisted out, {} dropped on revalidation)",
                     area_name,
                     hit.artists.len(),
-                    removed
+                    removed,
+                    dropped
                 );
                 return Ok(hit);
             }
@@ -3169,31 +3243,13 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 genre.clone(),
             );
 
-            let mut result = self
+            // The client already retries 503/429 with the server's Retry-After
+            // (send_with_retry, up to 3 attempts), so the scene no longer stacks
+            // a one-shot backoff on top -- that could pile waits past ~10s.
+            let result = self
                 .musicbrainz
                 .search_artists_by_tag_and_area(genre, &search_name, country, per_genre_limit, 0)
                 .await;
-
-            // Honour the server's Retry-After once. MusicBrainz answers 503
-            // (and the proxy 429) with a whole-second header; the client has
-            // already parsed it into RateLimited(secs).
-            if let Err(qbz_integrations::IntegrationError::RateLimited(secs)) = &result {
-                let secs = *secs;
-                log::info!("[scene] MusicBrainz rate-limited on {genre:?}, backing off {secs}s");
-                if !scene_backoff(secs, cancel).await {
-                    return Err(SceneDiscoveryError::Cancelled);
-                }
-                result = self
-                    .musicbrainz
-                    .search_artists_by_tag_and_area(
-                        genre,
-                        &search_name,
-                        country,
-                        per_genre_limit,
-                        0,
-                    )
-                    .await;
-            }
 
             let response = match result {
                 Ok(response) => response,
@@ -3302,112 +3358,45 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
                 );
             }
 
-            let name_normalized = MusicBrainzCache::normalize_name(mb_name);
-
-            // Read-through validation cache. Only the Qobuz projection is
-            // stored (id/name/image/album count) — those four are a pure
-            // function of the name. The candidate is rebuilt around them from
-            // THIS scene's mbid, score and genres, which is exactly what made
-            // the Tauri-era whole-LocationCandidate cache unreplayable.
-            let mut cached_match = None;
-            if let Ok(guard) = self.musicbrainz_cache.lock() {
-                if let Some(cache) = guard.as_ref() {
-                    cached_match = cache.get_qobuz_artist_match(&name_normalized).ok().flatten();
-                }
-            }
-            // A hit on a since-blacklisted artist is treated as a MISS, not as
-            // "no match": re-running the search lets the next-best same-name
-            // Qobuz artist take the slot, exactly as a cold run would.
-            let cached_match =
-                cached_match.filter(|m| !(m.qobuz_id > 0 && blacklist(m.qobuz_id as u64)));
-
-            // RE-ASSERT THE ACCEPTANCE GATE ON REPLAY. The cache KEY is
-            // `MusicBrainzCache::normalize_name`, which also strips `'`, `"`,
-            // `.` and `,`; the cold path below accepts a result only when
-            // `normalize_artist_name` matches, and that one merely
-            // trims/lowercases/collapses whitespace. The key is therefore
-            // strictly COARSER than the predicate, so two MusicBrainz
-            // candidates that the cold path would treat as different names
-            // share one cache slot — "Guns N' Roses" and "Guns N Roses",
-            // "Eve." and "Eve". Whichever validated first would then own the
-            // row for BOTH, for the full 30-day TTL, and a replay that skipped
-            // the gate is the only way an artist the cold path would have
-            // REJECTED can end up attributed to a candidate.
-            //
-            // Checked here rather than by narrowing the key, so it still holds
-            // if either normaliser changes independently later.
-            let cached_match = cached_match
-                .filter(|m| normalize_artist_name(&m.name) == normalize_artist_name(mb_name));
-
-            if let Some(hit) = cached_match {
-                validated.push(LocationCandidate {
+            // Identity, not popularity (#768): `identity::resolve_scene_candidate`
+            // keys its cache on THIS candidate's MBID + the catalog scope,
+            // takes a unique exact-name Qobuz artist as a provisional match,
+            // and splits several same-name Qobuz artists with their own
+            // top-track ISRCs — never with `albums_count` alone. No evidence,
+            // no row.
+            match identity::resolve_scene_candidate(
+                Some(&store),
+                self.musicbrainz.as_ref(),
+                &catalog,
+                mbid,
+                mb_name,
+                scope.as_deref(),
+                blacklist,
+            )
+            .await
+            {
+                Ok(Some(m)) => validated.push(LocationCandidate {
                     mbid: mbid.clone(),
                     mb_name: mb_name.clone(),
-                    qobuz_id: Some(hit.qobuz_id),
-                    qobuz_name: Some(hit.name),
-                    qobuz_image: hit.image,
+                    qobuz_id: Some(m.qobuz_id as i64),
+                    qobuz_name: Some(m.name),
+                    qobuz_image: m.image,
                     score: *score,
                     genres: candidate_genres.clone(),
-                    qobuz_albums_count: hit.albums_count,
-                });
-                continue;
-            }
-
-            let results = match self.search_artists(mb_name, 5, 0, None).await {
-                Ok(results) => results,
+                    qobuz_albums_count: m.albums_count,
+                }),
+                Ok(None) => {}
                 Err(e) => {
                     // Terminal classes end the page here rather than burning
                     // up to 99 more searches that will fail the same way.
-                    if let Some(fatal) = scene_fatal_qobuz(&e) {
+                    if let Some(fatal) = catalog.take_fatal() {
                         log::warn!("[scene] Qobuz validation aborted: {e}");
                         return Err(fatal);
                     }
                     log::warn!("[scene] Qobuz validation failed for {mb_name:?}: {e}");
                     validation_failures += 1;
                     last_validation_error = e.to_string();
-                    continue;
                 }
-            };
-            let mb_norm = normalize_artist_name(mb_name);
-            // The blacklist filters INSIDE the match, not after it: when the
-            // top same-name artist is blocked, the next-best one takes the
-            // slot instead of the row disappearing. That is Tauri's rule.
-            let best = results
-                .items
-                .iter()
-                .filter(|a| normalize_artist_name(&a.name) == mb_norm && !blacklist(a.id))
-                .max_by_key(|a| a.albums_count.unwrap_or(0));
-            if let Some(qobuz_artist) = best {
-                let image_url = qobuz_artist
-                    .image
-                    .as_ref()
-                    .and_then(|img| img.small.as_ref().or(img.thumbnail.as_ref()).cloned());
-                // Positive results only. Tauri's negative cache is disabled on
-                // purpose: "not on Qobuz" stuck for 30 days is how a newly
-                // added artist stays invisible.
-                if let Ok(guard) = self.musicbrainz_cache.lock() {
-                    if let Some(cache) = guard.as_ref() {
-                        let _ = cache.set_qobuz_artist_match(
-                            &name_normalized,
-                            &QobuzArtistMatch {
-                                qobuz_id: qobuz_artist.id as i64,
-                                name: qobuz_artist.name.clone(),
-                                image: image_url.clone(),
-                                albums_count: qobuz_artist.albums_count,
-                            },
-                        );
-                    }
-                }
-                validated.push(LocationCandidate {
-                    mbid: mbid.clone(),
-                    mb_name: mb_name.clone(),
-                    qobuz_id: Some(qobuz_artist.id as i64),
-                    qobuz_name: Some(qobuz_artist.name.clone()),
-                    qobuz_image: image_url,
-                    score: *score,
-                    genres: candidate_genres.clone(),
-                    qobuz_albums_count: qobuz_artist.albums_count,
-                });
             }
         }
 
@@ -3442,15 +3431,200 @@ impl<A: FrontendAdapter + Send + Sync + 'static> QbzCore<A> {
         // First page only, non-empty only — Tauri's rule. The stored rows are
         // already blacklist-aware; the post-filter on read catches anything
         // blocked afterwards, and `invalidate_scene_cache` covers un-blocking.
-        if offset == 0 && !response.artists.is_empty() {
+        if let (0, false, Some(cache_key)) =
+            (offset, response.artists.is_empty(), cache_key.as_deref())
+        {
             if let Ok(guard) = self.musicbrainz_cache.lock() {
                 if let Some(cache) = guard.as_ref() {
-                    let _ = cache.set_scene_cache(&cache_key, &response);
+                    let _ = cache.set_scene_cache(cache_key, &response);
                 }
             }
         }
 
         Ok(response)
+    }
+
+    /// Re-derive every cached scene row's Qobuz projection from the
+    /// identifier-keyed identity cache (cheap on a live row; a cheap Qobuz
+    /// re-search on an expired provisional one). Rows that no longer resolve
+    /// are dropped. Returns the number dropped.
+    async fn revalidate_scene_rows(
+        &self,
+        hit: &mut LocationDiscoveryResponse,
+        store: &CoreIdentityStore<'_>,
+        catalog: &SceneQobuz<'_, A>,
+        scope: Option<&str>,
+        blacklist: &(dyn Fn(u64) -> bool + Send + Sync),
+    ) -> Result<usize, SceneDiscoveryError> {
+        let before = hit.artists.len();
+        let mut kept: Vec<LocationCandidate> = Vec::with_capacity(before);
+        for mut row in std::mem::take(&mut hit.artists) {
+            match identity::resolve_scene_candidate(
+                Some(store),
+                self.musicbrainz.as_ref(),
+                catalog,
+                &row.mbid,
+                &row.mb_name,
+                scope,
+                blacklist,
+            )
+            .await
+            {
+                Ok(Some(m)) => {
+                    row.qobuz_id = Some(m.qobuz_id as i64);
+                    row.qobuz_name = Some(m.name);
+                    row.qobuz_image = m.image;
+                    row.qobuz_albums_count = m.albums_count;
+                    kept.push(row);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    if let Some(fatal) = catalog.take_fatal() {
+                        return Err(fatal);
+                    }
+                    // Transient: keep the cached projection for this row.
+                    log::warn!("[scene] revalidation of {:?} failed, keeping cached row: {e}", row.mb_name);
+                    kept.push(row);
+                }
+            }
+        }
+        let dropped = before.saturating_sub(kept.len());
+        hit.artists = kept;
+        Ok(dropped)
+    }
+}
+
+// ----- #768 identity boundaries ----------------------------------------------
+
+/// `identity::IdentityStore` over the core's optional SQLite cache. Every
+/// failure is logged and reads as a miss; without a cache the matcher simply
+/// runs uncached.
+struct CoreIdentityStore<'a>(&'a std::sync::Mutex<Option<MusicBrainzCache>>);
+
+impl CoreIdentityStore<'_> {
+    fn with<T>(
+        &self,
+        what: &str,
+        f: impl FnOnce(&MusicBrainzCache) -> Result<T, String>,
+    ) -> Option<T> {
+        let guard = self.0.lock().ok()?;
+        let cache = guard.as_ref()?;
+        match f(cache) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                log::warn!("[mb-identity] cache {what}: {e}");
+                None
+            }
+        }
+    }
+}
+
+impl identity::IdentityStore for CoreIdentityStore<'_> {
+    fn artist_query(&self, key: &str) -> Option<Vec<ArtistCandidate>> {
+        self.with("artist_query", |c| c.get_artist_query(key)).flatten()
+    }
+    fn put_artist_query(&self, key: &str, window: &[ArtistCandidate]) {
+        self.with("put_artist_query", |c| c.set_artist_query(key, window));
+    }
+    fn isrc_credits(&self, isrc: &str) -> Option<IsrcCredits> {
+        self.with("isrc_credits", |c| c.get_isrc_credits(isrc)).flatten()
+    }
+    fn put_isrc_credits(&self, credits: &IsrcCredits) {
+        self.with("put_isrc_credits", |c| c.set_isrc_credits(credits));
+    }
+    fn source_identity(&self, qobuz_artist_id: u64) -> Option<SourceIdentityRow> {
+        self.with("source_identity", |c| c.get_source_identity(qobuz_artist_id))
+            .flatten()
+    }
+    fn put_source_identity(&self, row: &SourceIdentityRow) {
+        self.with("put_source_identity", |c| c.set_source_identity(row));
+    }
+    fn scene_identity(&self, mbid: &str, scope: &str) -> Option<SceneIdentityRow> {
+        self.with("scene_identity", |c| c.get_scene_identity(mbid, scope))
+            .flatten()
+    }
+    fn put_scene_identity(&self, row: &SceneIdentityRow) {
+        self.with("put_scene_identity", |c| c.set_scene_identity(row));
+    }
+}
+
+/// `identity::SceneCatalog` over the core's Qobuz client. A Qobuz failure
+/// that will refuse every further call (auth/region, `scene_fatal_qobuz`)
+/// is parked in `fatal` so the validation loop can end the page instead of
+/// burning the remaining searches.
+struct SceneQobuz<'a, A: FrontendAdapter + Send + Sync + 'static> {
+    core: &'a QbzCore<A>,
+    fatal: std::sync::Mutex<Option<SceneDiscoveryError>>,
+}
+
+impl<A: FrontendAdapter + Send + Sync + 'static> SceneQobuz<'_, A> {
+    fn park(&self, e: &CoreError) -> FetchError {
+        if let Some(fatal) = scene_fatal_qobuz(e) {
+            if let Ok(mut slot) = self.fatal.lock() {
+                *slot = Some(fatal);
+            }
+        }
+        FetchError::Unavailable(e.to_string())
+    }
+
+    fn take_fatal(&self) -> Option<SceneDiscoveryError> {
+        self.fatal.lock().ok().and_then(|mut slot| slot.take())
+    }
+}
+
+impl<A: FrontendAdapter + Send + Sync + 'static> identity::SceneCatalog for SceneQobuz<'_, A> {
+    /// The bounded Qobuz search (five results, unchanged) filtered to exact
+    /// normalised names. The blacklist is applied by the matcher.
+    fn exact_name_candidates<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<SceneQobuzCandidate>, FetchError>> {
+        Box::pin(async move {
+            let results = self
+                .core
+                .search_artists(name, 5, 0, None)
+                .await
+                .map_err(|e| self.park(&e))?;
+            let norm = normalize_artist_name(name);
+            Ok(results
+                .items
+                .iter()
+                .filter(|a| normalize_artist_name(&a.name) == norm)
+                .map(|a| SceneQobuzCandidate {
+                    qobuz_id: a.id,
+                    name: a.name.clone(),
+                    image: a
+                        .image
+                        .as_ref()
+                        .and_then(|img| img.small.as_ref().or(img.thumbnail.as_ref()).cloned()),
+                    albums_count: a.albums_count,
+                })
+                .collect())
+        })
+    }
+
+    /// One `/artist/page` per AMBIGUOUS candidate, its own top-track ISRCs
+    /// only (guest appearances excluded), capped by the matcher.
+    fn candidate_isrcs<'a>(
+        &'a self,
+        qobuz_id: u64,
+        cap: usize,
+    ) -> BoxFuture<'a, Result<Vec<String>, FetchError>> {
+        Box::pin(async move {
+            let page = self
+                .core
+                .get_artist_page(qobuz_id, None)
+                .await
+                .map_err(|e| self.park(&e))?;
+            let tracks = page.top_tracks.unwrap_or_default();
+            Ok(identity::pick_source_isrcs(
+                qobuz_id,
+                tracks
+                    .iter()
+                    .map(|t| (t.isrc.as_deref(), t.artist.as_ref().map(|a| a.id))),
+                cap,
+            ))
+        })
     }
 }
 
@@ -3882,6 +4056,7 @@ mod tests {
             streamable: None,
             streamable_at: None,
             release_date_stream: None,
+            release_date_original: None,
         });
         t
     }

@@ -23,10 +23,9 @@
 use std::sync::{Arc, Mutex as StdMutex};
 
 use qbz_app::shell::AppRuntime;
-use qconnect_app::renderer::PLAYING_STATE_STOPPED;
 use qconnect_app::{
-    QconnectLifecycleState, QconnectRemoteSyncState, QueueCommandType, RendererBufferState,
-    RendererReport, RendererReportType, SessionLoopHost, JOIN_SESSION_REASON_RECONNECTION,
+    QconnectLifecycleState, QconnectRemoteSyncState, QueueCommandType, RendererReport,
+    RendererReportType, SessionLoopHost, JOIN_SESSION_REASON_RECONNECTION,
 };
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -373,7 +372,6 @@ pub async fn deferred_renderer_join(
     }
 
     let device_info = default_qconnect_device_info();
-    let queue_version_ref = app.queue_state_snapshot().await.version;
     if !authority.is_current(stamp) {
         return;
     }
@@ -386,21 +384,37 @@ pub async fn deferred_renderer_join(
     // RECONNECTION rejoins as active, so a network blip mid-render does not lose
     // the render.
     let join_as_active = join_reason == JOIN_SESSION_REASON_RECONNECTION;
+    let queue = app.queue_state_snapshot().await;
+    let renderer = app.renderer_state_snapshot().await;
+    if !authority.is_current(stamp) {
+        return;
+    }
+    let event = if join_as_active {
+        runtime.core().player().get_playback_event()
+    } else {
+        qbz_player::player::PlaybackEvent::default()
+    };
+    let snapshot = qconnect_app::playback_snapshot_from_event(
+        &event,
+        &queue,
+        renderer
+            .current_track
+            .as_ref()
+            .map(|item| item.queue_item_id),
+        renderer.next_track.as_ref().map(|item| item.queue_item_id),
+    );
+    let queue_version_ref = queue.version;
+    let initial_report = qconnect_app::build_renderer_playback_report(
+        Uuid::new_v4().to_string(),
+        queue.version,
+        snapshot,
+    );
     let renderer_join_payload = json!({
         "session_uuid": session_uuid,
         "device_info": serde_json::to_value(&device_info).unwrap_or_default(),
         "is_active": join_as_active,
         "reason": join_reason,
-        "initial_state": {
-            "playing_state": PLAYING_STATE_STOPPED,
-            "buffer_state": RendererBufferState::Ok.as_i32(),
-            "current_position": 0,
-            "duration": 0,
-            "queue_version": {
-                "major": queue_version_ref.major,
-                "minor": queue_version_ref.minor
-            }
-        }
+        "initial_state": initial_report.payload.clone()
     });
     let renderer_join_report = RendererReport::new(
         RendererReportType::RndrSrvrJoinSession,
@@ -419,57 +433,8 @@ pub async fn deferred_renderer_join(
         return;
     }
 
-    // 2. Initial StateUpdated report. At join time (e.g. reconnect mid-playback)
-    // we may already have a current track, so resolve the real duration + current/
-    // next queue_item_ids instead of hardcoding nulls.
-    let renderer = app.renderer_state_snapshot().await;
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let queue = app.queue_state_snapshot().await;
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let current_track_id = renderer.current_track.as_ref().map(|item| item.track_id);
-    let (current_qid, next_qid, _) = current_track_id
-        .map(|tid| {
-            qconnect_app::queue_resolution::resolve_queue_item_ids_from_queue_state(&queue, tid)
-        })
-        .unwrap_or((None, None, None));
-    let duration_ms = match current_track_id {
-        Some(track_id) => runtime
-            .core()
-            .get_track(track_id)
-            .await
-            .map(|track| qconnect_app::qconnect_millis_from_secs(u64::from(track.duration)))
-            .unwrap_or(0),
-        None => 0,
-    };
-    if !authority.is_current(stamp) {
-        return;
-    }
-    let mut state_report_payload = json!({
-        "playing_state": PLAYING_STATE_STOPPED,
-        "buffer_state": RendererBufferState::Ok.as_i32(),
-        "current_position": 0,
-        "duration": duration_ms,
-        "queue_version": {
-            "major": queue_version_ref.major,
-            "minor": queue_version_ref.minor
-        }
-    });
-    if let Some(qid) = current_qid {
-        state_report_payload["current_queue_item_id"] = json!(qid);
-    }
-    if let Some(qid) = next_qid {
-        state_report_payload["next_queue_item_id"] = json!(qid);
-    }
-    let state_report = RendererReport::new(
-        RendererReportType::RndrSrvrStateUpdated,
-        Uuid::new_v4().to_string(),
-        queue_version_ref,
-        state_report_payload,
-    );
+    // Publish the same observation as JoinSession; no fabricated stopped/OK edge.
+    let state_report = initial_report;
     if !authority.is_current(stamp) {
         return;
     }

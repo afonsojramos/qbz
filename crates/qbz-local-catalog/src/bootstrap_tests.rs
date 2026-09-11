@@ -334,6 +334,76 @@ fn corrupt_active_catalog_falls_back_without_promoting_a_building_file() {
 }
 
 #[test]
+fn remote_collection_art_fills_missing_covers_without_replacing_track_art() {
+    for source in ["jellyfin", "subsonic"] {
+        for (item_art, collection_art, expected) in [
+            (None, Some("album/tag"), "album/tag"),
+            (Some(""), Some("album/"), "album/"),
+            (Some("track/tag"), Some("album/tag"), "track/tag"),
+            (None, None, ""),
+        ] {
+            let temp = tempdir().unwrap();
+            let path = temp.path().join("remote_cache.db");
+            create_remote_fixture(&path);
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "ALTER TABLE remote_cache_tracks ADD COLUMN collection_artwork_token TEXT;
+                 ALTER TABLE remote_cache_tracks ADD COLUMN album_id TEXT;
+                 DELETE FROM remote_cache_tracks;",
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO remote_cache_tracks
+                 (id,source,item_id,server_id,title,artist,album_artist,album,
+                  duration_ms,artwork_token,collection_artwork_token,updated_at,album_id)
+                 VALUES (1,?1,'track','server','Track','Artist','Artist','Album',
+                         180000,?2,?3,1,'album-id')",
+                rusqlite::params![source, item_art, collection_art],
+            )
+            .unwrap();
+            drop(conn);
+            let original = fs::read(&path).unwrap();
+            bootstrap_legacy_caches(temp.path(), &AtomicBool::new(false)).unwrap();
+            let ActiveCatalog::Ready { catalog, .. } =
+                BootstrapLayout::new(temp.path()).open_active()
+            else {
+                panic!("remote fixture did not activate")
+            };
+            let albums = catalog
+                .query_albums(&QueryDescriptor::albums(), None, 10)
+                .unwrap();
+            assert_eq!(albums.rows.len(), 1);
+            assert_eq!(
+                albums.rows[0].artwork_token, expected,
+                "{source}: item={item_art:?}, collection={collection_art:?}"
+            );
+            if !expected.is_empty() {
+                assert_eq!(albums.rows[0].artwork_source, source);
+            }
+            let kind = if source == "jellyfin" {
+                SourceKind::Jellyfin
+            } else {
+                SourceKind::Subsonic
+            };
+            let row = catalog
+                .resolve(&TrackRef {
+                    source: kind,
+                    source_instance: "server".into(),
+                    native_id: "track".into(),
+                })
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.artwork_token.as_deref().unwrap_or_default(), expected);
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                original,
+                "source cache must stay unchanged"
+            );
+        }
+    }
+}
+
+#[test]
 fn legacy_fixture_bootstraps_all_sources_read_only_and_is_idempotent() {
     let temp = tempdir().unwrap();
     create_local_fixture(&temp.path().join("library.db"));

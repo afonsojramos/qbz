@@ -6824,3 +6824,232 @@ msgstr "ツリー"
 
 msgid "Forward"
 msgstr "進む"
+
+msgid "SACD images use sidecar metadata."
+msgstr "SACDイメージはサイドカーファイルにメタデータを保存します。"
+
+msgid "SACD track numbers cannot be changed."
+msgstr "SACDのトラック番号は変更できません。"
+
+msgid "Group: Year"
+msgstr "グループ: 年"
+
+msgid "Group: Decade"
+msgstr "グループ: 年代"
+
+msgid "Popularity"
+msgstr "人気順"
+
+#: library toolbar
+msgid "Purchases only"
+msgstr "購入済みのみ"
+
+#: library toolbar
+msgid "Following only"
+msgstr "フォロー中のみ"
+
+#: library toolbar
+msgid "Hi-Res only"
+msgstr "Hi-Resのみ"
+
+#: library toolbar
+msgid "Hide local albums from library"
+msgstr "ライブラリでローカルアルバムを非表示"
+
+#: library toolbar
+msgid "By you"
+msgstr "自分が作成"
+
+#: library toolbar
+msgid "By Qobuz"
+msgstr "Qobuzが作成"
+
+#: library toolbar
+msgid "By others"
+msgstr "他のユーザーが作成"
+
+#: library toolbar
+msgid "Search your tracks"
+msgstr "トラックを検索"
+
+#: library toolbar
+msgid "Search your releases"
+msgstr "リリースを検索"
+
+#: library toolbar
+msgid "Search your playlists"
+msgstr "プレイリストを検索"
+
+#: library toolbar
+msgid "Search your artists"
+msgstr "アーティストを検索"
+
+#: library toolbar
+msgid "Search your labels"
+msgstr "レーベルを検索"
+
+#: library toolbar
+msgid "Show only purchased items. Combines with the other enabled filters."
+msgstr "購入済みの項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only favorites. Combines with the other enabled filters."
+msgstr "お気に入りのみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only followed items. Combines with the other enabled filters."
+msgstr "フォロー中の項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Show only Hi-Res items. Combines with the other enabled filters."
+msgstr "Hi-Resの項目のみ表示します。他の有効なフィルターと組み合わせて適用します。"
+
+#: library toolbar
+msgid "Hide local albums here. They remain available in Local Library."
+msgstr "ここではローカルアルバムを非表示にします。ローカルライブラリでは引き続き利用できます。"
+
+msgid "Alphabetical"
+msgstr "アルファベット順"
+
+msgid "Date updated"
+msgstr "更新日"
+
+msgid "Track count"
+msgstr "曲数"
+
+#. Media server connection status
+msgid "Checking server…"
+msgstr "サーバーを確認中…"
+
+#. Media server connection status
+msgid "Signing in…"
+msgstr "サインイン中…"
+
+#. Media server connection status
+msgid "Checking library access…"
+msgstr "ライブラリへのアクセスを確認中…"
+
+#. Media server connection status
+msgid "Server reachable. Sign in to connect."
+msgstr "サーバーに到達できました。接続するにはサインインしてください。"
+
+#. Media server connection status
+msgid "Server reachable. Credentials have not been checked."
+msgstr "サーバーに到達できました。認証情報は未確認です。"
+
+#. Media server connection status
+msgid "Connected. Syncing library…"
+msgstr "接続済み。ライブラリを同期中…"
+
+#. Media server connection status
+msgid "Connected. Library is up to date."
+msgstr "接続済み。ライブラリは最新です。"
+
+#. Media server connection status
+msgid "Connected. The server is refreshing its library."
+msgstr "接続済み。サーバーがライブラリを更新中です。"
+
+#. Media server connection status
+msgid "Saved connection. Sync to check access."
+msgstr "接続情報は保存済みです。同期してアクセスを確認してください。"
+
+#. Media server connection status
+msgid "Connection timed out. Check the server address and try again."
+msgstr "接続がタイムアウトしました。サーバーのアドレスを確認して再試行してください。"
+
+#. Media server connection status
+msgid "Sign-in failed: {}"
+msgstr "サインインに失敗しました: {}"
+
+#. Media server connection status
+msgid "Signed in, but library access failed: {}"
+msgstr "サインインしましたが、ライブラリへのアクセスに失敗しました: {}"
+
+#. Media server connection status
+msgid "Library sync failed: {}"
+msgstr "ライブラリの同期に失敗しました: {}"
+
+msgid "Quick Connect"
+msgstr "Quick Connect"
+
+msgid "Requesting Quick Connect code…"
+msgstr "Quick Connect コードを取得中…"
+
+msgid "Waiting for authorization…"
+msgstr "認証を待っています…"
+
+msgid "Quick Connect is disabled on this server."
+msgstr "このサーバーでは Quick Connect が無効です。"
+
+msgid "Quick Connect expired. Request a new code."
+msgstr "Quick Connect の有効期限が切れました。新しいコードを取得してください。"
+
+msgid "Quick Connect failed: {}"
+msgstr "Quick Connect に失敗しました: {}"
+
+msgid "Enter this code in Settings > Quick Connect in a Jellyfin client that is already signed in. QBZ waits up to 5 minutes."
+msgstr "ログイン済みの Jellyfin クライアントで「設定 > Quick Connect」にこのコードを入力してください。QBZ は最大5分間待機します。"
+
+#: qbz-qt/qml/Main.qml
+msgid "Close QBZ?"
+msgstr "QBZを終了しますか？"
+
+#: qbz-qt/qml/Main.qml
+msgid "Yes"
+msgstr "はい"
+
+#: qbz-qt/qml/Main.qml
+msgid "No"
+msgstr "いいえ"
+
+#: qbz-qt/qml/Main.qml
+msgid "Don't show again"
+msgstr "今後表示しない"
+
+msgid "Quit"
+msgstr "終了"
+
+msgid "Close Window"
+msgstr "ウィンドウを閉じる"
+
+msgid "This can take a few minutes when MusicBrainz is busy."
+msgstr "MusicBrainzが混雑している場合、数分かかることがあります。"
+
+msgid "This is taking longer than usual — MusicBrainz may be busy. Try again in a moment."
+msgstr "通常より時間がかかっています。MusicBrainzが混雑している可能性があります。しばらくしてからもう一度お試しください。"
+
+msgid "Remove from Mixtape"
+msgstr "ミックステープから削除"
+
+msgid "Show collapsible My QBZ in sidebar"
+msgstr "サイドバーに折りたたみ式の My QBZ を表示"
+
+msgid "Show Mixtapes"
+msgstr "ミックステープを表示"
+
+msgid "Show Collections"
+msgstr "コレクションを表示"
+
+msgid "Hide standard My QBZ menu entry"
+msgstr "標準の My QBZ メニュー項目を非表示"
+
+msgid "No mixtapes yet."
+msgstr "ミックステープはまだありません。"
+
+msgid "No collections yet."
+msgstr "コレクションはまだありません。"
+
+msgid "Show in sidebar"
+msgstr "サイドバーに表示"
+
+msgid "New Mixtape"
+msgstr "新しいミックステープ"
+
+msgid "New Collection"
+msgstr "新しいコレクション"
+
+msgid "Name (Z-A)"
+msgstr "名前（Z-A）"
+
+msgid "Search My QBZ"
+msgstr "My QBZ を検索"

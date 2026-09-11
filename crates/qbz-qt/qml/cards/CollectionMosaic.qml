@@ -71,6 +71,7 @@ import "../theme"
 
 Item {
     id: root
+    property bool gridArtwork: false
 
     /// 0..9 remote cover URLs, INDEX-SIGNIFICANT (Slint's url1..url9).
     property var urls: []
@@ -175,6 +176,7 @@ Item {
     Component {
         id: customCover
         RoundedImage {
+            gridArtwork: root.gridArtwork
             source: root.customCoverPath
             radius: root.radius
             fit: "crop"
@@ -298,6 +300,7 @@ Item {
             // custom cover or the kind glyph — an idle tile is still an Item.
             model: root.collage ? root.cellCount : 0
             delegate: RoundedImage {
+                gridArtwork: root.gridArtwork
                 required property int index
                 readonly property rect cell: root.cellOf(index)
                 x: cell.x

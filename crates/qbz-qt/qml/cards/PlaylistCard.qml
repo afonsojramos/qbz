@@ -57,6 +57,10 @@ import "../theme"
 
 Rectangle {
     id: root
+    readonly property bool artworkReady: root.artSource !== "" && artworkLoader.item
+        ? artworkLoader.item.ready : false
+    readonly property bool artworkImmediate: root.artSource !== "" && artworkLoader.item
+        ? artworkLoader.item.immediateGridArtwork : false
 
     property var item: ({})
     // Host-resolved artwork path (the AlbumCard artSource pattern).
@@ -194,12 +198,14 @@ Rectangle {
             // those surfaces pad too, and a genuinely square cover
             // (`image.covers[0]`, the fallback that map picks) still crops.
             Loader {
+                id: artworkLoader
                 anchors.fill: parent
                 sourceComponent: root.artSource !== "" ? singleArtwork : collageArtwork
             }
             Component {
                 id: singleArtwork
                 RoundedImage {
+                    gridArtwork: true
                     source: root.artSource
                     radius: theme.radiusSm
                     fit: root.ownImage ? "pad" : "auto"
@@ -211,6 +217,7 @@ Rectangle {
             Component {
                 id: collageArtwork
                 PlaylistCollage {
+                    gridArtwork: true
                     urls: root.ownImage ? [] : root.collageUrls
                     radius: theme.radiusSm
                 }

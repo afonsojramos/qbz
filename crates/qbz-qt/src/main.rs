@@ -39,6 +39,7 @@ mod home_bridge;
 mod player_bridge;
 mod queue_bridge;
 mod session_bridge;
+mod panel_resize;
 mod shell_bridge;
 mod viz_bridge;
 // Immersive mode (2026-08-02 immersive-port contract, block B1): the
@@ -152,6 +153,7 @@ mod source_wiring;
 // Jellyfin / Subsonic: the per-user settings store plus the two gates the
 // Local Library union reads. The credential glue itself is in `source_wiring`.
 mod media_servers_qt;
+mod media_connection_qt;
 // Profile-scoped metadata overlays for Plex/Jellyfin/Subsonic. Physical files
 // keep using `.qbz.json`; this module is the read-through cache for servers
 // that have no local directory to put that document beside.
@@ -630,6 +632,14 @@ fn restore_session_once() {
         now_playing::mark_restored_idle();
         playback_qt::publish_queue(&runtime).await;
         let resume = qbz_app::session_persist::pending_resume_position();
+        // #683: `refresh_now_playing` publishes the OPTIMISTIC MPRIS `Playing`
+        // at 0 (a stream is normally about to open, and the poll loop's
+        // play/pause edge corrects it). Nothing opens here — the restored
+        // session is parked — so without this `playerctl status` answered
+        // "Playing" from boot until the first real play, and the sleep
+        // inhibitor was armed for a paused app. Paused, at the resume
+        // position, is the truth.
+        media_controls_qt::push_playback_state(false, resume);
         log::info!("[qbz-qt] session restored (resume position {resume}s)");
     });
 }
@@ -1308,6 +1318,13 @@ pub(crate) fn publish_sidebar() {
             .set_sidebar_sort_by(QString::from(sort_by.as_str()));
         b.as_mut().set_sidebar_sort_asc(sort_asc);
     });
+    // The collapsible My QBZ tree rides the SAME funnel: `load_sidebar_once()`
+    // publishes the sidebar once per session (the reliable startup point, after
+    // the QML singletons exist), and every sidebar mutation republishes here.
+    // Gated by the opt-in inside, so a flat-sidebar profile pays nothing.
+    // `myqbz_qt::reload_grids` still republishes it on mixtape/collection
+    // mutations, which the playlist path here does not see.
+    crate::myqbz_qt::publish_sidebar_tree();
 }
 
 pub(crate) fn sidebar_set_sort(option: &str) {
@@ -1377,14 +1394,7 @@ pub(crate) fn sidebar_artwork_window(urls_json: String) {
         return;
     }
     spawn(async move {
-        let urls = missing;
-        artwork_qt::download_missing(urls.clone()).await;
-        for url in urls {
-            let path = artwork_qt::cached_path(&url);
-            if !path.is_empty() {
-                emit_library_artwork(url, path);
-            }
-        }
+        artwork_qt::download_missing_progressive(missing, emit_library_artwork).await;
     });
 }
 
@@ -1483,7 +1493,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
         )
         .await
         {
-            Ok((cards, has_more)) => {
+            Ok(Some((cards, has_more, request))) => {
                 // The user may have opened ANOTHER artist while this page was
                 // in flight. `merge_release_page` already dropped the stash
                 // merge in that case (its id guard), but the signal carries no
@@ -1492,7 +1502,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 // page onto the new artist's same-named bucket. Same test the
                 // merge used (artist_qt::stash_is_for), applied to the second
                 // leg of the same delivery.
-                if !artist_qt::stash_is_for(&artist_id) {
+                if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) {
                     log::info!(
                         "[qbz-qt] dropping stale release page ({release_type}): artist changed"
                     );
@@ -1500,6 +1510,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 }
                 let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
                 artist_bridge::ui(move |mut b| {
+                    if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) { return; }
                     b.as_mut().release_section_ready(
                         QString::from(release_type.as_str()),
                         QString::from(json.as_str()),
@@ -1507,6 +1518,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                     );
                 });
             }
+            Ok(None) => {},
             Err(e) => log::warn!("[qbz-qt] release page load failed: {e}"),
         }
     });
@@ -2531,6 +2543,11 @@ pub(crate) fn play_album(album_id: String) {
     });
 }
 
+pub(crate) fn transport_set_playing(playing: bool) {
+    let runtime = app();
+    spawn(async move { playback_qt::request_playing(&runtime, Some(playing)).await });
+}
+
 pub(crate) fn transport_toggle_play() {
     let runtime = app();
     spawn(async move { playback_qt::toggle_play(&runtime).await });
@@ -3155,14 +3172,19 @@ pub(crate) fn library_artwork_window_at_px(keys_json: String, pixels: Option<i32
         return;
     }
     spawn(async move {
-        let urls: Vec<String> = missing.iter().map(|(_, u)| u.clone()).collect();
-        artwork_qt::download_missing(urls).await;
+        let urls = missing.iter().map(|(_, url)| url.clone()).collect();
+        let mut keys_by_url = std::collections::HashMap::<String, Vec<String>>::new();
         for (key, url) in missing {
-            let path = artwork_qt::cached_path(&url);
-            if !path.is_empty() {
-                emit_library_artwork(key, path);
-            }
+            keys_by_url.entry(url).or_default().push(key);
         }
+        artwork_qt::download_missing_progressive(urls, move |url, path| {
+            if let Some(keys) = keys_by_url.get(&url) {
+                for key in keys {
+                    emit_library_artwork(key.clone(), path.clone());
+                }
+            }
+        })
+        .await;
     });
 }
 
@@ -3642,30 +3664,6 @@ fn apply_renderer_preference() {
     }
 }
 
-/// Enable Qt 6's native accumulated mouse-wheel flicks.
-///
-/// Qt 6.11 ships `wheelDeceleration = 15000`, exactly one unit above its
-/// `_q_MaximumWheelDeceleration = 14999` switch. That selects proportional
-/// scrolling: every notch travels the same distance and a rapid wheel spin
-/// cannot build velocity. A value below the switch enables the already-built
-/// Flickable wheel timeline. 1500 matches this platform's ordinary touch-flick
-/// deceleration, so one isolated notch keeps Qt's 72px distance while a rapid
-/// burst earns a bounded kinetic tail.
-///
-/// This is read when each QQuickFlickable is constructed, hence before the
-/// QGuiApplication/QML engine. Respect an explicit environment value for
-/// diagnostics and owner tuning; no hidden QBZ setting existed in the Slint or
-/// retired web frontend to migrate.
-fn apply_scroll_physics() {
-    const QT_WHEEL_DECELERATION: &str = "QT_QUICK_FLICKABLE_WHEEL_DECELERATION";
-    if std::env::var_os(QT_WHEEL_DECELERATION).is_none() {
-        std::env::set_var(QT_WHEEL_DECELERATION, "1500");
-        log::info!("[qbz-qt] native kinetic wheel enabled (deceleration=1500)");
-    } else {
-        log::info!("[qbz-qt] explicit {QT_WHEEL_DECELERATION} preserved");
-    }
-}
-
 /// Cap glibc's malloc arenas before the first thread exists. Every thread
 /// that first touches malloc gets its own 64 MB arena, and with ~50 threads
 /// (tokio workers, Qt, PipeWire, zbus) the process held 82 of them: measured
@@ -3771,8 +3769,34 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
         });
 }
 
+/// Is THIS process one of the internal, disposable child processes that
+/// re-enter `main` (presentation preflight, GPU preflight)?
+///
+/// Read before the logger is installed, from env markers only, so a child
+/// never opens the on-disk log: `qbz_log::install` rotates `qbz.log` to
+/// `qbz.log.prev` and starts an empty one, which mid-run renames the LIVE log
+/// away from the parent. That is #749's second finding — the reporter's
+/// `qbz.log` held two lines on every run (the child's own first two, since it
+/// inherits the QT_SCALE_FACTOR the parent just set) while the parent's whole
+/// log sat unread in `qbz.log.prev`.
+fn is_internal_child_process() -> bool {
+    #[cfg(target_os = "linux")]
+    if renderer_qt::auto_preflight::child_requested() {
+        return true;
+    }
+    renderer_qt::gpu_preflight_child_requested()
+}
+
 fn main() {
-    qbz_log::install("info");
+    if is_internal_child_process() {
+        qbz_log::install_without_file_sink("info");
+    } else {
+        qbz_log::install("info");
+    }
+    // Immediately after the logger, so every later frame is covered — the Qt
+    // and QML construction window included. See qbz-log/src/fatal.rs for the
+    // intermittent packaged-AppDir SIGSEGV this exists to name.
+    qbz_log::install_fatal_signal_reporter();
     // Declared first so normal/early returns flush after all later destructors,
     // including the final summary of a consecutive logging burst.
     struct FlushLogsOnExit;
@@ -3943,7 +3967,6 @@ fn main() {
     // before the first QQuickWindow/QRhi is constructed.
     #[cfg(not(target_os = "linux"))]
     apply_renderer_preference();
-    apply_scroll_physics();
 
     // FONT ENGINE (Windows). Qt's default rasteriser on Windows renders the
     // lyric text thin and jagged - the owner's words were "como fuente de
@@ -4001,6 +4024,18 @@ fn main() {
     cxx_qt_lib::QQuickStyle::set_style(&QString::from("Basic"));
 
     let mut app = QGuiApplication::new();
+    // The Wayland `app_id` (and the D-Bus notification `desktop-entry` hint)
+    // comes from this, and with nothing set Qt sends the binary's name, `qbz`.
+    // GNOME Shell matches a live window to its launcher by that id against the
+    // installed `com.blitzfc.qbz.desktop`, so the dock painted the generic
+    // icon (and the notification badge attached to nothing) while the app
+    // grid, which reads the .desktop directly, showed the right one.
+    // `StartupWMClass` covers X11 only. Verified on an Ubuntu GNOME/Wayland VM
+    // 2026-09-11: a `qbz.desktop` symlink made the dock icon appear; this is
+    // the real fix. Every Linux package installs the entry under this id
+    // (deb/rpm, AUR, Flatpak, Snap).
+    #[cfg(target_os = "linux")]
+    QGuiApplication::set_desktop_file_name(&QString::from("com.blitzfc.qbz"));
     renderer_qt::apply_gpu_preference();
 
     // W25. Windows asks WM_QUERYENDSESSION before it decides to log off or

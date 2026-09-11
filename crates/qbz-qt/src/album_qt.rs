@@ -136,6 +136,10 @@ pub struct AlbumCardData {
     pub artist_id: String,
     pub genre: String,
     pub year: String,
+    #[serde(default, rename = "releaseSortKey")]
+    pub release_sort_key: u32,
+    #[serde(default, rename = "defaultOrder")]
+    pub default_order: u32,
     #[serde(rename = "qualityTier")]
     pub quality_tier: String,
     #[serde(rename = "qualityDetail")]
@@ -1082,7 +1086,7 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
         // Heart from the favourite-id cache (see `AlbumCardData::is_favorite`).
         is_favorite: crate::fav_cache_qt::is_album_favorite(&release.id),
         id: release.id.clone(),
-        title: release.title.clone(),
+        title: format_album_title(&release.title, release.version.as_deref()),
         artist,
         artist_id,
         genre: release
@@ -1094,6 +1098,10 @@ fn map_release_card(release: &qbz_models::PageArtistRelease) -> AlbumCardData {
         // slot is display text, not a sort key (the numeric-year sites in
         // this file and in myqbz_builder_fetch keep their `i32` on purpose).
         year: qbz_text_utils::dates::release_label(
+            release.dates.as_ref().and_then(|d| d.original.as_deref()),
+        ),
+        default_order: 0,
+        release_sort_key: qbz_text_utils::dates::release_sort_key(
             release.dates.as_ref().and_then(|d| d.original.as_deref()),
         ),
         quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
@@ -1154,6 +1162,8 @@ fn reco_to_card(r: qbz_external_reco::AlbumReco) -> AlbumCardData {
         artist: r.artist,
         artist_id: r.artist_id,
         genre: r.genre,
+        default_order: 0,
+        release_sort_key: qbz_text_utils::dates::release_sort_key(Some(&r.year)),
         year: r.year,
         quality_tier: r.quality_tier,
         quality_detail: r.quality_label,
@@ -1203,11 +1213,13 @@ pub async fn load_suggestions(
                 is_pinned: crate::sidebar_qt::is_pinned("album", &a.id),
                 is_favorite: crate::fav_cache_qt::is_album_favorite(&a.id),
                 id: a.id.clone(),
-                title: a.title.clone(),
+                title: format_album_title(&a.title, a.version.as_deref()),
                 artist,
                 artist_id: card_artist_id,
                 genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
                 year: qbz_text_utils::dates::release_label(date.as_deref()),
+                default_order: 0,
+                release_sort_key: qbz_text_utils::dates::release_sort_key(date.as_deref()),
                 quality_tier: home_qt::quality_tier_from_depth(bit_depth).to_string(),
                 quality_detail: home_qt::quality_detail_from_parts(bit_depth, sample_rate),
                 art_url: crate::cover_artwork_qt::prefer_album_cover(
