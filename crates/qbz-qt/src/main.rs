@@ -4024,6 +4024,18 @@ fn main() {
     cxx_qt_lib::QQuickStyle::set_style(&QString::from("Basic"));
 
     let mut app = QGuiApplication::new();
+    // The Wayland `app_id` (and the D-Bus notification `desktop-entry` hint)
+    // comes from this, and with nothing set Qt sends the binary's name, `qbz`.
+    // GNOME Shell matches a live window to its launcher by that id against the
+    // installed `com.blitzfc.qbz.desktop`, so the dock painted the generic
+    // icon (and the notification badge attached to nothing) while the app
+    // grid, which reads the .desktop directly, showed the right one.
+    // `StartupWMClass` covers X11 only. Verified on an Ubuntu GNOME/Wayland VM
+    // 2026-09-11: a `qbz.desktop` symlink made the dock icon appear; this is
+    // the real fix. Every Linux package installs the entry under this id
+    // (deb/rpm, AUR, Flatpak, Snap).
+    #[cfg(target_os = "linux")]
+    QGuiApplication::set_desktop_file_name(&QString::from("com.blitzfc.qbz"));
     renderer_qt::apply_gpu_preference();
 
     // W25. Windows asks WM_QUERYENDSESSION before it decides to log off or
