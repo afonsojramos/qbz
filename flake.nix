@@ -20,7 +20,7 @@
       # (github #744: `Could not find qmltyperegistrar`, which needs Qt host
       # tools from several outputs on PATH at build time).
       # ──────────────────────────────────────────────
-      qbzVersion = "2.1.0";
+      qbzVersion = "2.1.1";
 
       # Bare-binary release tarballs, per arch. Layout inside each:
       #   qbz_<ver>_<arch>/{qbz, qbzd, LICENSE, licenses/, qbz.desktop, icons/}
@@ -28,11 +28,11 @@
       assets = {
         "x86_64-linux" = {
           name = "qbz_${qbzVersion}_amd64.tar.gz";
-          hash = "sha256-OZJZJpPDZXWn3xhgIvgPoGVncccpNXHzmpKtpSn9Ijs=";
+          hash = "sha256-A8/eHVTTleSlPGgHBW2Qn9CWb95clgf5tifEXwKYvLg=";
         };
         "aarch64-linux" = {
           name = "qbz_${qbzVersion}_aarch64.tar.gz";
-          hash = "sha256-NaieUhPSmOO4fMloSYVwJG6vbL5IzPo5+12XdTcqqF8=";
+          hash = "sha256-LbC9KPQOqZ2sDWNoErQiK+jlEr5cNlsgf1Qu3cpFU4w=";
         };
       };
     in
