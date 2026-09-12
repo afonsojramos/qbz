@@ -75,6 +75,9 @@ cargo test \
   --no-fail-fast \
   "$@"
 
+say "gate: one-line installer (isolated fixture homes)"
+python3 scripts/test-installer.py
+
 say "gate: signed updater regression suite present"
 n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-updater --lib -- --list 2>/dev/null | grep -c ': test$' || true)
 (( n >= 11 )) || { echo "Updater suite has $n tests (expected >= 11)"; exit 1; }

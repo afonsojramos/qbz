@@ -11,10 +11,16 @@ use std::{
 const PUBLIC_KEY: &str = "RWSGlbvrbc5/P3/4zoXZfBd+pee5Kw7h5/gUIE7B9GiL47dvUSNpNGLm";
 const MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
 
+pub enum InstallOutcome {
+    Installed(PathBuf),
+    Prepared(PathBuf),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Installation {
     AppImage(PathBuf),
     MacBundle(PathBuf),
+    WindowsMsi(PathBuf),
     Flatpak,
     Snap,
     Nix,
@@ -29,6 +35,10 @@ impl Installation {
             return Self::Snap;
         }
         let exe = std::env::current_exe().unwrap_or_default();
+        #[cfg(windows)]
+        if crate::windows::is_msi_install(&exe) {
+            return Self::WindowsMsi(exe);
+        }
         if exe.starts_with("/nix/store") {
             return Self::Nix;
         }
@@ -60,6 +70,7 @@ impl Installation {
         match self {
             Self::AppImage(_) => "AppImage",
             Self::MacBundle(_) => "macOS",
+            Self::WindowsMsi(_) => "Windows MSI",
             Self::Flatpak => "Flatpak",
             Self::Snap => "Snap",
             Self::Nix => "Nix",
@@ -73,13 +84,14 @@ impl Installation {
         let os = match self {
             Self::AppImage(_) => "linux",
             Self::MacBundle(_) => "darwin",
+            Self::WindowsMsi(_) if std::env::consts::ARCH == "x86_64" => "windows",
             _ => return None,
         };
         Some(format!("{os}-{}", std::env::consts::ARCH))
     }
     fn destination(&self) -> Result<&Path> {
         match self {
-            Self::AppImage(p) | Self::MacBundle(p) => Ok(p),
+            Self::AppImage(p) | Self::MacBundle(p) | Self::WindowsMsi(p) => Ok(p),
             _ => Err("This installation is managed outside QBZ".into()),
         }
     }
@@ -162,7 +174,7 @@ pub async fn install(
     asset: Asset,
     cancel: &AtomicBool,
     progress: impl Fn(&str, u64, Option<u64>) + Send + Sync,
-) -> Result<PathBuf> {
+) -> Result<InstallOutcome> {
     let destination = installation.destination()?.to_path_buf();
     let parent = destination
         .parent()
@@ -249,7 +261,11 @@ pub async fn install(
                 "The installation changed while downloading; check for updates again".into(),
             );
         }
-        apply(&installation, stage, &payload)
+        #[cfg(windows)]
+        if let Installation::WindowsMsi(exe) = &installation {
+            return crate::windows::stage_msi(exe, stage, &payload).map(InstallOutcome::Prepared);
+        }
+        apply(&installation, stage, &payload).map(InstallOutcome::Installed)
     })
     .await
     .map_err(|e| e.to_string())?

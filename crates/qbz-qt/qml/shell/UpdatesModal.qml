@@ -24,7 +24,9 @@ FocusScope {
         case "downloading": return QbzSession.tr("Downloading update...", QbzSession.trRev)
         case "verifying": return QbzSession.tr("Verifying update signature...", QbzSession.trRev)
         case "installing": return QbzSession.tr("Installing update...", QbzSession.trRev)
+        case "updating": return QbzSession.tr("Installing update...", QbzSession.trRev)
         case "installed": return QbzSession.tr("Update installed. Close and reopen QBZ to use the new version.", QbzSession.trRev)
+        case "prepared": return QbzSession.tr("Update ready. Close QBZ to finish installation. It will reopen automatically.", QbzSession.trRev)
         case "cancelled": return QbzSession.tr("Update cancelled.", QbzSession.trRev)
         case "error": return QbzSession.tr("The update could not be completed. Please try again.", QbzSession.trRev)
         default: return ""
@@ -98,6 +100,13 @@ FocusScope {
                 }
                 Text {
                     width: parent.width
+                    visible: root.doc.phase === "updating"
+                    text: (root.doc.percent || 0) + "%"
+                    font.pixelSize: theme.fontBody
+                    color: theme.textSecondary
+                }
+                Text {
+                    width: parent.width
                     visible: root.doc.phase === "error"
                     text: root.doc.error || ""
                     textFormat: Text.PlainText
@@ -131,8 +140,9 @@ FocusScope {
                         kioskHost: root.kioskHost
                         minWidth: 0
                         btnHeight: 36
-                        visible: root.doc.phase === "downloading" || root.doc.phase === "verifying"
-                        text: QbzSession.tr("Cancel download", QbzSession.trRev)
+                        visible: root.doc.phase === "downloading" || root.doc.phase === "verifying" || root.doc.phase === "updating"
+                        objectName: "updateCancelButton"
+                        text: root.doc.phase === "updating" ? QbzSession.tr("Cancel", QbzSession.trRev) : QbzSession.tr("Cancel download", QbzSession.trRev)
                         onClicked: QbzAbout.updatesCancel()
                     }
                     SettingsButton {

@@ -7251,3 +7251,7 @@ msgstr "Estás usando la versión más reciente de QBZ."
 #: qbz-qt updates
 msgid "System / manual"
 msgstr "Sistema / manual"
+
+#: qbz-qt/qml/shell/UpdatesModal.qml
+msgid "Update ready. Close QBZ to finish installation. It will reopen automatically."
+msgstr "Actualización lista. Cierra QBZ para terminar la instalación. Se abrirá de nuevo automáticamente."

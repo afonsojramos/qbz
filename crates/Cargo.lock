@@ -4606,15 +4606,19 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "flate2",
+ "futures-util",
  "minisign-verify",
  "reqwest",
  "rusqlite",
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tar",
  "tempfile",
  "tokio",
+ "windows-sys 0.61.2",
+ "zbus 5.19.0",
 ]
 
 [[package]]

@@ -126,6 +126,32 @@ another module, and it didn't go well.
 
 ## Installation
 
+### One-line installer (Linux and macOS, from 2.1.2)
+
+```bash
+curl -fsSL https://qbz.lol/install.sh | bash
+```
+
+Installs the official AppImage on Linux or the upstream `.app` in
+`~/Applications` on macOS, for the current user. It detects Intel/AMD or ARM64,
+verifies the package SHA-256 against GitHub's release metadata, and preserves
+existing installations from other sources. Future updates use **Settings →
+Updates** in QBZ. Linux needs curl and Python 3 or jq; the launcher works without
+FUSE. The existing glibc requirements still apply. The macOS package uses the
+upstream ad-hoc signature; the notarized community channel remains available below.
+
+To inspect the script before running it, or remove this installation while
+keeping personal data:
+
+```bash
+curl -fsSL https://qbz.lol/install.sh -o qbz-install.sh
+less qbz-install.sh
+bash qbz-install.sh --check
+bash qbz-install.sh
+# Close QBZ before uninstalling:
+bash qbz-install.sh --uninstall
+```
+
 ### Arch Linux (AUR)
 
 Install the prebuilt packages (recommended):
@@ -336,15 +362,20 @@ subscription, Gatekeeper blocks its first run. On recent macOS versions
 ### Updates
 
 Use **Check for updates now** in the app menu or **Settings → Updates**.
-Launch checks are optional, preserve existing preferences, and notify only
-after a stable release is at least 12 hours old. Manual checks find new stable
+Launch checks are optional and preserve existing preferences. GitHub release
+notifications wait until a stable release is at least 12 hours old. Manual checks find new stable
 releases immediately and report network errors separately from “up to date”.
 
 AppImage and upstream macOS `.app` installations can download and install
 signed updates from QBZ. Close and reopen the app after installation. macOS
 builds signed by another distributor, including the notarized community
-builds, keep their original update channel. For Flatpak, Snap, APT/RPM, AUR,
-Gentoo, Nix, Homebrew, Windows and manual installs, update through the original
+builds, keep their original update channel. The one-line installer uses these
+same update paths. Flatpak checks and updates its own installed ref through the
+Flatpak portal, including progress, cancellation and already-deployed updates
+that only need a restart. Permission changes require the system software manager.
+Windows MSI installations stage a signed MSI and run Windows Installer after
+QBZ closes, then reopen the app. The installer never requests a machine restart.
+For Snap, APT/RPM, AUR, Gentoo, Nix, Homebrew and other manual installs, update through the original
 installation source; its package may arrive after the GitHub release.
 
 ## Features

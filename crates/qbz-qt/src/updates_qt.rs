@@ -1,10 +1,10 @@
 //! Local application updates. Orbit's selected host never owns this state.
 use cxx_qt_lib::QString;
-use qbz_updater::{install::Installation, store::Store, Asset, Release};
+use qbz_updater::{Asset, Release, install::Installation, store::Store};
 use serde::Serialize;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     LazyLock, Mutex,
+    atomic::{AtomicBool, Ordering},
 };
 
 static STARTED: AtomicBool = AtomicBool::new(false);
@@ -26,6 +26,12 @@ struct State {
     downloaded: u64,
     total: Option<u64>,
     error: String,
+    percent: Option<u32>,
+    #[serde(skip)]
+    reminder_key: String,
+    #[cfg(target_os = "linux")]
+    #[serde(skip)]
+    flatpak: Option<std::sync::Arc<qbz_updater::flatpak::Monitor>>,
     #[serde(skip)]
     manual: bool,
     #[serde(skip)]
@@ -48,6 +54,10 @@ impl Default for State {
             downloaded: 0,
             total: None,
             error: String::new(),
+            percent: None,
+            reminder_key: String::new(),
+            #[cfg(target_os = "linux")]
+            flatpak: None,
             manual: false,
             release: None,
             asset: None,
@@ -117,7 +127,7 @@ fn begin_check(manual: bool) {
             s.open = true;
             s.manual = true;
         }
-        if !s.busy && s.phase != "installed" {
+        if !s.busy && s.phase != "installed" && s.phase != "prepared" {
             s.busy = true;
             s.phase = "checking".into();
             s.error.clear();
@@ -126,6 +136,12 @@ fn begin_check(manual: bool) {
             s.release = None;
             s.can_install = false;
             s.version.clear();
+            s.reminder_key.clear();
+            s.percent = None;
+            #[cfg(target_os = "linux")]
+            {
+                s.flatpak = None;
+            }
             start = true;
         }
     });
@@ -133,6 +149,11 @@ fn begin_check(manual: bool) {
         return;
     }
     crate::spawn(async {
+        #[cfg(target_os = "linux")]
+        if Installation::detect() == Installation::Flatpak {
+            check_flatpak().await;
+            return;
+        }
         // Fetch without suppression first: a manual request can join a launch
         // request while it is in flight and must still see the actual latest.
         match qbz_updater::check(crate::about_qt::app_version(), false).await {
@@ -170,6 +191,7 @@ fn begin_check(manual: bool) {
                     s.busy = false;
                     s.phase = "available".into();
                     s.version = version;
+                    s.reminder_key = s.version.clone();
                     s.release_url = release.page();
                     s.release = Some(release);
                     s.can_install = asset.is_some();
@@ -197,7 +219,7 @@ pub fn ignore() {
     let version = STATE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .version
+        .reminder_key
         .clone();
     if version.is_empty() {
         return;
@@ -214,8 +236,21 @@ pub fn cancel() {
 }
 pub fn install() {
     let mut asset = None;
+    #[cfg(target_os = "linux")]
+    let mut flatpak = None;
     update(|s| {
         if !s.busy && s.can_install && s.phase != "installed" {
+            #[cfg(target_os = "linux")]
+            if let Some(monitor) = &s.flatpak {
+                flatpak = Some(monitor.clone());
+                s.busy = true;
+                s.open = true;
+                s.phase = "updating".into();
+                s.error.clear();
+                s.percent = Some(0);
+                CANCEL.store(false, Ordering::Relaxed);
+                return;
+            }
             asset = s.asset.clone();
             if asset.is_some() {
                 s.busy = true;
@@ -228,6 +263,30 @@ pub fn install() {
             }
         }
     });
+    #[cfg(target_os = "linux")]
+    if let Some(monitor) = flatpak {
+        crate::spawn(async move {
+            let result = monitor
+                .install(&CANCEL, |percent| update(|s| s.percent = Some(percent)))
+                .await;
+            update(|s| {
+                s.flatpak = None;
+                s.can_install = false;
+            });
+            match result {
+                Ok(()) => update(|s| {
+                    s.phase = "installed".into();
+                    s.busy = false;
+                }),
+                Err(_) if CANCEL.load(Ordering::Relaxed) => update(|s| {
+                    s.phase = "cancelled".into();
+                    s.busy = false;
+                }),
+                Err(error) => failed(error),
+            }
+        });
+        return;
+    }
     let Some(asset) = asset else { return };
     crate::spawn(async move {
         let result = qbz_updater::install::install(
@@ -244,10 +303,17 @@ pub fn install() {
         )
         .await;
         match result {
-            Ok(backup) => {
-                log::info!("[updates] installed; rollback copy: {}", backup.display());
+            Ok(outcome) => {
+                let (staged, backup) = match outcome {
+                    qbz_updater::install::InstallOutcome::Installed(path) => (false, path),
+                    qbz_updater::install::InstallOutcome::Prepared(path) => (true, path),
+                };
+                log::info!(
+                    "[updates] completed staging/install; recovery or installer files: {}",
+                    backup.display()
+                );
                 update(|s| {
-                    s.phase = "installed".into();
+                    s.phase = if staged { "prepared" } else { "installed" }.into();
                     s.busy = false;
                     s.can_install = false;
                 });
@@ -259,4 +325,35 @@ pub fn install() {
             Err(error) => failed(error),
         }
     });
+}
+
+#[cfg(target_os = "linux")]
+async fn check_flatpak() {
+    use qbz_updater::flatpak::{Availability, Monitor};
+    match Monitor::check().await {
+        Err(error) => failed(error),
+        Ok(monitor) => {
+            let key = monitor.info.reminder_key();
+            let suppression_key = key.clone();
+            let suppressed =
+                tokio::task::spawn_blocking(move || store()?.suppressed(&suppression_key)).await;
+            let suppressed = !matches!(suppressed, Ok(Ok(false)));
+            update(|s| {
+                s.busy = false;
+                s.reminder_key = key;
+                match monitor.info.availability() {
+                    Availability::Current => s.phase = "current".into(),
+                    Availability::Restart => s.phase = "installed".into(),
+                    Availability::Available => {
+                        s.phase = "available".into();
+                        s.can_install = true;
+                        s.flatpak = Some(std::sync::Arc::new(monitor));
+                        if !s.manual && s.check_on_launch && !suppressed {
+                            s.open = true;
+                        }
+                    }
+                }
+            });
+        }
+    }
 }

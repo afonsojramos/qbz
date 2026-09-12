@@ -1,7 +1,11 @@
 //! Release checks and signed updates, independent of the desktop and audio.
 //! Package-manager installations only check: their manager owns installation.
+#[cfg(target_os = "linux")]
+pub mod flatpak;
 pub mod install;
 pub mod store;
+#[cfg(windows)]
+mod windows;
 
 use chrono::{DateTime, Utc};
 use semver::Version;
@@ -126,6 +130,7 @@ pub fn select_asset(bytes: &[u8], release: &Release, platform: &str) -> Result<A
         "linux-aarch64" => format!("QBZ_{}_aarch64.AppImage", release.version()?),
         "darwin-x86_64" => "QBZ_x64.app.tar.gz".into(),
         "darwin-aarch64" => "QBZ_aarch64.app.tar.gz".into(),
+        "windows-x86_64" => format!("QBZ_{}_x64.msi", release.version()?),
         _ => return Err("No signed update for this platform".into()),
     };
     if name != expected || asset.signature.is_empty() {
@@ -236,5 +241,13 @@ mod tests {
                 select_asset(&serde_json::to_vec(&invalid).unwrap(), &r, "linux-x86_64").is_err()
             );
         }
+    }
+    #[test]
+    fn windows_msi_manifest_cannot_select_a_portable_archive() {
+        let r = release("2.1.2", 24);
+        let mut manifest = serde_json::json!({"version":"2.1.2","platforms":{"windows-x86_64":{"signature":"sig","url":"https://github.com/vicrodh/qbz/releases/download/v2.1.2/QBZ_2.1.2_x64.msi"}}});
+        assert!(select_asset(&serde_json::to_vec(&manifest).unwrap(), &r, "windows-x86_64").is_ok());
+        manifest["platforms"]["windows-x86_64"]["url"] = "https://github.com/vicrodh/qbz/releases/download/v2.1.2/qbz_2.1.2_windows_x64.zip".into();
+        assert!(select_asset(&serde_json::to_vec(&manifest).unwrap(), &r, "windows-x86_64").is_err());
     }
 }

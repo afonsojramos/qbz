@@ -48,6 +48,8 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/install.sh"
+      - "scripts/test-installer.py"
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
@@ -68,6 +70,8 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/install.sh"
+      - "scripts/test-installer.py"
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
@@ -113,7 +117,7 @@ jobs:
           # OpenSSL (reqwest).
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config gettext \
+            build-essential pkg-config gettext dbus-daemon desktop-file-utils \
             libasound2-dev libjack-jackd2-dev \
             libdbus-1-dev libssl-dev
 

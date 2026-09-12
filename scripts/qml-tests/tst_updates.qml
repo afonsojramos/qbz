@@ -14,6 +14,7 @@ Item {
             modal.kioskHost = false
             QbzAbout.checkCalls = 0
             QbzAbout.installCalls = 0
+            QbzAbout.cancelCalls = 0
             QbzAbout.updatesJson = JSON.stringify({open:false, phase:"idle", currentVersion:"2.1.1"})
         }
         function test_manual_check_action() {
@@ -56,6 +57,29 @@ Item {
             verify(modal.statusText().indexOf("could not be completed") >= 0)
             QbzAbout.updatesJson = JSON.stringify({open:true, phase:"current"})
             verify(modal.statusText().indexOf("latest version") >= 0)
+        }
+        function test_flatpak_channel_update_without_github_version() {
+            QbzAbout.updatesJson = JSON.stringify({open:true, phase:"available", version:"", canInstall:true, installMethod:"Flatpak"})
+            var install = findChild(modal, "updateInstallButton")
+            verify(install.visible)
+            verify(!findChild(modal, "updateReleaseButton").visible)
+            verify(waitForRendering(modal))
+            mouseClick(install)
+            compare(QbzAbout.installCalls, 1)
+            QbzAbout.updatesJson = JSON.stringify({open:true, phase:"updating", busy:true, percent:42})
+            var cancel = findChild(modal, "updateCancelButton")
+            verify(cancel.visible)
+            verify(waitForRendering(modal))
+            mouseClick(cancel)
+            compare(QbzAbout.cancelCalls, 1)
+        }
+        function test_msi_staged_is_not_reported_as_installed() {
+            QbzAbout.updatesJson = JSON.stringify({open:true, phase:"prepared", busy:false, canInstall:false})
+            verify(modal.statusText().indexOf("finish installation") >= 0)
+            verify(findChild(modal, "updateCloseButton").enabled)
+            verify(!findChild(modal, "updateInstallButton").visible)
+            modal.dismiss()
+            verify(!modal.visible)
         }
     }
 }
