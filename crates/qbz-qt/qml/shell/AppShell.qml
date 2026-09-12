@@ -239,6 +239,16 @@ Rectangle {
         // the compositor's business).
     }
 
+    OrbitBanner {
+        id: orbitBanner
+        anchors.top: header.bottom
+        anchors.left: parent.left
+        anchors.right: parent.right
+        remoteActive: QbzOrbit.enabled && QbzOrbit.controllingRemote
+        connectionLost: QbzOrbit.connectionLost
+        hostName: QbzOrbit.hostName
+    }
+
     NowPlayingBar {
         id: npb
         anchors.left: parent.left
@@ -256,7 +266,7 @@ Rectangle {
     Sidebar {
         id: sidebar
         anchors.left: parent.left
-        anchors.top: header.bottom
+        anchors.top: orbitBanner.bottom
         anchors.bottom: npb.top
         // The shared hover-tooltip overlay (declared last, below). The sidebar
         // clips its own overflow, so the collapsed rail's name bubble HAS to be
@@ -281,7 +291,7 @@ Rectangle {
     Rectangle {
         id: queueColumn
         anchors.right: parent.right
-        anchors.top: header.bottom
+        anchors.top: orbitBanner.bottom
         anchors.bottom: npb.top
         // #771: the open width is the user's (300..600, persisted).
         width: (root.queueSidebarVisible || QbzShell.lyricsOpen)
@@ -344,7 +354,7 @@ Rectangle {
         visible: QbzShell.sidebarState !== 2
         // Pane edge at sidebar.width + 8; strip 245..249 at 240, centre 247.
         x: sidebar.width + 5
-        anchors.top: header.bottom
+        anchors.top: orbitBanner.bottom
         anchors.bottom: npb.top
         z: 5
         onDragged: function (px) { QbzShell.sidebarDrag(px) }
@@ -355,7 +365,7 @@ Rectangle {
         visible: queueColumn.width > 0
         // Pane edge at queueColumn.x - 8; strip x-9..x-4, centre x-6.5.
         x: queueColumn.x - 9
-        anchors.top: header.bottom
+        anchors.top: orbitBanner.bottom
         anchors.bottom: npb.top
         z: 5
         // The column hangs off the window's RIGHT edge: a pointer at x means
@@ -414,7 +424,7 @@ Rectangle {
         id: contentFrame
         anchors.left: sidebar.right
         anchors.right: queueColumn.left
-        anchors.top: header.bottom
+        anchors.top: orbitBanner.bottom
         anchors.bottom: npb.top
         color: root.ambientOn ? theme.surfaceCardA50 : theme.surfaceCard
 

@@ -10,9 +10,9 @@ use std::io::Cursor;
 use serde_json::Value;
 use tiny_http::Response;
 
-use crate::state::AuthState;
+use qbz_models::FrontendAdapter;
 
-use super::{err_json, json, ApiState};
+use super::{err_json, json, CatalogContext};
 
 const DEFAULT_LIMIT: u32 = 50;
 const MAX_LIMIT: u32 = 500;
@@ -20,7 +20,10 @@ const MAX_LIMIT: u32 = 500;
 /// `GET /api/favorites?type=track|album|artist&limit=&offset=`. Returns the
 /// raw favorites payload under `favorites` (its `items` arrays are the same
 /// shape the CLI's generic renderer walks). `type` defaults to `track`.
-pub fn list(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn list(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -47,59 +50,131 @@ pub fn list(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         }
     }
 
-    match state.rt.block_on(state.runtime.core().get_favorites(ftype.plural(), limit, offset)) {
-        Ok(v) => json(200, serde_json::json!({"type": ftype.singular(), "favorites": v})),
-        Err(_) => err_json(502, "favorites_failed", "favorites request to Qobuz failed", "try again in a moment"),
+    match state
+        .rt
+        .block_on(state.core.get_favorites(ftype.plural(), limit, offset))
+    {
+        Ok(v) => json(
+            200,
+            serde_json::json!({"type": ftype.singular(), "favorites": v}),
+        ),
+        Err(_) => err_json(
+            502,
+            "favorites_failed",
+            "favorites request to Qobuz failed",
+            "try again in a moment",
+        ),
     }
 }
 
 /// `POST /api/favorites/add`. Body `{"fav_type": "track|album|artist",
 /// "item_id": "..."}` or `{"fav_type": "track", "current": true}` (favorite the
 /// now-playing track). Idempotent from the caller's view (Qobuz de-dupes).
-pub fn add(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+pub fn add(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    body: &Value,
+) -> Response<Cursor<Vec<u8>>> {
     mutate(state, body, true)
 }
 
 /// `POST /api/favorites/remove`. Same body shape (minus `current`).
-pub fn remove(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
+pub fn remove(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    body: &Value,
+) -> Response<Cursor<Vec<u8>>> {
     mutate(state, body, false)
 }
 
 // ============================ internals ============================
 
-fn mutate(state: &ApiState, body: &Value, adding: bool) -> Response<Cursor<Vec<u8>>> {
+fn mutate(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    body: &Value,
+    adding: bool,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
-    let ftype = match body.get("fav_type").and_then(|v| v.as_str()).and_then(FavType::parse) {
+    let ftype = match body
+        .get("fav_type")
+        .and_then(|v| v.as_str())
+        .and_then(FavType::parse)
+    {
         Some(t) => t,
-        None => return err_json(400, "bad_request", "requires fav_type: track|album|artist", "body: {\"fav_type\":\"track\",\"item_id\":\"...\"}"),
+        None => {
+            return err_json(
+                400,
+                "bad_request",
+                "requires fav_type: track|album|artist",
+                "body: {\"fav_type\":\"track\",\"item_id\":\"...\"}",
+            )
+        }
     };
 
     // `current: true` (add only) favorites the now-playing track.
-    let item_id = if adding && body.get("current").and_then(|v| v.as_bool()).unwrap_or(false) {
+    let item_id = if adding
+        && body
+            .get("current")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    {
         if ftype != FavType::Track {
-            return err_json(400, "bad_request", "current only applies to fav_type track", "use: fav add track --current");
+            return err_json(
+                400,
+                "bad_request",
+                "current only applies to fav_type track",
+                "use: fav add track --current",
+            );
         }
-        match state.rt.block_on(state.runtime.core().get_queue_state()).current_track {
+        match state
+            .rt
+            .block_on(state.core.get_queue_state())
+            .current_track
+        {
             Some(t) => t.id.to_string(),
-            None => return err_json(404, "not_found", "nothing is playing", "queue a track first"),
+            None => {
+                return err_json(
+                    404,
+                    "not_found",
+                    "nothing is playing",
+                    "queue a track first",
+                )
+            }
         }
     } else {
         match body.get("item_id").and_then(|v| v.as_str()) {
             Some(id) if !id.is_empty() => id.to_string(),
-            _ => return err_json(400, "bad_request", "requires an item_id", "body: {\"fav_type\":\"track\",\"item_id\":\"176544871\"}"),
+            _ => {
+                return err_json(
+                    400,
+                    "bad_request",
+                    "requires an item_id",
+                    "body: {\"fav_type\":\"track\",\"item_id\":\"176544871\"}",
+                )
+            }
         }
     };
 
     let result = if adding {
-        state.rt.block_on(state.runtime.core().add_favorite(ftype.singular(), &item_id))
+        state
+            .rt
+            .block_on(state.core.add_favorite(ftype.singular(), &item_id))
     } else {
-        state.rt.block_on(state.runtime.core().remove_favorite(ftype.singular(), &item_id))
+        state
+            .rt
+            .block_on(state.core.remove_favorite(ftype.singular(), &item_id))
     };
     match result {
-        Ok(()) => json(200, serde_json::json!({"ok": true, "type": ftype.singular(), "item_id": item_id})),
-        Err(_) => err_json(502, "favorites_failed", "favorites update failed", "try again in a moment"),
+        Ok(()) => json(
+            200,
+            serde_json::json!({"ok": true, "type": ftype.singular(), "item_id": item_id}),
+        ),
+        Err(_) => err_json(
+            502,
+            "favorites_failed",
+            "favorites update failed",
+            "try again in a moment",
+        ),
     }
 }
 
@@ -139,17 +214,25 @@ impl FavType {
 }
 
 fn bad_type(got: &str) -> Response<Cursor<Vec<u8>>> {
-    err_json(400, "bad_request", &format!("unknown fav type '{got}'"), "type: track | album | artist")
+    err_json(
+        400,
+        "bad_request",
+        &format!("unknown fav type '{got}'"),
+        "type: track | album | artist",
+    )
 }
 
-fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
-    let needs_auth = state
-        .shared
-        .lock()
-        .map(|s| s.auth == AuthState::NeedsAuth)
-        .unwrap_or(false);
+fn auth_gate(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+) -> Option<Response<Cursor<Vec<u8>>>> {
+    let needs_auth = state.needs_auth;
     if needs_auth {
-        Some(err_json(409, "needs_auth", "not logged in to Qobuz", "run: qbzd login"))
+        Some(err_json(
+            409,
+            "needs_auth",
+            "not logged in to Qobuz",
+            "run: qbzd login",
+        ))
     } else {
         None
     }
@@ -164,7 +247,9 @@ fn pairs(query: &str) -> Vec<(String, String)> {
             let mut kv = p.splitn(2, '=');
             let k = kv.next().unwrap_or("").to_string();
             let raw = kv.next().unwrap_or("");
-            let v = urlencoding::decode(raw).map(|c| c.into_owned()).unwrap_or_else(|_| raw.to_string());
+            let v = urlencoding::decode(raw)
+                .map(|c| c.into_owned())
+                .unwrap_or_else(|_| raw.to_string());
             (k, v)
         })
         .collect()
@@ -190,6 +275,12 @@ mod tests {
     #[test]
     fn pairs_decodes_values() {
         let p = pairs("type=track&limit=50");
-        assert_eq!(p, vec![("type".into(), "track".into()), ("limit".into(), "50".into())]);
+        assert_eq!(
+            p,
+            vec![
+                ("type".into(), "track".into()),
+                ("limit".into(), "50".into())
+            ]
+        );
     }
 }

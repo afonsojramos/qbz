@@ -77,9 +77,9 @@ Item {
         { label: QbzSession.tr("Integrations", QbzSession.trRev), section: 6 },
         { label: QbzSession.tr("Import / Export", QbzSession.trRev), section: 9 },
         { label: QbzSession.tr("Developer", QbzSession.trRev), section: 7 }
-    ].concat(root.sandboxed ? [{ label: (doc.dev || ({})).installMethod === "snap"
+    ].concat(QbzOrbit.enabled ? [{ label: "Orbit", section: 11 }] : []).concat(root.sandboxed ? [{ label: (doc.dev || ({})).installMethod === "snap"
         ? QbzSession.tr("Snap", QbzSession.trRev) : QbzSession.tr("Flatpak", QbzSession.trRev), section: 8 }] : [])
-    readonly property int section: QbzBridge.settingsSection
+    readonly property int section: QbzBridge.settingsSection === 11 && !QbzOrbit.enabled ? 0 : QbzBridge.settingsSection
     readonly property bool migrationRunning:
         (doc.importExport || ({})).migrationRunning === true
 
@@ -287,6 +287,13 @@ Item {
                         active: root.section === 7
                         onClicked: QbzBridge.settingsSetSection(7)
                     }
+                    SubNavItem {
+                        visible: QbzOrbit.enabled
+                        name: "compass"
+                        label: "Orbit"
+                        active: root.section === 11
+                        onClicked: QbzBridge.settingsSetSection(11)
+                    }
                     // Sandboxed installs only (Flatpak / Snap permissions).
                     SubNavItem {
                         visible: root.sandboxed
@@ -406,6 +413,11 @@ Item {
                             width: parent ? parent.width : 0
                         }
 
+                        OrbitSettingsPanel {
+                            width: parent.width
+                            selected: root.section === 11
+                            kioskHost: root.kioskHost
+                        }
                         Panel {
                             panelIndex: 0
                             sourceComponent: Component {

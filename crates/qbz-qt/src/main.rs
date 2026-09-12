@@ -208,6 +208,9 @@ mod local_filter;
 mod local_library_qt;
 mod local_rows;
 mod local_state;
+mod local_service_qt;
+mod orbit_bridge;
+mod orbit_qt;
 mod recommendations_qt;
 mod whats_new_qt;
 // Watcher hints + periodic root reconciliation for the incremental scanner.
@@ -4200,6 +4203,7 @@ fn main() {
         // and the same reasoning as the session flush above (one SQLite
         // write on the main thread, behind the watchdog).
         listen_log_qt::shutdown_blocking();
+        local_service_qt::reset();
         log::info!("[qbz-qt] shutdown complete");
     }
     // Explicit, INSTRUMENTED drops (2026-08-04 quit incident). Rust would run

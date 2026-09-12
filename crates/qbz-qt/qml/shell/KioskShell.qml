@@ -458,10 +458,18 @@ Rectangle {
         // on that view, so its 42px must NOT be subtracted — otherwise the
         // content stays short and the NavRail rides up, leaving dead space
         // below the footer.
+        OrbitBanner {
+            id: orbitBanner
+            width: shellColumn.width
+            remoteActive: QbzOrbit.enabled && QbzOrbit.controllingRemote
+            connectionLost: QbzOrbit.connectionLost
+            hostName: QbzOrbit.hostName
+        }
+
         Rectangle {
             id: contentFrame
             width: shellColumn.width
-            height: root.height - backBar.height
+            height: root.height - backBar.height - orbitBanner.height
                     - (QbzShell.currentView === "nowplaying" ? 0 : root.transportHeight)
                     - root.navRailHeight
             color: theme.surfaceCard

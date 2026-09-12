@@ -4028,6 +4028,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "qbz-control"
+version = "2.1.1"
+dependencies = [
+ "log",
+ "qbz-core",
+ "qbz-library",
+ "qbz-models",
+ "qbz-qobuz",
+ "qbz-reco",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tiny_http",
+ "tokio",
+ "urlencoding",
+ "uuid 1.26.0",
+]
+
+[[package]]
 name = "qbz-core"
 version = "2.1.1"
 dependencies = [
@@ -4418,6 +4437,7 @@ dependencies = [
  "qbz-audio",
  "qbz-cache",
  "qbz-cast",
+ "qbz-control",
  "qbz-core",
  "qbz-credentials",
  "qbz-dac-wizard-core",
@@ -4585,9 +4605,11 @@ dependencies = [
  "open",
  "qbz-app",
  "qbz-audio",
+ "qbz-control",
  "qbz-core",
  "qbz-credentials",
  "qbz-integrations",
+ "qbz-library",
  "qbz-log",
  "qbz-media-controls",
  "qbz-models",

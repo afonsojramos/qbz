@@ -699,32 +699,6 @@ pub fn search_tracks_page(
     rows.into_iter().map(cached_to_local_track).collect()
 }
 
-/// Substring search across one remote source, in the `LocalTrack` shape.
-pub fn search_tracks(query: &str, limit: Option<u32>) -> Vec<qbz_library::LocalTrack> {
-    let mut out = Vec::new();
-    for kind in MediaServerKind::ALL {
-        if !get(kind).is_configured(kind) {
-            continue;
-        }
-        let (source, handle) = match kind {
-            MediaServerKind::Jellyfin => (
-                qbz_media_cache::RemoteSource::Jellyfin,
-                qbz_source::registry().jellyfin().cache(),
-            ),
-            MediaServerKind::Subsonic => (
-                qbz_media_cache::RemoteSource::Subsonic,
-                qbz_source::registry().subsonic().cache(),
-            ),
-        };
-        if let Some(rows) =
-            handle.with(|c| qbz_media_cache::search(c, source, query, limit).unwrap_or_default())
-        {
-            out.extend(rows.into_iter().map(cached_to_local_track));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

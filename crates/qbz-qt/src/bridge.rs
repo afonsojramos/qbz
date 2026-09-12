@@ -297,6 +297,7 @@ impl qbz_bridge::QbzBridge {
     /// Slint global is not persisted either: Settings always opens on Audio,
     /// the section only has to survive a Loader unmount WITHIN a session.
     pub fn settings_set_section(mut self: Pin<&mut Self>, index: i32) {
+        if index == 11 && !crate::orbit_qt::enabled() { return; }
         self.as_mut().set_settings_section(index);
     }
 
