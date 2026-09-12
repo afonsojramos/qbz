@@ -39,7 +39,7 @@ pub struct BootedRuntime {
 /// `qbzd run` — boot the daemon in the foreground, park on signals, shut down
 /// gracefully. Returns the process exit code (0 = clean shutdown). `warns` are
 /// the unknown-key warnings surfaced by [`QbzdConfig::load`] in `main`.
-pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Result<i32, String> {
+pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>, orbit: bool) -> Result<i32, String> {
     // 1. argv parse happened in main(). 2. logging:
     qbz_log::install(&cfg.log.level);
     // A headless daemon that dies of a signal leaves even less behind than
@@ -240,9 +240,19 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // the vanishingly small window before that.
     let qconnect_control: Arc<std::sync::OnceLock<crate::qconnect::QconnectControl>> =
         Arc::new(std::sync::OnceLock::new());
+    // Orbit uses the daemon's OWN roots. Construction is inert and local
+    // library access never depends on Qobuz authentication. No second port.
+    let library = orbit.then(|| Arc::new(qbz_library::service::LibraryService::new(
+        qbz_library::LibraryStore::new(roots.data.join("library.db")),
+        roots.cache.join("artwork"),
+    )));
+    let library_endpoint = library.as_ref().map(|service| qbz_control::library::LibraryEndpoint::new(
+        service.clone(), std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "qbzd".into()), true,
+    ));
     let api = crate::api::serve(
         bound,
         crate::api::ApiState {
+            library: library_endpoint,
             runtime: booted.runtime.clone(),
             shared: booted.shared.clone(),
             bus: booted.bus.clone(),
@@ -284,6 +294,8 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     //     fns are verified no-ops from a fresh process and re-adding them is the
     //     documented skeptic-correction #1 trap (§8.1).
     wait_for_signal().await;
+    // Reject new library work immediately; join after the API stops serving.
+    if let Some(library) = &library { library.close(); }
 
     // ── Shutdown (§8.2, ordered). Step 1: disconnect the QConnect session (and
     //    stop its auto-connect watcher) BEFORE playback is stopped, then drop the
@@ -341,6 +353,9 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>) -> Re
     // ahead of the #521 pair — the same ordering constraint as the driver and
     // auth-retry tasks (§8.2).
     api.shutdown();
+    if let Some(library) = library {
+        let _ = tokio::task::spawn_blocking(move || library.shutdown()).await;
+    }
     // The reload route's OnceLock handle also clones `QconnectControl`, which
     // holds an `Arc<AppRuntime>` (via `DaemonQconnectService.runtime`) — drop
     // it before `drop(booted)` too, same #521/§8.2 ordering as the driver,

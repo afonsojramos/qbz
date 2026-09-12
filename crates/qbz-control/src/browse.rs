@@ -13,9 +13,9 @@ use std::io::Cursor;
 use serde_json::Value;
 use tiny_http::Response;
 
-use crate::state::AuthState;
+use qbz_models::FrontendAdapter;
 
-use super::{err_json, json, ApiState};
+use super::{err_json, json, CatalogContext};
 
 const DEFAULT_LIMIT: u32 = 20;
 const MAX_LIMIT: u32 = 100;
@@ -25,22 +25,32 @@ const QUEUE_SEED_CAP: usize = 20;
 /// `GET /api/album?id=<ALBUM_ID>&suggest=<0|1>`. The full album envelope
 /// (tracklist, ImageSet artwork, description, awards) via `core.get_album`;
 /// `suggest=1` also includes similar albums (`get_album_suggest`).
-pub fn album(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn album(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
     let p = parse(query);
     let id = match p.get("id") {
         Some(v) if !v.is_empty() => v.clone(),
-        _ => return err_json(400, "bad_request", "album requires an id", "usage: qbzd album <ALBUM_ID>"),
+        _ => {
+            return err_json(
+                400,
+                "bad_request",
+                "album requires an id",
+                "usage: qbzd album <ALBUM_ID>",
+            )
+        }
     };
 
-    let album = match state.rt.block_on(state.runtime.core().get_album(&id)) {
+    let album = match state.rt.block_on(state.core.get_album(&id)) {
         Ok(a) => serde_json::to_value(a).unwrap_or(Value::Null),
         Err(_) => return not_found("album", &id),
     };
     let similar = if wants(&p, "suggest") {
-        match state.rt.block_on(state.runtime.core().get_album_suggest(&id)) {
+        match state.rt.block_on(state.core.get_album_suggest(&id)) {
             Ok(s) => serde_json::to_value(s).unwrap_or(Value::Null),
             Err(_) => Value::Null,
         }
@@ -54,42 +64,72 @@ pub fn album(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
 /// `GET /api/artist?id=<ID>&view=page|top|albums&limit=&offset=&release_type=`.
 /// `page` (default) = the artist page (bio, top tracks, similar); `top` = the
 /// full top-tracks list; `albums` = the paged releases grid.
-pub fn artist(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn artist(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
     let p = parse(query);
     let id = match p.get("id").and_then(|v| v.parse::<u64>().ok()) {
         Some(id) => id,
-        None => return err_json(400, "bad_request", "artist requires a numeric id", "usage: qbzd artist <ARTIST_ID>"),
+        None => {
+            return err_json(
+                400,
+                "bad_request",
+                "artist requires a numeric id",
+                "usage: qbzd artist <ARTIST_ID>",
+            )
+        }
     };
     let (limit, offset) = limit_offset(&p);
     let view = p.get("view").map(String::as_str).unwrap_or("page");
 
-    let core = state.runtime.core();
+    let core = state.core;
     match view {
         "page" => match state.rt.block_on(core.get_artist_page(id, None)) {
-            Ok(r) => json(200, serde_json::json!({"view": "page", "page": serde_json::to_value(r).unwrap_or(Value::Null)})),
+            Ok(r) => json(
+                200,
+                serde_json::json!({"view": "page", "page": serde_json::to_value(r).unwrap_or(Value::Null)}),
+            ),
             Err(_) => not_found("artist", &id.to_string()),
         },
         "top" => match state.rt.block_on(core.get_artist_tracks(id, limit, offset)) {
-            Ok(tc) => json(200, serde_json::json!({"view": "top", "tracks": serde_json::to_value(tc).unwrap_or(Value::Null)})),
+            Ok(tc) => json(
+                200,
+                serde_json::json!({"view": "top", "tracks": serde_json::to_value(tc).unwrap_or(Value::Null)}),
+            ),
             Err(_) => not_found("artist", &id.to_string()),
         },
         "albums" => {
             let release_type = p.get("release_type").map(String::as_str).unwrap_or("album");
-            match state.rt.block_on(core.get_releases_grid(id, release_type, limit, offset, None)) {
-                Ok(r) => json(200, serde_json::json!({"view": "albums", "releases": serde_json::to_value(r).unwrap_or(Value::Null)})),
+            match state
+                .rt
+                .block_on(core.get_releases_grid(id, release_type, limit, offset, None))
+            {
+                Ok(r) => json(
+                    200,
+                    serde_json::json!({"view": "albums", "releases": serde_json::to_value(r).unwrap_or(Value::Null)}),
+                ),
                 Err(_) => not_found("artist", &id.to_string()),
             }
         }
-        other => err_json(400, "bad_request", &format!("unknown view '{other}'"), "view: page | top | albums"),
+        other => err_json(
+            400,
+            "bad_request",
+            &format!("unknown view '{other}'"),
+            "view: page | top | albums",
+        ),
     }
 }
 
 /// `GET /api/similar?artist=<ID>` (similar artists) or `?album=<ID>` (similar
 /// albums), `&limit=&offset=`. Exactly one selector.
-pub fn similar(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn similar(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -97,18 +137,32 @@ pub fn similar(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
     let (limit, offset) = limit_offset(&p);
 
     if let Some(artist_id) = p.get("artist").and_then(|v| v.parse::<u64>().ok()) {
-        return match state.rt.block_on(state.runtime.core().get_similar_artists(artist_id, limit, offset)) {
-            Ok(page) => json(200, serde_json::json!({"artists": serde_json::to_value(page).unwrap_or(Value::Null)})),
+        return match state
+            .rt
+            .block_on(state.core.get_similar_artists(artist_id, limit, offset))
+        {
+            Ok(page) => json(
+                200,
+                serde_json::json!({"artists": serde_json::to_value(page).unwrap_or(Value::Null)}),
+            ),
             Err(_) => not_found("artist", &artist_id.to_string()),
         };
     }
     if let Some(album_id) = p.get("album").filter(|v| !v.is_empty()) {
-        return match state.rt.block_on(state.runtime.core().get_album_suggest(album_id)) {
-            Ok(sug) => json(200, serde_json::json!({"albums": serde_json::to_value(sug).unwrap_or(Value::Null)})),
+        return match state.rt.block_on(state.core.get_album_suggest(album_id)) {
+            Ok(sug) => json(
+                200,
+                serde_json::json!({"albums": serde_json::to_value(sug).unwrap_or(Value::Null)}),
+            ),
             Err(_) => not_found("album", album_id),
         };
     }
-    err_json(400, "bad_request", "similar requires artist=<ID> or album=<ID>", "usage: qbzd similar artist:<ID> | album:<ID>")
+    err_json(
+        400,
+        "bad_request",
+        "similar requires artist=<ID> or album=<ID>",
+        "usage: qbzd similar artist:<ID> | album:<ID>",
+    )
 }
 
 /// `GET /api/suggest?seed=<ID,ID,...>&limit=`. Dynamic For-You suggestions
@@ -116,7 +170,10 @@ pub fn similar(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
 /// the current queue's track ids (current + upcoming, capped) — so the daemon
 /// tracks no listening history, honoring the UNIX-honest seeding the CONSOLE
 /// brief specifies.
-pub fn suggest(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn suggest(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -124,9 +181,12 @@ pub fn suggest(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
     let (limit, _offset) = limit_offset(&p);
 
     let seeds: Vec<u64> = match p.get("seed") {
-        Some(s) if !s.is_empty() => s.split(',').filter_map(|x| x.trim().parse::<u64>().ok()).collect(),
+        Some(s) if !s.is_empty() => s
+            .split(',')
+            .filter_map(|x| x.trim().parse::<u64>().ok())
+            .collect(),
         _ => {
-            let q = state.rt.block_on(state.runtime.core().get_queue_state());
+            let q = state.rt.block_on(state.core.get_queue_state());
             let mut ids: Vec<u64> = Vec::new();
             if let Some(t) = &q.current_track {
                 ids.push(t.id);
@@ -146,29 +206,48 @@ pub fn suggest(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         );
     }
 
-    match state.rt.block_on(state.runtime.core().get_dynamic_suggest(&seeds, limit)) {
-        Ok(tracks) => json(200, serde_json::json!({"tracks": serde_json::to_value(tracks).unwrap_or(Value::Null)})),
-        Err(_) => err_json(502, "suggest_failed", "suggestion request to Qobuz failed", "try again in a moment"),
+    match state
+        .rt
+        .block_on(state.core.get_dynamic_suggest(&seeds, limit))
+    {
+        Ok(tracks) => json(
+            200,
+            serde_json::json!({"tracks": serde_json::to_value(tracks).unwrap_or(Value::Null)}),
+        ),
+        Err(_) => err_json(
+            502,
+            "suggest_failed",
+            "suggestion request to Qobuz failed",
+            "try again in a moment",
+        ),
     }
 }
 
 // ============================ internals ============================
 
-fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
-    let needs_auth = state
-        .shared
-        .lock()
-        .map(|s| s.auth == AuthState::NeedsAuth)
-        .unwrap_or(false);
+fn auth_gate(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+) -> Option<Response<Cursor<Vec<u8>>>> {
+    let needs_auth = state.needs_auth;
     if needs_auth {
-        Some(err_json(409, "needs_auth", "not logged in to Qobuz", "run: qbzd login"))
+        Some(err_json(
+            409,
+            "needs_auth",
+            "not logged in to Qobuz",
+            "run: qbzd login",
+        ))
     } else {
         None
     }
 }
 
 fn not_found(kind: &str, id: &str) -> Response<Cursor<Vec<u8>>> {
-    err_json(404, "not_found", &format!("{kind} {id} not found"), "check the id: qbzd search <QUERY>")
+    err_json(
+        404,
+        "not_found",
+        &format!("{kind} {id} not found"),
+        "check the id: qbzd search <QUERY>",
+    )
 }
 
 /// Percent-decoded query-string map (values only; keys are plain ascii).
@@ -196,7 +275,10 @@ fn limit_offset(p: &HashMap<String, String>) -> (u32, u32) {
         .and_then(|v| v.parse::<u32>().ok())
         .map(|n| n.clamp(1, MAX_LIMIT))
         .unwrap_or(DEFAULT_LIMIT);
-    let offset = p.get("offset").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+    let offset = p
+        .get("offset")
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
     (limit, offset)
 }
 

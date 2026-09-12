@@ -34,6 +34,8 @@
 # pre-release
 # integration so regressions land before a release cut.
 
+# Shared cargo-test.sh also gates Orbit HTTP host isolation, library profiles
+# and the SSE public-identity projection. No separate test command to drift.
 name: test-crates
 
 on:
@@ -52,6 +54,10 @@ on:
       - "scripts/packaging/smoke_release.py"
       - "scripts/packaging/test_smoke_release.py"
       - "scripts/qml-audits/**"
+      - "scripts/qml-tests/**"
+      - "scripts/test-search-local-qml.sh"
+      - "scripts/test-orbit-qml.sh"
+      - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   push:
     # Integration branch only — never main (a push to main is a release merge).
@@ -67,6 +73,10 @@ on:
       - "scripts/packaging/smoke_release.py"
       - "scripts/packaging/test_smoke_release.py"
       - "scripts/qml-audits/**"
+      - "scripts/qml-tests/**"
+      - "scripts/test-search-local-qml.sh"
+      - "scripts/test-orbit-qml.sh"
+      - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:
 
@@ -214,7 +224,8 @@ jobs:
       # The exact QT=1 half of scripts/cargo-test.sh, minus its `test` job
       # (already run above) and its shader gate (the shader-gate job, so qsb
       # is never on PATH while cargo runs here): dep-graph gate, cargo test
-      # -p qbz-qt, Local Library/Kiosk artwork/navigation regressions, debug/release
+      # -p qbz-qt, Local Library/Kiosk artwork/navigation and federated-search
+      # view/activation regressions, debug/release
       # offscreen boot. One shared runtime script.
       - name: qt gates (scripts/cargo-test.sh QT=1, without the workspace test)
         env:

@@ -21,12 +21,12 @@
 #   + the fatal-signal reporter check (qbz-log): a real child process is
 #     segfaulted on purpose; the handler must name the signal and the process
 #     must still die OF that signal.
-#   --workspace today = the 42 members of crates/Cargo.toml minus qbz-qt: the
+#   --workspace = members of crates/Cargo.toml minus qbz-qt: the
 #   audio/player/cache/DSD/disc/rip core, qbz-app/core/models/theme/i18n,
 #   the Qobuz client and the source seam, Plex/Jellyfin/Subsonic + media
 #   cache, local library + catalog, integrations/reco/lyrics/radio/mixtape/
 #   playlist-import/media-controls/cast, credentials/secrets/offline-cache,
-#   the four qconnect-* crates, the HiFi wizard core, and qbzd. Nothing here
+#   the qconnect-* crates, the HiFi wizard core, qbz-control and qbzd. Nothing here
 #   needs Qt; wayland-sys enters the graph only through qbz-qt.
 #   The Slint crates (qbz, qbz-ui, qbz-dac-wizard, qbz-slint-common) are gone
 #   from the workspace: no exclusions for them, and never bring them back.
@@ -74,6 +74,37 @@ cargo test \
   --exclude qbz-qt \
   --no-fail-fast \
   "$@"
+
+say "gate: Orbit HTTP host isolation and library profile regressions present"
+# The workspace run executes these. Keep actual socket/gate/shutdown tests and
+# profile isolation from disappearing during the next extraction phases.
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-control --test http_hosts -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 3 )) || { echo "Orbit HTTP host suite has $n tests (expected >= 3)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-library --lib -- --list store::tests:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 3 )) || { echo "Library profile suite has $n tests (expected >= 3)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-library --lib -- --list search::tests:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 4 )) || { echo "Library source search suite has $n tests (expected >= 4)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-library --lib -- --list service::tests:: 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 7 )) || { echo "Library service suite has $n tests (expected >= 7)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-control --test library_hosts -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 2 )) || { echo "Orbit library HTTP suite has $n tests (expected >= 2)"; exit 1; }
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-control --test library_admin -- --list 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 2 )) || { echo "Orbit library administration suite has $n tests (expected >= 2)"; exit 1; }
+if [[ "$(uname -s)" == "Linux" ]]; then
+  say "gate: real Orbit daemon instances (isolated roots, no audio or Qobuz session)"
+  orbit_target_dir=$(cargo metadata --manifest-path crates/Cargo.toml --no-deps --format-version 1 \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')
+  python3 scripts/test-orbit-daemon.py --bin "$orbit_target_dir/debug/qbzd"
+fi
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-control --lib -- --list logged_in_frame_contains_public_identity_only 2>/dev/null \
+    | grep -c ': test$' || true)
+(( n >= 1 )) || { echo "SSE public-identity regression missing"; exit 1; }
 
 say "gate: SACD physical-sector and scanner regressions present"
 # Already executed by the workspace run: keep the container/seek equivalence

@@ -377,6 +377,7 @@ ApplicationWindow {
         QbzMusician.boot()
         QbzLyrics.boot()
         QbzCast.boot()
+        QbzOrbit.boot()
         QbzBridge.boot()
         // MyQBZ (two grids + detail + modals), the app-wide Add picker, the
         // Artist-Collection builder, and the Blacklist manager.

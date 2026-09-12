@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/.."
 export QBZ_PREBUILT_SHADERS=1
+bash scripts/test-search-local-qml.sh
+bash scripts/test-orbit-qml.sh
 node scripts/test_qt_local_views.mjs
 node scripts/test_qt_kiosk_art.mjs
 node scripts/test_qt_kiosk_navigation.mjs

@@ -1,3 +1,4 @@
+use qbz_models::FrontendAdapter;
 // crates/qbzd/src/api/artwork.rs — GET /api/artwork/current (CONSOLE ext).
 //
 // A stable redirect to the CURRENT track's cover art: a daemon-only client (a
@@ -10,12 +11,14 @@ use std::io::Cursor;
 
 use tiny_http::{Header, Response};
 
-use super::{err_json, ApiState};
+use super::{err_json, CatalogContext};
 
 /// `GET /api/artwork/current` → `302` to the current cover, or `404` when
 /// nothing is playing / the track carries no art.
-pub fn current(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
-    let queue = state.rt.block_on(state.runtime.core().get_queue_state());
+pub fn current(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+) -> Response<Cursor<Vec<u8>>> {
+    let queue = state.rt.block_on(state.core.get_queue_state());
     let url = queue
         .current_track
         .as_ref()
@@ -24,9 +27,16 @@ pub fn current(state: &ApiState) -> Response<Cursor<Vec<u8>>> {
 
     match url {
         Some(u) => match Header::from_bytes(&b"Location"[..], u.as_bytes()) {
-            Ok(location) => Response::from_data(Vec::new()).with_status_code(302).with_header(location),
+            Ok(location) => Response::from_data(Vec::new())
+                .with_status_code(302)
+                .with_header(location),
             // A non-header-safe URL (control bytes) — never expected from the CDN.
-            Err(_) => err_json(500, "internal", "artwork url is not a valid redirect target", "check: qbzd now"),
+            Err(_) => err_json(
+                500,
+                "internal",
+                "artwork url is not a valid redirect target",
+                "check: qbzd now",
+            ),
         },
         None => err_json(
             404,

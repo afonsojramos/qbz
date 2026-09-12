@@ -20,9 +20,9 @@ use std::io::Cursor;
 use serde_json::Value;
 use tiny_http::Response;
 
-use crate::state::AuthState;
+use qbz_models::FrontendAdapter;
 
-use super::{err_json, json, ApiState};
+use super::{err_json, json, CatalogContext};
 
 /// Default result count per category when the caller gives no `limit`.
 const DEFAULT_LIMIT: u32 = 20;
@@ -34,7 +34,10 @@ const MAX_LIMIT: u32 = 100;
 /// `query` is the raw query string (no leading `?`); `route()` strips it off the
 /// path before dispatch. Errors: 409 `needs_auth`, 400 `bad_request` (missing
 /// query / unknown type), 502 `search_failed` (upstream Qobuz error).
-pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn search(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -60,7 +63,7 @@ pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
     let mut playlists = Value::Null;
 
     if do_albums {
-        match state.rt.block_on(state.runtime.core().search_albums(
+        match state.rt.block_on(state.core.search_albums(
             &params.q,
             params.limit,
             params.offset,
@@ -71,7 +74,7 @@ pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         }
     }
     if do_tracks {
-        match state.rt.block_on(state.runtime.core().search_tracks(
+        match state.rt.block_on(state.core.search_tracks(
             &params.q,
             params.limit,
             params.offset,
@@ -82,7 +85,7 @@ pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         }
     }
     if do_artists {
-        match state.rt.block_on(state.runtime.core().search_artists(
+        match state.rt.block_on(state.core.search_artists(
             &params.q,
             params.limit,
             params.offset,
@@ -93,11 +96,11 @@ pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         }
     }
     if do_playlists {
-        match state.rt.block_on(state.runtime.core().search_playlists(
-            &params.q,
-            params.limit,
-            params.offset,
-        )) {
+        match state.rt.block_on(
+            state
+                .core
+                .search_playlists(&params.q, params.limit, params.offset),
+        ) {
             Ok(page) => playlists = serde_json::to_value(page).unwrap_or(Value::Null),
             Err(_) => return upstream_error(),
         }
@@ -122,12 +125,10 @@ pub fn search(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
 
 /// 409 `needs_auth` — search needs a live Qobuz session. Mirrors
 /// `queue::add`'s gate (this file's self-contained-helpers convention).
-fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
-    let needs_auth = state
-        .shared
-        .lock()
-        .map(|s| s.auth == AuthState::NeedsAuth)
-        .unwrap_or(false);
+fn auth_gate(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+) -> Option<Response<Cursor<Vec<u8>>>> {
+    let needs_auth = state.needs_auth;
     if needs_auth {
         Some(err_json(
             409,

@@ -12,11 +12,14 @@ use tiny_http::Response;
 
 use qbz_qobuz::lyrics::{QobuzLyricsContent, QobuzLyricsDocument};
 
-use crate::state::AuthState;
+use qbz_models::FrontendAdapter;
 
-use super::{err_json, json, ApiState};
+use super::{err_json, json, CatalogContext};
 
-pub fn lyrics(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
+pub fn lyrics(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Response<Cursor<Vec<u8>>> {
     if let Some(resp) = auth_gate(state) {
         return resp;
     }
@@ -26,10 +29,18 @@ pub fn lyrics(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
         Err(resp) => return resp,
     };
 
-    match state.rt.block_on(state.runtime.core().get_lyrics(id)) {
+    match state.rt.block_on(state.core.get_lyrics(id)) {
         Ok(Some(doc)) => json(200, normalize(id, &doc)),
-        Ok(None) => json(200, serde_json::json!({"track_id": id, "synced": false, "lines": []})),
-        Err(_) => err_json(502, "lyrics_failed", "lyrics request to Qobuz failed", "try again in a moment"),
+        Ok(None) => json(
+            200,
+            serde_json::json!({"track_id": id, "synced": false, "lines": []}),
+        ),
+        Err(_) => err_json(
+            502,
+            "lyrics_failed",
+            "lyrics request to Qobuz failed",
+            "try again in a moment",
+        ),
     }
 }
 
@@ -50,7 +61,10 @@ fn normalize(id: u64, doc: &QobuzLyricsDocument) -> Value {
         ),
         Some(QobuzLyricsContent::Plain { lines, .. }) => (
             false,
-            lines.iter().map(|l| serde_json::json!({"text": l.line})).collect(),
+            lines
+                .iter()
+                .map(|l| serde_json::json!({"text": l.line}))
+                .collect(),
         ),
         None => (false, Vec::new()),
     };
@@ -58,7 +72,10 @@ fn normalize(id: u64, doc: &QobuzLyricsDocument) -> Value {
 }
 
 /// `?id=<u64>` or `?id=current` (the queue cursor); default `current`.
-fn resolve_id(state: &ApiState, query: &str) -> Result<u64, Response<Cursor<Vec<u8>>>> {
+fn resolve_id(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+    query: &str,
+) -> Result<u64, Response<Cursor<Vec<u8>>>> {
     let raw = query
         .split('&')
         .filter_map(|p| {
@@ -69,23 +86,41 @@ fn resolve_id(state: &ApiState, query: &str) -> Result<u64, Response<Cursor<Vec<
         .unwrap_or("current");
 
     if raw.is_empty() || raw == "current" {
-        return match state.rt.block_on(state.runtime.core().get_queue_state()).current_track {
+        return match state
+            .rt
+            .block_on(state.core.get_queue_state())
+            .current_track
+        {
             Some(t) => Ok(t.id),
-            None => Err(err_json(404, "not_found", "nothing is playing", "give a track id: qbzd lyrics <TRACK_ID>")),
+            None => Err(err_json(
+                404,
+                "not_found",
+                "nothing is playing",
+                "give a track id: qbzd lyrics <TRACK_ID>",
+            )),
         };
     }
-    raw.parse::<u64>()
-        .map_err(|_| err_json(400, "bad_request", "lyrics id must be a track id or 'current'", "usage: qbzd lyrics [TRACK_ID]"))
+    raw.parse::<u64>().map_err(|_| {
+        err_json(
+            400,
+            "bad_request",
+            "lyrics id must be a track id or 'current'",
+            "usage: qbzd lyrics [TRACK_ID]",
+        )
+    })
 }
 
-fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
-    let needs_auth = state
-        .shared
-        .lock()
-        .map(|s| s.auth == AuthState::NeedsAuth)
-        .unwrap_or(false);
+fn auth_gate(
+    state: &CatalogContext<'_, impl FrontendAdapter + 'static>,
+) -> Option<Response<Cursor<Vec<u8>>>> {
+    let needs_auth = state.needs_auth;
     if needs_auth {
-        Some(err_json(409, "needs_auth", "not logged in to Qobuz", "run: qbzd login"))
+        Some(err_json(
+            409,
+            "needs_auth",
+            "not logged in to Qobuz",
+            "run: qbzd login",
+        ))
     } else {
         None
     }
