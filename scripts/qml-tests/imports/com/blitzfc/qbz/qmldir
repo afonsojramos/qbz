@@ -7,3 +7,5 @@ singleton QbzBridge 1.0 QbzBridge.qml
 singleton QbzLibrary 1.0 QbzLibrary.qml
 singleton QbzPurchases 1.0 QbzPurchases.qml
 singleton QbzOrbit 1.0 QbzOrbit.qml
+
+singleton QbzAbout 1.0 QbzAbout.qml

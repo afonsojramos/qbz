@@ -141,7 +141,10 @@ Rectangle {
     // until the first click (measured 2026-08-03, RFB H0 first pass). Grab
     // once at mount; every other lifecycle arm (immersive close, modal
     // closes) hands focus BACK here.
-    Component.onCompleted: root.forceActiveFocus()
+    Component.onCompleted: {
+        root.forceActiveFocus()
+        Qt.callLater(function () { QbzAbout.updatesLaunch() })
+    }
 
     // THE ONE key entry (§1.1 route (b), divergence K1): NOTHING is handled
     // locally. The ordered pipeline (capture steal, search-dropdown Up/Down
@@ -1051,6 +1054,7 @@ Rectangle {
     // while closed it is an invisible, non-interactive Item that parses one
     // small JSON string — and each carries an explicit `z: 3000` (ADR-009 as
     // this port spells it) rather than relying on declaration order alone.
+    UpdatesModal { }
     AboutModal {
         anchors.fill: parent
     }

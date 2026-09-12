@@ -34,6 +34,8 @@
 # pre-release
 # integration so regressions land before a release cut.
 
+# Shared cargo-test.sh also gates signed updater verification, version selection
+# and preference preservation; qt-runtime-gate.sh covers the update UI.
 # Shared cargo-test.sh also gates Orbit HTTP host isolation, library profiles
 # and the SSE public-identity projection. No separate test command to drift.
 name: test-crates
@@ -46,6 +48,8 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/install.sh"
+      - "scripts/test-installer.py"
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
@@ -57,6 +61,7 @@ on:
       - "scripts/qml-tests/**"
       - "scripts/test-search-local-qml.sh"
       - "scripts/test-orbit-qml.sh"
+      - "scripts/test-updates-qml.sh"
       - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   push:
@@ -65,6 +70,8 @@ on:
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
+      - "scripts/install.sh"
+      - "scripts/test-installer.py"
       - "scripts/qt-*.py"
       - "scripts/qt-*.sh"
       - "scripts/test_qt_build_gates.py"
@@ -76,6 +83,7 @@ on:
       - "scripts/qml-tests/**"
       - "scripts/test-search-local-qml.sh"
       - "scripts/test-orbit-qml.sh"
+      - "scripts/test-updates-qml.sh"
       - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:
@@ -109,7 +117,7 @@ jobs:
           # OpenSSL (reqwest).
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config gettext \
+            build-essential pkg-config gettext dbus-daemon desktop-file-utils \
             libasound2-dev libjack-jackd2-dev \
             libdbus-1-dev libssl-dev
 

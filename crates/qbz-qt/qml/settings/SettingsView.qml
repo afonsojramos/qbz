@@ -76,6 +76,7 @@ Item {
         { label: QbzSession.tr("Blacklist", QbzSession.trRev), section: 5 },
         { label: QbzSession.tr("Integrations", QbzSession.trRev), section: 6 },
         { label: QbzSession.tr("Import / Export", QbzSession.trRev), section: 9 },
+        { label: QbzSession.tr("Updates", QbzSession.trRev), section: 12 },
         { label: QbzSession.tr("Developer", QbzSession.trRev), section: 7 }
     ].concat(QbzOrbit.enabled ? [{ label: "Orbit", section: 11 }] : []).concat(root.sandboxed ? [{ label: (doc.dev || ({})).installMethod === "snap"
         ? QbzSession.tr("Snap", QbzSession.trRev) : QbzSession.tr("Flatpak", QbzSession.trRev), section: 8 }] : [])
@@ -282,6 +283,12 @@ Item {
                         onClicked: QbzBridge.settingsSetSection(9)
                     }
                     SubNavItem {
+                        name: "refresh-cw"
+                        label: QbzSession.tr("Updates", QbzSession.trRev)
+                        active: root.section === 12
+                        onClicked: QbzBridge.settingsSetSection(12)
+                    }
+                    SubNavItem {
                         name: "bug"
                         label: QbzSession.tr("Developer", QbzSession.trRev)
                         active: root.section === 7
@@ -413,6 +420,12 @@ Item {
                             width: parent ? parent.width : 0
                         }
 
+                        Panel {
+                            panelIndex: 12
+                            sourceComponent: Component {
+                                UpdatesSettings { width: parent.width; kioskHost: root.kioskHost }
+                            }
+                        }
                         OrbitSettingsPanel {
                             width: parent.width
                             selected: root.section === 11

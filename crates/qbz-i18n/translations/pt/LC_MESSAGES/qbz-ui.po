@@ -7138,3 +7138,112 @@ msgstr "Este host não permite consultar sua biblioteca."
 #. Experimental Orbit host inspection and persistent remote context.
 msgid "Verify host"
 msgstr "Verificar host"
+
+
+#: qbz-qt updates
+msgid "A new version of QBZ is available."
+msgstr "Uma nova versão do QBZ está disponível."
+
+
+#: qbz-qt updates
+msgid "Cancel download"
+msgstr "Cancelar download"
+
+
+#: qbz-qt updates
+msgid "Check for new releases on launch"
+msgstr "Buscar novas versões ao iniciar"
+
+
+#: qbz-qt updates
+msgid "Check for updates now"
+msgstr "Buscar atualizações agora"
+
+
+#: qbz-qt updates
+msgid "Checking for updates..."
+msgstr "Buscando atualizações..."
+
+
+#: qbz-qt updates
+msgid "Current version"
+msgstr "Versão atual"
+
+
+#: qbz-qt updates
+msgid "Download and install"
+msgstr "Baixar e instalar"
+
+
+#: qbz-qt updates
+msgid "Downloading update..."
+msgstr "Baixando atualização..."
+
+
+#: qbz-qt updates
+msgid "Installation"
+msgstr "Instalação"
+
+
+#: qbz-qt updates
+msgid "Installing update..."
+msgstr "Instalando atualização..."
+
+
+#: qbz-qt updates
+msgid "Show changelog for current version"
+msgstr "Mostrar alterações da versão atual"
+
+
+#: qbz-qt updates
+msgid "Skip this version"
+msgstr "Ignorar esta versão"
+
+
+#: qbz-qt updates
+msgid "The update could not be completed. Please try again."
+msgstr "Não foi possível concluir a atualização. Tente novamente."
+
+
+#: qbz-qt updates
+msgid "Update QBZ through your installation source. Packages may become available after the GitHub release."
+msgstr "Atualize o QBZ pela fonte usada na instalação. Os pacotes podem ficar disponíveis após o lançamento no GitHub."
+
+
+#: qbz-qt updates
+msgid "Update cancelled."
+msgstr "Atualização cancelada."
+
+
+#: qbz-qt updates
+msgid "Update installed. Close and reopen QBZ to use the new version."
+msgstr "Atualização instalada. Feche e reabra o QBZ para usar a nova versão."
+
+
+#: qbz-qt updates
+msgid "Updates"
+msgstr "Atualizações"
+
+
+#: qbz-qt updates
+msgid "Verifying update signature..."
+msgstr "Verificando a assinatura da atualização..."
+
+
+#: qbz-qt updates
+msgid "Visit release page"
+msgstr "Ver página do lançamento"
+
+
+#: qbz-qt updates
+msgid "You are using the latest version of QBZ."
+msgstr "Você está usando a versão mais recente do QBZ."
+
+
+#: qbz-qt updates
+msgid "System / manual"
+msgstr "Sistema / manual"
+
+#: qbz-qt/qml/shell/UpdatesModal.qml
+msgid "Update ready. Close QBZ to finish installation. It will reopen automatically."
+msgstr "Atualização pronta. Feche o QBZ para concluir a instalação. Ele será reaberto automaticamente."
