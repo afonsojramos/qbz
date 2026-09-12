@@ -7121,3 +7121,108 @@ msgstr "このホストはライブラリの参照に対応していません。
 #. Experimental Orbit host inspection and persistent remote context.
 msgid "Verify host"
 msgstr "ホストを確認"
+
+
+#: qbz-qt updates
+msgid "A new version of QBZ is available."
+msgstr "QBZの新しいバージョンが利用可能です。"
+
+
+#: qbz-qt updates
+msgid "Cancel download"
+msgstr "ダウンロードをキャンセル"
+
+
+#: qbz-qt updates
+msgid "Check for new releases on launch"
+msgstr "起動時に新しいバージョンを確認"
+
+
+#: qbz-qt updates
+msgid "Check for updates now"
+msgstr "今すぐ更新を確認"
+
+
+#: qbz-qt updates
+msgid "Checking for updates..."
+msgstr "更新を確認中..."
+
+
+#: qbz-qt updates
+msgid "Current version"
+msgstr "現在のバージョン"
+
+
+#: qbz-qt updates
+msgid "Download and install"
+msgstr "ダウンロードしてインストール"
+
+
+#: qbz-qt updates
+msgid "Downloading update..."
+msgstr "更新をダウンロード中..."
+
+
+#: qbz-qt updates
+msgid "Installation"
+msgstr "インストール方法"
+
+
+#: qbz-qt updates
+msgid "Installing update..."
+msgstr "更新をインストール中..."
+
+
+#: qbz-qt updates
+msgid "Show changelog for current version"
+msgstr "現在のバージョンの変更履歴を表示"
+
+
+#: qbz-qt updates
+msgid "Skip this version"
+msgstr "このバージョンをスキップ"
+
+
+#: qbz-qt updates
+msgid "The update could not be completed. Please try again."
+msgstr "更新を完了できませんでした。もう一度お試しください。"
+
+
+#: qbz-qt updates
+msgid "Update QBZ through your installation source. Packages may become available after the GitHub release."
+msgstr "インストール元からQBZを更新してください。パッケージはGitHubでのリリース後に利用可能になる場合があります。"
+
+
+#: qbz-qt updates
+msgid "Update cancelled."
+msgstr "更新をキャンセルしました。"
+
+
+#: qbz-qt updates
+msgid "Update installed. Close and reopen QBZ to use the new version."
+msgstr "更新をインストールしました。新しいバージョンを使うにはQBZを閉じて再度開いてください。"
+
+
+#: qbz-qt updates
+msgid "Updates"
+msgstr "更新"
+
+
+#: qbz-qt updates
+msgid "Verifying update signature..."
+msgstr "更新の署名を検証中..."
+
+
+#: qbz-qt updates
+msgid "Visit release page"
+msgstr "リリースページを開く"
+
+
+#: qbz-qt updates
+msgid "You are using the latest version of QBZ."
+msgstr "最新バージョンのQBZを使用しています。"
+
+
+#: qbz-qt updates
+msgid "System / manual"
+msgstr "システム / 手動"

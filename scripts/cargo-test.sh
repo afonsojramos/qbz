@@ -75,6 +75,10 @@ cargo test \
   --no-fail-fast \
   "$@"
 
+say "gate: signed updater regression suite present"
+n=$(cargo test --manifest-path crates/Cargo.toml -p qbz-updater --lib -- --list 2>/dev/null | grep -c ': test$' || true)
+(( n >= 11 )) || { echo "Updater suite has $n tests (expected >= 11)"; exit 1; }
+
 say "gate: Orbit HTTP host isolation and library profile regressions present"
 # The workspace run executes these. Keep actual socket/gate/shutdown tests and
 # profile isolation from disappearing during the next extraction phases.

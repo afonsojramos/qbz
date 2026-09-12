@@ -34,6 +34,8 @@
 # pre-release
 # integration so regressions land before a release cut.
 
+# Shared cargo-test.sh also gates signed updater verification, version selection
+# and preference preservation; qt-runtime-gate.sh covers the update UI.
 # Shared cargo-test.sh also gates Orbit HTTP host isolation, library profiles
 # and the SSE public-identity projection. No separate test command to drift.
 name: test-crates
@@ -57,6 +59,7 @@ on:
       - "scripts/qml-tests/**"
       - "scripts/test-search-local-qml.sh"
       - "scripts/test-orbit-qml.sh"
+      - "scripts/test-updates-qml.sh"
       - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   push:
@@ -76,6 +79,7 @@ on:
       - "scripts/qml-tests/**"
       - "scripts/test-search-local-qml.sh"
       - "scripts/test-orbit-qml.sh"
+      - "scripts/test-updates-qml.sh"
       - "scripts/test-orbit-daemon.py"
       - ".github/workflows/test-crates.yml"
   workflow_dispatch:

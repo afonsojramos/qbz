@@ -333,6 +333,20 @@ subscription, Gatekeeper blocks its first run. On recent macOS versions
   it's a one-time unlock for this copy of the app; updates installed through
   QBZ's own updater don't need it again.
 
+### Updates
+
+Use **Check for updates now** in the app menu or **Settings → Updates**.
+Launch checks are optional, preserve existing preferences, and notify only
+after a stable release is at least 12 hours old. Manual checks find new stable
+releases immediately and report network errors separately from “up to date”.
+
+AppImage and upstream macOS `.app` installations can download and install
+signed updates from QBZ. Close and reopen the app after installation. macOS
+builds signed by another distributor, including the notarized community
+builds, keep their original update channel. For Flatpak, Snap, APT/RPM, AUR,
+Gentoo, Nix, Homebrew, Windows and manual installs, update through the original
+installation source; its package may arrive after the GitHub release.
+
 ## Features
 
 ### Audio and playback

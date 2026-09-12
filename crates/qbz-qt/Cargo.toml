@@ -12,6 +12,7 @@ name = "qbz"
 path = "src/main.rs"
 
 [dependencies]
+qbz-updater = { path = "../qbz-updater" }
 qbz-control = { path = "../qbz-control" }
 cxx = "1"
 cxx-qt = "0.7"

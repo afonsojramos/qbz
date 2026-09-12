@@ -48,9 +48,14 @@ Rectangle {
     // in a WM-less session.
     readonly property bool isQbzShellRoot: true
     focus: true
-    Component.onCompleted: root.forceActiveFocus()
+    Component.onCompleted: {
+        root.forceActiveFocus()
+        Qt.callLater(function () { QbzAbout.updatesLaunch() })
+    }
 
     QbzTheme { id: theme }
+    UpdatesModal { kioskHost: true }
+    WhatsNewModal { }
 
     /// The back bar's one button form: 44x36, radius-sm hover fill, a 20px
     /// glyph. `available` dims the glyph and disarms the area (Back/Forward

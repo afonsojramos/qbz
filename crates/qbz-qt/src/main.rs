@@ -196,6 +196,7 @@ mod log_viewer_qt;
 // other two are plain controller modules and must NOT be.
 mod about_bridge;
 mod about_qt;
+mod updates_qt;
 mod library_bulk;
 mod library_db_qt;
 mod library_prefs;

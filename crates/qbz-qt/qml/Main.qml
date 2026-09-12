@@ -940,6 +940,10 @@ ApplicationWindow {
 
     property bool quitAccepted: false
     function requestQuit() {
+        if (JSON.parse(QbzAbout.updatesJson).phase === "installing") {
+            QbzAbout.updatesCheck()
+            return
+        }
         if (quitAccepted || quitConfirmation.opened)
             return
         if (!QbzTray.confirmQuitEnabled()) {
@@ -955,6 +959,12 @@ ApplicationWindow {
     }
 
     function finishQuit() {
+        // The download may have reached replacement while a quit confirmation
+        // was open. Check again before arming the hard-exit watchdog.
+        if (JSON.parse(QbzAbout.updatesJson).phase === "installing") {
+            QbzAbout.updatesCheck()
+            return
+        }
         if (quitAccepted)
             return
         quitAccepted = true

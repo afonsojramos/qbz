@@ -1498,6 +1498,14 @@ Rectangle {
                 }
             }
             AppMenuItem {
+                name: "refresh-cw"
+                label: QbzSession.tr("Check for updates now", QbzSession.trRev)
+                onClicked: {
+                    appMenu.close()
+                    QbzAbout.updatesCheck()
+                }
+            }
+            AppMenuItem {
                 name: "wand-sparkles"
                 label: QbzSession.tr("What's New", QbzSession.trRev)
                 onClicked: {

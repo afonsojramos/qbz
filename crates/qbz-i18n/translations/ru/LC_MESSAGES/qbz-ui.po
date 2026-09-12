@@ -7159,3 +7159,108 @@ msgstr "Этот хост не поддерживает просмотр биб�
 #. Experimental Orbit host inspection and persistent remote context.
 msgid "Verify host"
 msgstr "Проверить хост"
+
+
+#: qbz-qt updates
+msgid "A new version of QBZ is available."
+msgstr "Доступна новая версия QBZ."
+
+
+#: qbz-qt updates
+msgid "Cancel download"
+msgstr "Отменить загрузку"
+
+
+#: qbz-qt updates
+msgid "Check for new releases on launch"
+msgstr "Проверять новые версии при запуске"
+
+
+#: qbz-qt updates
+msgid "Check for updates now"
+msgstr "Проверить обновления сейчас"
+
+
+#: qbz-qt updates
+msgid "Checking for updates..."
+msgstr "Проверка обновлений..."
+
+
+#: qbz-qt updates
+msgid "Current version"
+msgstr "Текущая версия"
+
+
+#: qbz-qt updates
+msgid "Download and install"
+msgstr "Скачать и установить"
+
+
+#: qbz-qt updates
+msgid "Downloading update..."
+msgstr "Загрузка обновления..."
+
+
+#: qbz-qt updates
+msgid "Installation"
+msgstr "Установка"
+
+
+#: qbz-qt updates
+msgid "Installing update..."
+msgstr "Установка обновления..."
+
+
+#: qbz-qt updates
+msgid "Show changelog for current version"
+msgstr "Показать изменения текущей версии"
+
+
+#: qbz-qt updates
+msgid "Skip this version"
+msgstr "Пропустить эту версию"
+
+
+#: qbz-qt updates
+msgid "The update could not be completed. Please try again."
+msgstr "Не удалось завершить обновление. Повторите попытку."
+
+
+#: qbz-qt updates
+msgid "Update QBZ through your installation source. Packages may become available after the GitHub release."
+msgstr "Обновите QBZ через источник установки. Пакеты могут появиться позже выпуска на GitHub."
+
+
+#: qbz-qt updates
+msgid "Update cancelled."
+msgstr "Обновление отменено."
+
+
+#: qbz-qt updates
+msgid "Update installed. Close and reopen QBZ to use the new version."
+msgstr "Обновление установлено. Закройте и снова откройте QBZ, чтобы использовать новую версию."
+
+
+#: qbz-qt updates
+msgid "Updates"
+msgstr "Обновления"
+
+
+#: qbz-qt updates
+msgid "Verifying update signature..."
+msgstr "Проверка подписи обновления..."
+
+
+#: qbz-qt updates
+msgid "Visit release page"
+msgstr "Открыть страницу выпуска"
+
+
+#: qbz-qt updates
+msgid "You are using the latest version of QBZ."
+msgstr "Вы используете последнюю версию QBZ."
+
+
+#: qbz-qt updates
+msgid "System / manual"
+msgstr "Системная / ручная"

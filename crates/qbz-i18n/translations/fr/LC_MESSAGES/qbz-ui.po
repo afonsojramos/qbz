@@ -7138,3 +7138,108 @@ msgstr "Cet hôte ne permet pas de consulter sa bibliothèque."
 #. Experimental Orbit host inspection and persistent remote context.
 msgid "Verify host"
 msgstr "Vérifier l’hôte"
+
+
+#: qbz-qt updates
+msgid "A new version of QBZ is available."
+msgstr "Une nouvelle version de QBZ est disponible."
+
+
+#: qbz-qt updates
+msgid "Cancel download"
+msgstr "Annuler le téléchargement"
+
+
+#: qbz-qt updates
+msgid "Check for new releases on launch"
+msgstr "Rechercher de nouvelles versions au démarrage"
+
+
+#: qbz-qt updates
+msgid "Check for updates now"
+msgstr "Rechercher des mises à jour"
+
+
+#: qbz-qt updates
+msgid "Checking for updates..."
+msgstr "Recherche de mises à jour..."
+
+
+#: qbz-qt updates
+msgid "Current version"
+msgstr "Version actuelle"
+
+
+#: qbz-qt updates
+msgid "Download and install"
+msgstr "Télécharger et installer"
+
+
+#: qbz-qt updates
+msgid "Downloading update..."
+msgstr "Téléchargement de la mise à jour..."
+
+
+#: qbz-qt updates
+msgid "Installation"
+msgstr "Installation"
+
+
+#: qbz-qt updates
+msgid "Installing update..."
+msgstr "Installation de la mise à jour..."
+
+
+#: qbz-qt updates
+msgid "Show changelog for current version"
+msgstr "Afficher les changements de la version actuelle"
+
+
+#: qbz-qt updates
+msgid "Skip this version"
+msgstr "Ignorer cette version"
+
+
+#: qbz-qt updates
+msgid "The update could not be completed. Please try again."
+msgstr "La mise à jour a échoué. Veuillez réessayer."
+
+
+#: qbz-qt updates
+msgid "Update QBZ through your installation source. Packages may become available after the GitHub release."
+msgstr "Mettez QBZ à jour depuis sa source d’installation. Les paquets peuvent être disponibles après la publication sur GitHub."
+
+
+#: qbz-qt updates
+msgid "Update cancelled."
+msgstr "Mise à jour annulée."
+
+
+#: qbz-qt updates
+msgid "Update installed. Close and reopen QBZ to use the new version."
+msgstr "Mise à jour installée. Fermez puis rouvrez QBZ pour utiliser la nouvelle version."
+
+
+#: qbz-qt updates
+msgid "Updates"
+msgstr "Mises à jour"
+
+
+#: qbz-qt updates
+msgid "Verifying update signature..."
+msgstr "Vérification de la signature de la mise à jour..."
+
+
+#: qbz-qt updates
+msgid "Visit release page"
+msgstr "Voir la page de la version"
+
+
+#: qbz-qt updates
+msgid "You are using the latest version of QBZ."
+msgstr "Vous utilisez la dernière version de QBZ."
+
+
+#: qbz-qt updates
+msgid "System / manual"
+msgstr "Système / manuelle"
