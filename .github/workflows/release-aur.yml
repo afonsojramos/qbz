@@ -115,14 +115,33 @@ jobs:
             fi
           fi
 
+          # Distinct from should_publish: a deliberate workflow_dispatch
+          # (even with publish=false) still runs the full download +
+          # checksum + stamp pipeline — that's the documented
+          # dry-run-then-manual-push path (scripts/packaging/aur_publish.sh
+          # --push). Only the fully automatic workflow_run path with no
+          # AUR_SSH_PRIVATE_KEY skips it: "Wait for all release assets"
+          # polls vicrodh/qbz's own Releases, never github.repository's,
+          # for up to 30 minutes before failing — meaningless for a fork's
+          # own tag, which never lands there.
+          if [[ "$EVENT_NAME" == workflow_dispatch || "$should_publish" == true ]]; then
+            should_run_pipeline=true
+          else
+            should_run_pipeline=false
+          fi
+
           {
             echo "version=$version"
             echo "tag=$tag"
             echo "pkgrel=$pkgrel"
             echo "should_publish=$should_publish"
+            echo "should_run_pipeline=$should_run_pipeline"
           } >> "$GITHUB_OUTPUT"
 
       - name: Wait for all release assets
+        # Always polls vicrodh/qbz's own Releases (see should_run_pipeline's
+        # comment above) — skip on the fully-automatic no-token path.
+        if: steps.release.outputs.should_run_pipeline == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -156,6 +175,7 @@ jobs:
 
       - name: Download sources and calculate checksums
         id: checksums
+        if: steps.release.outputs.should_run_pipeline == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -229,6 +249,7 @@ jobs:
           done
 
       - name: Stamp PKGBUILDs
+        if: steps.release.outputs.should_run_pipeline == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
           PKGREL: ${{ steps.release.outputs.pkgrel }}
@@ -254,6 +275,7 @@ jobs:
           sed -i "s/^sha256sums=.*/sha256sums=('${SOURCE_SHA}' '${VENDOR_SHA}')/" /tmp/aur-qbzd/PKGBUILD
 
       - name: Generate and validate .SRCINFO files
+        if: steps.release.outputs.should_run_pipeline == 'true'
         run: |
           set -euo pipefail
           for package in qbz-bin qbz qbzd-bin qbzd; do
@@ -290,7 +312,10 @@ jobs:
           done
 
       - name: Upload dry-run package metadata
-        if: steps.release.outputs.should_publish != 'true'
+        # Only when the pipeline actually ran and stamped something — not
+        # on the fully-automatic no-token path, which skipped straight past
+        # Wait/Download/Stamp/SRCINFO above.
+        if: steps.release.outputs.should_run_pipeline == 'true' && steps.release.outputs.should_publish != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: aur-four-package-metadata

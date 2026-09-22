@@ -52,12 +52,18 @@ jobs:
           RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           DISPATCH_VERSION: ${{ inputs.version }}
           DISPATCH_PUBLISH: ${{ inputs.publish }}
+          # Same gate as release-aur.yml's HAS_AUR_KEY: on a fork with no
+          # APT_REPO_TOKEN, an automatic (workflow_run) run has nothing to
+          # publish to anyway — qbz-overlay is vicrodh's own repo, not
+          # github.repository's. Skips the distfile download below too
+          # (see its own comment) rather than just the final push.
+          HAS_OVERLAY_TOKEN: ${{ secrets.APT_REPO_TOKEN != '' }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_NAME" == workflow_run ]]; then
             tag="$RUN_HEAD_BRANCH"
             version="${tag#v}"
-            should_publish=true
+            should_publish="$HAS_OVERLAY_TOKEN"
           else
             version="$DISPATCH_VERSION"
             tag="v${version}"
@@ -90,8 +96,22 @@ jobs:
             fi
           fi
 
+          # Distinct from should_publish: a deliberate workflow_dispatch
+          # (even with publish=false) still runs the full distfile
+          # download + Manifest pipeline — that's the documented
+          # dry-run-then-manual-push path. Only the fully automatic
+          # workflow_run path with no token skips it (its distfiles will
+          # never exist upstream for this fork's own tag — see the
+          # Download distfiles step).
+          if [[ "$EVENT_NAME" == workflow_dispatch || "$should_publish" == true ]]; then
+            should_run_pipeline=true
+          else
+            should_run_pipeline=false
+          fi
+
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "should_run_pipeline=$should_run_pipeline" >> "$GITHUB_OUTPUT"
 
       - name: Clone overlay repo
         env:
@@ -128,6 +148,12 @@ jobs:
           done
 
       - name: Download distfiles
+        # Always fetches from vicrodh/qbz's own Releases, never
+        # github.repository's — meaningless (and, worse, a ~30-minute retry
+        # loop before failing) for a fork's own tag on the fully-automatic
+        # path, which will never exist there. A deliberate workflow_dispatch
+        # dry run still wants this (see should_run_pipeline's own comment).
+        if: steps.release.outputs.should_run_pipeline == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -159,6 +185,8 @@ jobs:
           done
 
       - name: Generate all Manifests
+        # Needs the real distfiles from the step above (same gate).
+        if: steps.release.outputs.should_run_pipeline == 'true'
         env:
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -201,6 +229,8 @@ jobs:
             "qbz-${VERSION}-cargo-vendor.tar.xz"
 
       - name: Validate generated overlay metadata
+        env:
+          SHOULD_RUN_PIPELINE: ${{ steps.release.outputs.should_run_pipeline }}
         run: |
           set -euo pipefail
           # xmllint ships in libxml2-utils, not on the runner by default.
@@ -211,7 +241,11 @@ jobs:
             directory="/tmp/qbz-overlay/media-sound/${package}"
             bash -n "${directory}"/*.ebuild
             xmllint --noout "${directory}/metadata.xml"
-            test "$(wc -l < "${directory}/Manifest")" -ge 4
+            # Manifest only exists when should_run_pipeline (it needs the real
+            # distfiles the Download/Generate steps above skip otherwise).
+            if [[ "$SHOULD_RUN_PIPELINE" == true ]]; then
+              test "$(wc -l < "${directory}/Manifest")" -ge 4
+            fi
           done
 
       - name: Commit and push
@@ -229,7 +263,10 @@ jobs:
           git -C /tmp/qbz-overlay push
 
       - name: Upload dry-run overlay metadata
-        if: steps.release.outputs.should_publish != 'true'
+        # Only when the pipeline actually ran and produced something to
+        # upload — not on the fully-automatic no-token path, which skipped
+        # straight past Download/Generate above.
+        if: steps.release.outputs.should_run_pipeline == 'true' && steps.release.outputs.should_publish != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: gentoo-four-package-dry-run
