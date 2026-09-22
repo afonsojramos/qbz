@@ -1,4 +1,4 @@
-# CI for the crates/ workspace on the integration branch.
+# CI for the crates/ workspace, gated on every PR against main.
 #
 # Playback memory presets: shared persistence/migration, live budgets and growth;
 # Qt profile descriptions/selection are covered by the shared QML runtime gate.
@@ -64,47 +64,7 @@ name: test-crates
 
 on:
   pull_request:
-    # pre-release is the real base; main is listed so a PR opened against main
-    # still runs once before redirect-pr-to-prerelease retargets it.
-    branches: [pre-release, main]
-    paths:
-      - "crates/**"
-      - "scripts/cargo-test.sh"
-      - "scripts/install.sh"
-      - "scripts/test-installer.py"
-      - "scripts/test_qt_library.mjs"
-      - "scripts/test_qt_purchases_navigation.mjs"
-      - "scripts/qt-*.py"
-      - "scripts/qt-*.sh"
-      - "scripts/test_qt_build_gates.py"
-      - "scripts/packaging/windows_crt.py"
-      - "scripts/packaging/test_windows_crt.py"
-      - "scripts/packaging/smoke_release.py"
-      - "scripts/packaging/test_smoke_release.py"
-      - "scripts/qml-audits/**"
-      - "scripts/qml-tests/**"
-      - "scripts/test-search-local-qml.sh"
-      - "scripts/test-orbit-qml.sh"
-      - "scripts/test-updates-qml.sh"
-      - "scripts/test-playback-cache-qml.sh"
-      - "scripts/test-text-edit-menu-qml.sh"
-      - "scripts/test-compact-seek-qml.sh"
-      - "scripts/test-library-folders-qml.sh"
-      - "scripts/test-array-model-qml.sh"
-      - "scripts/test-keyed-model-qml.sh"
-      - "scripts/test-multi-select-qml.sh"
-      - "scripts/test-track-row-click-qml.sh"
-      - "scripts/test-settings-fieldset-qml.sh"
-      - "scripts/test-remote-volume-qml.sh"
-      - "scripts/test-miniplayer-qml.sh"
-      - "scripts/test_qt_window_lifecycle.mjs"
-      - "scripts/test-wallpaper-field-qml.sh"
-      - "scripts/test-card-menu-qml.sh"
-      - "scripts/test-orbit-daemon.py"
-      - ".github/workflows/test-crates.yml"
-  push:
-    # Integration branch only — never main (a push to main is a release merge).
-    branches: [pre-release]
+    branches: [main]
     paths:
       - "crates/**"
       - "scripts/cargo-test.sh"
