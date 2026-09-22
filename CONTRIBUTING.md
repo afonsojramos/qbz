@@ -93,9 +93,37 @@ When ready to release:
 git checkout main
 git merge pre-release
 git push origin main
-git tag vX.Y.Z
-git push origin vX.Y.Z
 ```
+
+**Do not `git tag` by hand anymore.** [release-please](https://github.com/googleapis/release-please)
+(`.github/workflows/release-please.yml`) watches `main` and, from the
+Conventional Commits in the merge above, opens or updates a "release PR"
+proposing the next version (bumping `crates/Cargo.toml`'s workspace version
+and a generated root `CHANGELOG.md`). **Merging that PR is the release-cut
+action** — release-please then creates the `vX.Y.Z` tag and a GitHub Release
+itself, which is what fans out to every distribution pipeline
+(`release-linux`, `-linux-aarch64`, `-macos`, `-windows`, `-snap`,
+`-flatpak` directly; `release-aur`/`release-gentoo` and
+`release-updater-manifest` right after; `build-debian`/`publish-ppa` for the
+Launchpad PPA). Do not also push a manual tag — that would race or duplicate
+release-please's own tag for the same version.
+
+`release-please.yml` needs a PAT in the `RELEASE_PLEASE_TOKEN` repository
+secret (a tag/release made with the default `GITHUB_TOKEN` doesn't trigger
+other workflows — GitHub's own loop-prevention). Current token is a
+fine-grained PAT scoped to this repo only (Contents + Pull requests:
+read/write), **expires 2026-12-21** — regenerate on
+github.com/settings/personal-access-tokens before then and update the
+secret, or the whole release chain silently stops firing on the next tag.
+
+The generated root `CHANGELOG.md` is a mechanical, one-line-per-commit log —
+**it does not replace** `docs/release-X.Y.Z/{CHANGELOG.md,CHANGELOG_FULL.md,TAG_DETAILS.md}`,
+which stay hand-curated, user-facing release notes (with codenames, grouped
+by theme). After merging the release-please PR and letting it cut the tag +
+GitHub Release, a maintainer still writes/updates that release's
+`docs/release-X.Y.Z/` files as before, and replaces the auto-generated
+GitHub Release description with the curated `TAG_DETAILS.md` content before
+announcing.
 
 This is done exclusively by maintainers.
 

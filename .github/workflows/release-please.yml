@@ -1,0 +1,23 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v5
+        with:
+          # A tag/release created with the default GITHUB_TOKEN doesn't
+          # trigger other workflows (GitHub's loop-prevention) — build-debian.yml
+          # would never fire on the tag it creates. A PAT makes the tag push
+          # look like a real user push instead.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
