@@ -144,7 +144,7 @@ jobs:
           workspaces: crates -> target
           shared-key: qbzd-linux-aarch64
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/pre-release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: system deps
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libjack-jackd2-dev libdbus-1-dev libssl-dev
       - name: slint-free dep-graph gate

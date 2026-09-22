@@ -33,8 +33,7 @@
 #
 # Rewritten 2026-08-25 for the Slint -> Qt frontend switch. Release packaging
 # stays tag/dispatch-only; this workflow also tests optimized startup on
-# pre-release
-# integration so regressions land before a release cut.
+# every PR against main so regressions land before a release cut.
 
 # Shared cargo-test.sh requires the renderer capability wire fixture and
 # volume/mute rejection before renderer execution or reporting.
@@ -144,7 +143,7 @@ jobs:
           workspaces: crates -> target
           shared-key: test-crates-linux
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/pre-release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The shared script also gates handoff execution, PCM partial progress,
       # cache acquisition provenance and bounded CMAF assembly regressions.
@@ -246,7 +245,7 @@ jobs:
           workspaces: crates -> target
           shared-key: qt-gate-${{ env.QT_VERSION }}
           cache-on-failure: true
-          save-if: ${{ github.ref == 'refs/heads/pre-release' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # The exact QT=1 half of scripts/cargo-test.sh, minus its `test` job
       # (already run above) and its shader gate (the shader-gate job, so qsb
