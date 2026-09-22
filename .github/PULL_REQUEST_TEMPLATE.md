@@ -34,7 +34,6 @@ transcripts are not required.
 
 ## Checklist
 
-- [ ] This PR targets `pre-release`, not `main`.
 - [ ] I reviewed the complete diff and described how I verified the change.
 - [ ] My change targets the live Qt/Rust tree. The Slint crates and the deleted
       Svelte/Tauri trees are historical references and cannot accept fixes.
