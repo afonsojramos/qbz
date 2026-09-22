@@ -42,60 +42,59 @@ Examples:
 
 ## Branch workflow
 
-We use a **pre-release integration branch** to keep `main` stable and release-ready at all times.
+Every PR targets `main` directly — there is no separate integration branch.
+`main` accumulates commits between releases; CI gates each PR before merge
+(`test-crates.yml` and friends run on `pull_request` against `main`), and
+cutting a release is a separate, deliberate decision (see Cutting a release
+below), not tied to any particular merge.
 
 ```
 feature/xyz ──┐
-bugfix/abc  ──┼──> pre-release ──> main (tagged release)
+bugfix/abc  ──┼──> main ──(release-please PR, merged when ready)──> vX.Y.Z tag
 hotfix/123  ──┘
 ```
 
+Earlier revisions of this project used a `pre-release` integration branch
+(contributors merged there first; a maintainer periodically folded it into
+`main`). Dropped 2026-09-22: it relied on an active upstream to auto-sync
+from (`.github/pull.yml`'s hardreset from `vicrodh:pre-release`, since
+removed — see git history if you need the old process), and added a merge
+stage that wasn't earning its overhead for a small maintainer team.
+release-please's own release PR is now the equivalent checkpoint: nothing
+forces you to merge it the moment it appears, so commits can still
+accumulate and get reviewed together before a release ships.
+
 ### Branch hierarchy
 
-1. **`main`** - Releases ONLY. Protected branch. Merging here triggers a tagged release.
-2. **`pre-release`** - Integration branch. All features and fixes merge here first.
-3. **`feature/*`, `bugfix/*`, etc.** - Individual work branches.
+1. **`main`** — the only long-lived branch. Every PR targets it directly.
+2. **`feature/*`, `bugfix/*`, etc.** — individual work branches, per the naming scheme above.
 
 ### For contributors
 
-**All PRs must target `pre-release`, not `main`.**
-
-PRs targeting `main` will be closed and asked to retarget to `pre-release`.
+PRs target `main` directly. CI runs automatically before a maintainer merges.
 
 ### Procedure (maintainer)
 
 1. **Triage**
    - Confirm scope and that it does not touch protected areas (audio routing/backends, credential storage, etc.) unless requested.
-   - Verify PR targets `pre-release` (not `main`).
-2. **Check out the PR**
+   - Confirm CI is green.
+2. **Check out the PR** (optional, for local review/testing)
    - `gh pr checkout <PR_NUMBER>`
-3. **Rename the checked-out branch (local)**
-   - Use an `external` branch name so it's obvious these commits are third-party authored:
-   - `git branch -m <type>/external/<topic>`
-4. **Merge to pre-release**
-   - `git checkout pre-release`
-   - `git merge --no-ff <type>/external/<topic>`
-5. **Run checks**
+3. **Run checks**
    - Test or check each touched core crate from `crates/`.
    - For Qt/QML changes, run the relevant QML audits and use
      `./scripts/qt-run.sh` from the repository root when your platform can
      build the desktop application.
    - Never build the frozen Slint crates as validation for a live change.
-6. **Push pre-release**
-   - `git push origin pre-release`
-7. **Close the PR with a comment** explaining it was merged to `pre-release`.
+4. **Merge** the PR into `main` (see the merge-strategy note below for
+   preserving external authorship).
 
-### Releasing to main
+There is no forced cadence — merge as many PRs as you want before cutting a
+release.
 
-When ready to release:
+### Cutting a release
 
-```bash
-git checkout main
-git merge pre-release
-git push origin main
-```
-
-**Do not `git tag` by hand anymore.** [release-please](https://github.com/googleapis/release-please)
+**Do not `git tag` by hand.** [release-please](https://github.com/googleapis/release-please)
 (`.github/workflows/release-please.yml`) watches `main` and, from the
 Conventional Commits in the merge above, opens or updates a "release PR"
 proposing the next version (bumping `crates/Cargo.toml`'s workspace version
