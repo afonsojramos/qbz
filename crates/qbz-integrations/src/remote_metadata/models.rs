@@ -72,6 +72,11 @@ pub struct RemoteAlbumMetadata {
     pub title: String,
     /// Album artist
     pub artist: String,
+    /// Ordered artist-credit components. `artist` remains the display credit
+    /// including join phrases; these rows preserve identity without guessing
+    /// how a human-readable credit should be split.
+    #[serde(default)]
+    pub artist_credits: Vec<RemoteArtistCredit>,
     /// Release year
     pub year: Option<u16>,
     /// Genres/styles/tags
@@ -90,6 +95,19 @@ pub struct RemoteAlbumMetadata {
     pub disc_count: u8,
     /// URL to view on provider website
     pub source_url: Option<String>,
+    /// MusicBrainz release-group identity when the provider exposes it.
+    #[serde(default)]
+    pub release_group_id: Option<String>,
+}
+
+/// One component of an album or track artist credit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteArtistCredit {
+    pub name: String,
+    #[serde(default)]
+    pub join_phrase: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
 }
 
 /// Single track metadata
@@ -103,6 +121,16 @@ pub struct RemoteTrackMetadata {
     pub title: String,
     /// Duration in milliseconds (if available)
     pub duration_ms: Option<u32>,
+    /// Display credit, including intentional join phrases.
+    #[serde(default)]
+    pub artist_credit: String,
+    /// Ordered, typed credit components.
+    #[serde(default)]
+    pub artist_credits: Vec<RemoteArtistCredit>,
+    #[serde(default)]
+    pub recording_id: Option<String>,
+    #[serde(default)]
+    pub track_id: Option<String>,
 }
 
 /// Search request parameters

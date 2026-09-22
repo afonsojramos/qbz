@@ -1,0 +1,8 @@
+# No tar-ignore for crates/target/ here on purpose. dpkg-source's
+# --tar-ignore (used for "3.0 (native)" format instead of --diff-ignore,
+# which only affects non-native diffs) matches path components anywhere in
+# the tree, not just at the source root — a "target"-named pattern would
+# also strip any vendor/*/src/target/ subdirectory some vendored crate
+# happens to ship (not confirmed present today, but not worth the risk).
+# Instead, debian/scripts/prepare-offline-build.sh removes crates/target/
+# outright before packaging — see docs/LAUNCHPAD.md.

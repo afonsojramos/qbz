@@ -42,6 +42,16 @@ pub enum AudioBackendType {
     ///   bit-perfect ALSA-exclusive / DAC-passthrough paths.
     Jack,
 
+    /// WASAPI EXCLUSIVE (Windows) - the bit-perfect path.
+    /// - Takes the endpoint exclusively; other apps go silent
+    /// - No resampling: the DAC is commanded to the track's own rate
+    /// - Selecting a device is required, by ENDPOINT ID (Windows gives several
+    ///   endpoints the same friendly name)
+    /// The trait's `create_output_stream` for this type is the SHARED CPAL one:
+    /// the exclusive stream bypasses the trait entirely, exactly as ALSA Direct
+    /// and JACK do.
+    WasapiExclusive,
+
     /// System default backend (non-Linux platforms)
     /// - Uses CPAL default host (CoreAudio on macOS, WASAPI on Windows)
     /// - Automatic device selection via OS audio system
@@ -308,6 +318,14 @@ impl BackendManager {
             backends.push(AudioBackendType::SystemDefault);
         }
 
+        #[cfg(windows)]
+        {
+            // Offered unconditionally: whether a given DEVICE accepts exclusive
+            // mode is answered per device when the stream opens, not here, and
+            // hiding the backend would hide the answer too.
+            backends.push(AudioBackendType::WasapiExclusive);
+        }
+
         backends
     }
 
@@ -332,6 +350,14 @@ impl BackendManager {
                     );
                     Ok(Box::new(CpalDefaultBackend::new()?))
                 }
+            }
+            AudioBackendType::WasapiExclusive => {
+                // The SHARED stream, deliberately. `create_stream_for_backend`
+                // tries the exclusive stream first and only reaches here when
+                // that is impossible - no device chosen, or the endpoint
+                // refusing every format - so this is the graceful fallback
+                // rather than the intended path.
+                Ok(Box::new(CpalDefaultBackend::new()?))
             }
             AudioBackendType::SystemDefault => {
                 // "System": play through the OS default output via CPAL's default
@@ -390,7 +416,10 @@ impl BackendManager {
         // (e.g. a non-default socket name, or Flatpak where the socket path
         // differs but the pulse shim is bridged).
         if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
-            if std::path::Path::new(&runtime_dir).join("pipewire-0").exists() {
+            if std::path::Path::new(&runtime_dir)
+                .join("pipewire-0")
+                .exists()
+            {
                 return true;
             }
         }
@@ -453,6 +482,20 @@ impl AudioBackend for CpalDefaultBackend {
             .map(|desc| desc.name().to_string())
             .unwrap_or_else(|_| "Default Output".to_string());
 
+        // WINDOWS ONLY, additive. Endpoint FRIENDLY NAMES are not unique
+        // there: measured on a real box, three active render endpoints were
+        // all called "Altavoces" - the motherboard Realtek, a Bluetooth
+        // handsfree and a Cambridge Audio USB DAC. Matching the default by
+        // name would mark all three.
+        #[cfg(windows)]
+        let default_endpoint_id = default_device.id().ok().map(|i| i.1);
+
+        // Idempotent, and this is the natural place: the first time anything
+        // asks what devices exist is the first time it matters that the answer
+        // can go stale.
+        #[cfg(windows)]
+        crate::wasapi_backend::start_hotplug_watch();
+
         let mut devices = Vec::new();
         for device in self
             .host
@@ -463,23 +506,92 @@ impl AudioBackend for CpalDefaultBackend {
                 .description()
                 .map(|desc| desc.name().to_string())
                 .unwrap_or_else(|_| "Unknown Device".to_string());
-            let is_default = name == default_name;
 
             // On macOS, probe device capabilities via CoreAudio
             #[cfg(target_os = "macos")]
             let (supported_rates, max_rate, bus_type, is_hw) = { Self::probe_macos_device(&name) };
-            #[cfg(not(target_os = "macos"))]
+            // The placeholder for every platform that has no probe. On
+            // Windows `supported_rates`/`max_rate` are SHADOWED further down
+            // by the exclusive-mode sweep, which is why they carry an
+            // underscore prefix there and nowhere else.
+            #[cfg(all(not(target_os = "macos"), not(windows)))]
             let (supported_rates, max_rate, bus_type, is_hw): (
                 Option<Vec<u32>>,
                 Option<u32>,
                 Option<String>,
                 bool,
             ) = (None, None, None, false);
+            #[cfg(windows)]
+            let (bus_type, is_hw): (Option<String>, bool) = (None, false);
+
+            // WINDOWS ONLY, additive: id, display and description all come
+            // from fields cpal already fills but this backend ignored.
+            //
+            // `name` is the endpoint ("Altavoces") and repeats across
+            // devices; `driver()` is the ADAPTER ("Cambridge Audio USB Audio
+            // 2.0") and is what tells them apart; `id()` is the stable WASAPI
+            // endpoint GUID. Using the name as the id meant device_filter
+            // folded every same-named endpoint into one entry, so a USB DAC
+            // sharing the name "Altavoces" with the onboard card could not be
+            // selected at all - and an unselectable DAC blocks bit-perfect.
+            #[cfg(windows)]
+            let (id, display, description, is_default) = {
+                let driver = device
+                    .description()
+                    .ok()
+                    .and_then(|d| d.driver().map(str::to_string))
+                    .filter(|d| !d.is_empty() && d.as_str() != name.as_str());
+                let endpoint_id = device.id().ok().map(|i| i.1);
+                let display = match &driver {
+                    Some(d) => format!("{name} ({d})"),
+                    None => name.clone(),
+                };
+                let is_default = match (&endpoint_id, &default_endpoint_id) {
+                    (Some(a), Some(b)) => a == b,
+                    _ => name == default_name,
+                };
+                (
+                    endpoint_id.unwrap_or_else(|| name.clone()),
+                    display,
+                    driver,
+                    is_default,
+                )
+            };
+            #[cfg(not(windows))]
+            let (id, display, description, is_default) =
+                (name.clone(), name.clone(), None, name == default_name);
+
+            // WINDOWS: the rates the endpoint accepts in EXCLUSIVE mode, which
+            // is the only list that describes what reaches the converter
+            // untouched. Shadows the `(None, None, ...)` placeholder above.
+            //
+            // It cannot be inferred, which is the whole reason it is measured:
+            // the owner's DAC accepts 44100/48000/88200/96000/192000 and
+            // REFUSES 176400, so the 44.1 family stops at 88.2 while the 48
+            // family reaches 192. Cached per endpoint, so this costs once.
+            //
+            // `supported_rates` answers `None` when the endpoint could not
+            // be asked at all -- busy, gone, or COM refused -- and that must
+            // not reach a caller as "supports nothing", which would narrow a
+            // quality cap on the strength of a failed question. An endpoint
+            // that answers and lists nothing is reported the same way for the
+            // same reason: there is nothing to offer either way, and neither
+            // is a fact worth caching upstream.
+            #[cfg(windows)]
+            let (supported_rates, max_rate) = {
+                match crate::wasapi_backend::supported_rates(&id) {
+                    Some(rates) if !rates.is_empty() => {
+                        let top = rates.iter().copied().max();
+                        (Some(rates), top)
+                    }
+                    _ => (None, None),
+                }
+            };
 
             devices.push(AudioDevice {
-                id: name.clone(),
-                name,
-                description: None,
+                id,
+                name: display,
+                description,
                 is_default,
                 max_sample_rate: max_rate,
                 supported_sample_rates: supported_rates,
@@ -560,6 +672,14 @@ impl AudioBackend for CpalDefaultBackend {
                 .output_devices()
                 .map_err(|e| format!("Failed to enumerate devices: {}", e))?
                 .find(|d| {
+                    // WINDOWS ONLY, additive: enumerate_devices publishes the
+                    // stable endpoint GUID as the id there, because friendly
+                    // names repeat. The name comparison stays as the fallback
+                    // so a setting saved before this change still resolves.
+                    #[cfg(windows)]
+                    if d.id().map(|i| i.1 == *device_id).unwrap_or(false) {
+                        return true;
+                    }
                     d.description()
                         .map(|desc| desc.name() == device_id.as_str())
                         .unwrap_or(false)
@@ -587,10 +707,15 @@ impl AudioBackend for CpalDefaultBackend {
             .with_buffer_size(rodio::cpal::BufferSize::Fixed(
                 (config.sample_rate / 10).clamp(1024, 19200),
             ))
+            // #660: rodio's default callback eprintln!s every error of a
+            // wedged PCM (~1.7 M/s); the shared callback rate-limits it and
+            // latches the wedge for the audio thread to rebuild the stream.
+            .with_error_callback(crate::stream_health::error_callback("System default"))
             .open_stream()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
         #[cfg(not(target_os = "linux"))]
         let mixer_sink = builder
+            .with_error_callback(crate::stream_health::error_callback("System default"))
             .open_stream()
             .map_err(|e| format!("Failed to create output stream: {}", e))?;
 
@@ -694,9 +819,12 @@ impl CpalDefaultBackend {
                 builder
                     .with_supported_config(cfg)
                     .with_buffer_size(buffer_size)
+                    .with_error_callback(crate::stream_health::error_callback("System default"))
                     .open_stream()
             } else {
-                builder.open_stream()
+                builder
+                    .with_error_callback(crate::stream_health::error_callback("System default"))
+                    .open_stream()
             };
 
             let mixer_sink = match open_result {
@@ -928,5 +1056,87 @@ impl CpalDefaultBackend {
                 e
             );
         }
+    }
+}
+
+/// The two-method surface a bit-perfect direct stream owes the player's writer
+/// thread, plus the three it owes the engine around it.
+///
+/// It exists so ONE writer thread serves both `AlsaDirectStream` and
+/// `WasapiDirectStream` instead of two copies drifting apart. The set is
+/// exactly what `playback_engine.rs` already called on the ALSA stream - no
+/// method was invented for the trait, and neither implementation gains or
+/// loses behaviour by having it.
+#[derive(Debug)]
+pub struct DirectWriteError {
+    pub frames_written: usize,
+    pub canceled: bool,
+    pub message: String,
+}
+
+impl From<String> for DirectWriteError {
+    fn from(message: String) -> Self {
+        Self { frames_written: 0, canceled: false, message }
+    }
+}
+
+pub trait DirectSink: Send + Sync + 'static {
+    /// Interleaved f32, blocking when the device's queue is full. That block
+    /// IS the back-pressure that paces the writer thread.
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String>;
+    /// Backends with interruptible I/O override this to report partial progress.
+    fn write_f32_interruptible(&self, samples: &[f32], cancel: &std::sync::atomic::AtomicBool)
+        -> Result<usize, DirectWriteError> {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(DirectWriteError { frames_written: 0, canceled: true, message: "write canceled".into() });
+        }
+        let channels = usize::from(self.channels());
+        if channels == 0 || samples.len() % channels != 0 {
+            return Err(DirectWriteError::from("PCM input must contain whole frames".to_string()));
+        }
+        self.write_f32(samples).map_err(DirectWriteError::from)?;
+        Ok(samples.len() / channels)
+    }
+    /// Play out what is queued, then return. Bounded internally.
+    fn drain(&self) -> Result<(), String>;
+    fn drain_interruptible(&self, _cancel: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+        self.drain()
+    }
+    fn stop(&self) -> Result<(), String>;
+    fn sample_rate(&self) -> u32;
+    fn channels(&self) -> u16;
+
+    /// Frames submitted to the sink but not yet heard, when the backend can
+    /// measure them. The visualizer uses this only as latency compensation;
+    /// an unsupported query keeps playback intact and falls back to the
+    /// bounded direct-writer pacing.
+    fn playback_delay_frames(&self) -> Result<u64, String> {
+        Err("this direct sink cannot measure queued playback frames".to_string())
+    }
+
+    /// Log prefix for this sink. On the trait rather than a parameter so a
+    /// call site cannot label an ALSA stream "WASAPI" or the reverse - which
+    /// is exactly what a hard-coded label at four call sites invites.
+    fn log_label(&self) -> &'static str;
+
+    /// ALSA PCM identity for control-plane operations. Other direct sinks do
+    /// not expose an ALSA route and keep the default `None`.
+    fn alsa_device_id(&self) -> Option<&str> {
+        None
+    }
+
+    /// Device-side volume, where the sink has one.
+    ///
+    /// The default REFUSES rather than silently succeeding: a sink without a
+    /// hardware mixer must not pretend it moved the volume. Every call site is
+    /// already gated on the engine's `hardware_volume` flag, which is false for
+    /// any such sink - permanently so for WASAPI exclusive, where the phase B
+    /// contract rules out ISimpleAudioVolume.
+    fn set_hardware_volume(
+        &self,
+        _control: &crate::alsa_hardware_volume::AlsaMixerControlId,
+        _volume: f32,
+    ) -> Result<(), String> {
+        Err("this sink has no hardware volume".to_string())
     }
 }

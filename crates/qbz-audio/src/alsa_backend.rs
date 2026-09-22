@@ -22,6 +22,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Mutex;
 
+/// Keep scheduling headroom in milliseconds as hi-res rates increase. CPAL
+/// uses this as one period and allocates two periods on ALSA. Respect the
+/// driver's actual bounds, not the synthetic SupportedStreamConfig below.
+fn playback_period_frames(rate: u32, exclusive: bool, bounds: &SupportedBufferSize) -> u32 {
+    let target = (rate / if exclusive { 20 } else { 10 }).max(1);
+    match *bounds {
+        SupportedBufferSize::Range { min, max } if min > 0 && max >= min => target.clamp(min, max),
+        _ => target,
+    }
+}
+
 /// The PipeWire sink QBZ suspended to take a device exclusively (ALSA-direct
 /// EBUSY retry / CPAL-exclusive). Recorded by *resolved name* so
 /// `resume_suspended_sink` wakes the exact sink that was suspended — PipeWire
@@ -30,6 +41,134 @@ use std::sync::Mutex;
 /// suspended the default sink but never resumed it, leaving the rest of the
 /// system stuck on a suspended sink after exclusive playback.
 static SUSPENDED_SINK: Mutex<Option<String>> = Mutex::new(None);
+
+// ReserveDevice1 can make WirePlumber vacate a sink without our pactl busy
+// fallback ever running. Remember that sink before the reservation hides it.
+static EXCLUSIVE_SINKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn sinks_for_pcm(device: &str, inventory: &serde_json::Value) -> Vec<String> {
+    let Some((_, args)) = device.split_once(':') else {
+        return Vec::new();
+    };
+    let parts: Vec<_> = args.split(',').collect();
+    let card = parts
+        .iter()
+        .find_map(|p| p.strip_prefix("CARD="))
+        .or_else(|| parts.first().copied().filter(|p| !p.contains('=')));
+    let pcm = parts
+        .iter()
+        .find_map(|p| p.strip_prefix("DEV="))
+        .or_else(|| parts.get(1).copied().filter(|p| !p.contains('=')))
+        .unwrap_or("0");
+    let (Some(card), Ok(pcm)) = (card, pcm.parse::<u32>()) else {
+        return Vec::new();
+    };
+    let Some(sinks) = inventory.as_array() else {
+        return Vec::new();
+    };
+    sinks
+        .iter()
+        .filter_map(|sink| {
+            let props = sink.get("properties")?;
+            let card_matches = if let Ok(index) = card.parse::<u32>() {
+                property_number(&props["alsa.card"]) == Some(index)
+            } else {
+                props["alsa.id"].as_str() == Some(card)
+            };
+            (card_matches && property_number(&props["alsa.device"]) == Some(pcm))
+                .then(|| sink["name"].as_str().map(str::to_owned))
+                .flatten()
+        })
+        .collect()
+}
+
+fn property_number(value: &serde_json::Value) -> Option<u32> {
+    value
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .or_else(|| value.as_u64().and_then(|n| n.try_into().ok()))
+}
+
+/// Capture the actual DAC, never the default output, before ReserveDevice1
+/// can remove its sink. Failed PCM opens must not wake another owner's sink.
+pub(crate) fn with_sink_recovery<T>(
+    device: &str,
+    open: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let targets = pactl_output(&["--format=json", "list", "sinks"])
+        .map_err(|error| {
+            log::warn!("[ALSA Backend] Cannot capture recovery target for '{device}': {error}")
+        })
+        .ok()
+        .and_then(|output| serde_json::from_slice(&output).ok())
+        .map(|inventory| sinks_for_pcm(device, &inventory))
+        .unwrap_or_default();
+    open_with_recovery(targets, open, |targets| {
+        if let Ok(mut pending) = EXCLUSIVE_SINKS.lock() {
+            for sink in targets {
+                if !pending.contains(&sink) {
+                    log::info!("[ALSA Backend] Recording sink '{sink}' for recovery after exclusive playback");
+                    pending.push(sink);
+                }
+            }
+        }
+    })
+}
+
+fn open_with_recovery<T>(
+    targets: Vec<String>,
+    open: impl FnOnce() -> Result<T, String>,
+    record: impl FnOnce(Vec<String>),
+) -> Result<T, String> {
+    let stream = open()?;
+    record(targets);
+    Ok(stream)
+}
+
+// Bound each daemon interaction so recovery can finish inside the shutdown
+// watchdog. Drain stdout concurrently: sink inventories can exceed pipe capacity.
+fn pactl_output(args: &[&str]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+    let mut child = Command::new("pactl")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            result => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(match result {
+                    Err(error) => error.to_string(),
+                    _ => "pactl timed out after 500ms".into(),
+                });
+            }
+        }
+    };
+    let bytes = reader
+        .join()
+        .map_err(|_| "pactl output reader panicked".to_string())?
+        .map_err(|error| error.to_string())?;
+    let status = status?;
+    if status.success() {
+        Ok(bytes)
+    } else {
+        Err(format!("pactl {args:?}: {status}"))
+    }
+}
 
 /// Suspend the current default PipeWire sink so an exclusive ALSA device open
 /// can grab the hardware, recording the resolved sink name for later resume.
@@ -66,19 +205,154 @@ fn suspend_default_sink_for_exclusive() {
 }
 
 /// Resume the PipeWire sink QBZ suspended for exclusive access (issue #263 leak
-/// fix). No-op if QBZ did not suspend one — so it is safe to call on every
-/// stop/teardown. Call it once the exclusive device has actually been released
+/// fix), including sinks vacated through ReserveDevice1. Safe on every
+/// stop/teardown when no recovery is pending. Call it once the exclusive device has actually been released
 /// so the rest of the system can use the sink again.
-pub fn resume_suspended_sink() {
-    let target = match SUSPENDED_SINK.lock() {
-        Ok(mut guard) => guard.take(),
-        Err(_) => None,
-    };
-    if let Some(sink) = target {
-        let _ = std::process::Command::new("pactl")
-            .args(["suspend-sink", &sink, "0"])
-            .output();
-        log::info!("[ALSA Backend] Resumed PipeWire sink '{}'", sink);
+pub fn resume_suspended_sink() -> Result<(), String> {
+    let mut targets = EXCLUSIVE_SINKS
+        .lock()
+        .map_err(|_| "sink recovery lock poisoned".to_string())?
+        .clone();
+    if let Some(sink) = SUSPENDED_SINK
+        .lock()
+        .map_err(|_| "suspended sink lock poisoned".to_string())?
+        .clone()
+    {
+        if !targets.contains(&sink) {
+            targets.push(sink);
+        }
+    }
+    if targets.is_empty() {
+        log::info!("[ALSA Backend] No recorded PipeWire sinks to recover");
+        return Ok(());
+    }
+    let mut failures = Vec::new();
+    for sink in targets {
+        let result = resume_sink_with(&sink, |target| {
+            pactl_output(&["suspend-sink", target, "0"]).map(|_| ())
+        });
+        match result {
+            Ok(()) => {
+                if let Ok(mut pending) = EXCLUSIVE_SINKS.lock() {
+                    pending.retain(|target| target != &sink);
+                }
+                if let Ok(mut pending) = SUSPENDED_SINK.lock() {
+                    if pending.as_deref() == Some(sink.as_str()) {
+                        *pending = None;
+                    }
+                }
+                log::info!("[ALSA Backend] PipeWire accepted recovery of sink '{sink}'");
+            }
+            Err(error) => failures.push(error),
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(failures.join("; "))
+    }
+}
+
+fn resume_sink_with(
+    sink: &str,
+    mut resume: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    // Only success on the recorded sink counts. The default may now be HDMI
+    // or another DAC; waking it must not discard the pending recovery target.
+    let mut last_error = String::new();
+    for delay_ms in [0u64, 25, 75, 150] {
+        if delay_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+        match resume(sink) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(format!(
+        "cannot resume PipeWire sink '{sink}' after releasing ALSA: {last_error}"
+    ))
+}
+
+#[cfg(test)]
+mod sink_recovery_tests {
+    use super::{open_with_recovery, resume_sink_with, sinks_for_pcm};
+
+    fn inventory() -> serde_json::Value {
+        serde_json::json!([
+            {"name":"laptop", "properties":{"alsa.card":"0", "alsa.id":"PCH", "alsa.device":"0"}},
+            {"name":"dac", "properties":{"alsa.card":"1", "alsa.id":"ZH3", "alsa.device":"0"}},
+            {"name":"dac-other-pcm", "properties":{"alsa.card":1, "alsa.id":"ZH3", "alsa.device":1}}
+        ])
+    }
+
+    #[test]
+    fn captures_the_dac_by_card_and_pcm_not_the_laptop_output() {
+        for device in ["hw:CARD=ZH3,DEV=0", "plughw:1,0", "hw:DEV=0,CARD=ZH3"] {
+            assert_eq!(sinks_for_pcm(device, &inventory()), vec!["dac"]);
+        }
+        assert_eq!(sinks_for_pcm("hw:1,1", &inventory()), vec!["dac-other-pcm"]);
+    }
+
+    #[test]
+    fn missing_identity_never_falls_back_to_an_unrelated_sink() {
+        for device in ["default", "pulse", "hw:CARD=ABSENT,DEV=0", "hw:1,99"] {
+            assert!(sinks_for_pcm(device, &inventory()).is_empty());
+        }
+        assert!(sinks_for_pcm("hw:1,0", &serde_json::json!([{"name":"unknown"}])).is_empty());
+    }
+
+    #[test]
+    fn successful_first_open_records_recovery_without_a_busy_retry() {
+        let mut recorded = Vec::new();
+        let result = open_with_recovery(
+            sinks_for_pcm("hw:1,0", &inventory()),
+            || Ok("pcm"),
+            |targets| recorded = targets,
+        );
+        assert_eq!(result.unwrap(), "pcm");
+        assert_eq!(recorded, vec!["dac"]);
+    }
+
+    #[test]
+    fn refused_open_does_not_schedule_recovery_of_another_owners_device() {
+        let result: Result<(), String> = open_with_recovery(
+            vec!["dac".into()],
+            || Err("higher priority owner".into()),
+            |_| panic!("must not record a failed open"),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn another_default_sink_cannot_acknowledge_dac_recovery() {
+        let mut attempts = Vec::new();
+        let result = resume_sink_with("usb-dac", |target| {
+            attempts.push(target.to_string());
+            if target == "@DEFAULT_SINK@" {
+                Ok(())
+            } else {
+                Err("not recreated yet".into())
+            }
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts, vec!["usb-dac"; 4]);
+    }
+
+    #[test]
+    fn retries_the_recorded_sink_until_it_reappears() {
+        let mut attempts = 0;
+        assert!(resume_sink_with("usb-dac", |target| {
+            assert_eq!(target, "usb-dac");
+            attempts += 1;
+            if attempts == 2 {
+                Ok(())
+            } else {
+                Err("not recreated yet".into())
+            }
+        })
+        .is_ok());
+        assert_eq!(attempts, 2);
     }
 }
 
@@ -370,6 +644,24 @@ fn build_hw_fallback_id(device_id: &str) -> Option<String> {
     let dev_part = parts.next().unwrap_or("DEV=0");
     let dev_num = dev_part.strip_prefix("DEV=").unwrap_or("0");
     Some(format!("hw:CARD={},DEV={}", card_name, dev_num))
+}
+
+/// Derive the raw `(hw, plughw)` open ids for an aliased device id.
+///
+/// Aliases like `front:` are resolved by alsa-lib through per-card config
+/// (`cards.<driver>.pcm.front.<DEV>`), which some cards don't declare for
+/// every device — snd-aloop's `Loopback.conf` defines `front` for DEV=0
+/// only, and there it routes through softvol — so opening the alias itself
+/// can fail with ENOENT at config-expansion time, or add an unwanted plugin
+/// stage (discussion #641). The raw ids take the same `CARD=`/`DEV=` args
+/// directly from the kernel driver, with no config dependency.
+///
+/// Returns None for ids that carry no `CARD=` alias shape (raw `hw:`,
+/// `default`, etc.) — the caller keeps its existing handling for those.
+fn raw_open_ids(device_id: &str) -> Option<(String, String)> {
+    let hw = build_hw_fallback_id(device_id)?;
+    let plug = hw.replacen("hw:", "plughw:", 1);
+    Some((hw, plug))
 }
 
 /// Extract card name from an ALSA device ID.
@@ -703,12 +995,13 @@ impl AlsaBackend {
             return None;
         }
 
-        // Determine the base device path for hw/plughw attempts
-        // front:CARD=X,DEV=Y -> extract card name for hw attempts
-        let (hw_device, plughw_device) = if device_id.starts_with("front:CARD=") {
-            // front:CARD=AMP,DEV=0 -> need to find corresponding hw:X,0
-            // For now, try the front: device directly as it's already hardware-direct
-            (device_id.to_string(), format!("plug:{}", device_id))
+        // Determine the base device path for hw/plughw attempts. Aliased ids
+        // (front:CARD=…) are opened through their raw hw:/plughw: forms: the
+        // alias itself may be undeclared for the selected DEV (snd-aloop only
+        // declares `front` for DEV=0) and needlessly routes through alsa-lib
+        // plugins, while the raw ids open the kernel PCM directly (#641).
+        let (hw_device, plughw_device) = if let Some(ids) = raw_open_ids(device_id) {
+            ids
         } else if device_id.starts_with("hw:") {
             (device_id.to_string(), device_id.replace("hw:", "plughw:"))
         } else if device_id.starts_with("plughw:") {
@@ -1238,12 +1531,14 @@ impl AudioBackend for AlsaBackend {
             .map_err(|e| format!("Failed to get supported configs: {}", e))?;
 
         let mut found_matching = false;
+        let mut buffer_bounds = SupportedBufferSize::Unknown;
         for range in supported_configs {
             if range.channels() == config.channels
                 && config.sample_rate >= range.min_sample_rate()
                 && config.sample_rate <= range.max_sample_rate()
             {
                 found_matching = true;
+                buffer_bounds = *range.buffer_size();
                 log::info!(
                     "[ALSA Backend] Device supports {}Hz (range: {}-{}Hz)",
                     config.sample_rate,
@@ -1278,11 +1573,9 @@ impl AudioBackend for AlsaBackend {
         let stream_config = StreamConfig {
             channels: config.channels,
             sample_rate: effective_rate,
-            buffer_size: if config.exclusive_mode {
-                BufferSize::Fixed(512)
-            } else {
-                BufferSize::Fixed(effective_rate / 10)
-            },
+            buffer_size: BufferSize::Fixed(playback_period_frames(
+                effective_rate, config.exclusive_mode, &buffer_bounds,
+            )),
         };
 
         // Create SupportedStreamConfig
@@ -1303,7 +1596,11 @@ impl AudioBackend for AlsaBackend {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
-        // Create MixerDeviceSink with custom config
+        log::info!(
+            "[ALSA Backend] Callback period: {:?} at {}Hz (driver bounds {:?})",
+            stream_config.buffer_size, effective_rate, buffer_bounds
+        );
+        // with_supported_config resets buffer_size, so apply the period last.
         let mixer_sink = DeviceSinkBuilder::from_device(device)
             .map_err(|e| {
                 if config.exclusive_mode {
@@ -1316,6 +1613,9 @@ impl AudioBackend for AlsaBackend {
                 }
             })?
             .with_supported_config(&supported_config)
+            .with_buffer_size(stream_config.buffer_size)
+            // #660: shared rate-limited callback + wedge latch (see stream_health).
+            .with_error_callback(crate::stream_health::error_callback("ALSA Backend"))
             .open_stream()
             .map_err(|e| {
                 if config.exclusive_mode {
@@ -1363,6 +1663,19 @@ impl AudioBackend for AlsaBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playback_period_retains_time_budget_at_hi_res_and_obeys_device_bounds() {
+        let wide = SupportedBufferSize::Range { min: 64, max: 65536 };
+        for rate in [44100, 48000, 96000, 192000, 384000] {
+            assert_eq!(playback_period_frames(rate, true, &wide) * 20, rate);
+            assert_eq!(playback_period_frames(rate, false, &wide) * 10, rate);
+        }
+        let narrow = SupportedBufferSize::Range { min: 256, max: 4096 };
+        assert_eq!(playback_period_frames(192000, true, &narrow), 4096);
+        assert_eq!(playback_period_frames(4000, true, &narrow), 256);
+        assert_eq!(playback_period_frames(192000, true, &SupportedBufferSize::Unknown), 9600);
+    }
 
     #[test]
     fn build_hw_fallback_id_rewrites_iec958_alias() {
@@ -1471,5 +1784,46 @@ mod tests {
         assert!(!is_known_pcm_id("null"));
         assert!(!is_known_pcm_id("hw:0,0"));
         assert!(!is_known_pcm_id("plughw:0,0"));
+    }
+
+    #[test]
+    fn raw_open_ids_derives_raw_pair_from_front_alias() {
+        // Discussion #641 — snd-aloop declares `front` for DEV=0 only, so a
+        // saved `front:CARD=Loopback,DEV=1` fails to open with ENOENT. The
+        // derived raw ids take CARD=/DEV= straight to the kernel PCM.
+        assert_eq!(
+            raw_open_ids("front:CARD=Loopback,DEV=1"),
+            Some((
+                "hw:CARD=Loopback,DEV=1".to_string(),
+                "plughw:CARD=Loopback,DEV=1".to_string()
+            ))
+        );
+        assert_eq!(
+            raw_open_ids("front:CARD=ZH3,DEV=0"),
+            Some((
+                "hw:CARD=ZH3,DEV=0".to_string(),
+                "plughw:CARD=ZH3,DEV=0".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn raw_open_ids_defaults_dev_when_missing() {
+        assert_eq!(
+            raw_open_ids("front:CARD=Loopback"),
+            Some((
+                "hw:CARD=Loopback,DEV=0".to_string(),
+                "plughw:CARD=Loopback,DEV=0".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn raw_open_ids_passes_through_non_alias_ids() {
+        // Raw and virtual ids keep the caller's pre-existing handling.
+        assert_eq!(raw_open_ids("hw:0,0"), None);
+        assert_eq!(raw_open_ids("plughw:1,0"), None);
+        assert_eq!(raw_open_ids("default"), None);
+        assert_eq!(raw_open_ids("pulse"), None);
     }
 }

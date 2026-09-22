@@ -52,4 +52,5 @@ package() {
   install -Dm644 packaging/arch/com.blitzfc.qbz.desktop "${pkgdir}/usr/share/applications/com.blitzfc.qbz.desktop"
   install -Dm644 packaging/icons/128x128.png "${pkgdir}/usr/share/icons/hicolor/128x128/apps/com.blitzfc.qbz.png"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 licenses/* -t "${pkgdir}/usr/share/licenses/${pkgname}/third-party"
 }

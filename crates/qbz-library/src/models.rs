@@ -53,6 +53,10 @@ pub struct LocalTrack {
     pub disc_number: Option<u32>,
     pub year: Option<u32>,
     pub genre: Option<String>,
+    /// Complete ordered genre set. `genre` remains the compatibility primary
+    /// value for old databases and single-value tag writers.
+    #[serde(default)]
+    pub genres: Vec<String>,
     pub catalog_number: Option<String>,
 
     // Audio properties
@@ -70,6 +74,10 @@ pub struct LocalTrack {
 
     // Artwork
     pub artwork_path: Option<String>,
+    /// Album/collection artwork kept apart from a track or disc cover.
+    /// Consumers resolve artwork from the most specific layer outward.
+    #[serde(default)]
+    pub collection_artwork_path: Option<String>,
 
     // Indexing
     pub last_modified: i64,
@@ -87,6 +95,23 @@ pub struct LocalTrack {
     /// which is common under Flatpak / Snap sandboxes.
     #[serde(default)]
     pub is_network_mount: bool,
+
+    // Cross-source identity, straight from the file's tags (Picard writes
+    // them; lofty reads them). `None` when the file is untagged. The
+    // recording id + ISRC are the JOIN keys the listen log stamps so a play
+    // of a local file and a play of the same recording on Qobuz can meet.
+    #[serde(default)]
+    pub isrc: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_recording_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_track_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_release_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_release_group_id: Option<String>,
+    #[serde(default)]
+    pub musicbrainz_artist_id: Option<String>,
 }
 
 impl Default for LocalTrack {
@@ -104,6 +129,7 @@ impl Default for LocalTrack {
             disc_number: None,
             year: None,
             genre: None,
+            genres: Vec::new(),
             catalog_number: None,
             duration_secs: 0,
             format: AudioFormat::Unknown,
@@ -115,10 +141,17 @@ impl Default for LocalTrack {
             cue_start_secs: None,
             cue_end_secs: None,
             artwork_path: None,
+            collection_artwork_path: None,
             last_modified: 0,
             indexed_at: 0,
             source: None,
             qobuz_track_id: None,
+            isrc: None,
+            musicbrainz_recording_id: None,
+            musicbrainz_track_id: None,
+            musicbrainz_release_id: None,
+            musicbrainz_release_group_id: None,
+            musicbrainz_artist_id: None,
             is_network_mount: false,
         }
     }
@@ -154,7 +187,16 @@ pub struct LocalAlbum {
     pub all_artists: String,
     pub year: Option<u32>,
     pub catalog_number: Option<String>,
+    /// Union of every track/version genre represented by this album.
+    #[serde(default)]
+    pub genres: Vec<String>,
     pub artwork_path: Option<String>,
+    /// Authoritative source that owns `artwork_path` when an album row is a
+    /// frontend-side logical group. It may differ from `source`: the
+    /// best-audio copy can be coverless while another physical copy supplies
+    /// the group's representative artwork.
+    #[serde(default)]
+    pub artwork_source: Option<String>,
     pub track_count: u32,
     pub total_duration_secs: u64,
     pub format: AudioFormat,
@@ -171,6 +213,23 @@ pub struct LocalAlbum {
     /// Source of the album: "user" for local files, "qobuz_download" for offline cached
     #[serde(default = "default_source")]
     pub source: String,
+    /// Distinct authoritative sources contributing physical copies to this
+    /// logical row. A legacy row has one entry; the Qt aggregation may fold
+    /// several strongly-associated copies into one card without losing their
+    /// provenance.
+    #[serde(default)]
+    pub sources: Vec<String>,
+    /// Content evidence used to associate copies conservatively across
+    /// sources. This is derived from authoritative rows on every read and is
+    /// never persisted as product identity.
+    #[serde(default)]
+    pub identity_tracks: Vec<AlbumTrackEvidence>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AlbumTrackEvidence {
+    pub title: String,
+    pub duration_secs: u64,
 }
 
 fn default_source() -> String {

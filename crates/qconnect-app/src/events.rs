@@ -48,13 +48,19 @@ pub enum QconnectAppEvent {
         payload: Value,
     },
     /// Active peer renderer went silent >=12s while PLAYING (liveness watchdog).
-    RendererUnreachable { renderer_id: i32 },
+    RendererUnreachable {
+        renderer_id: i32,
+    },
     /// Active peer renderer left gracefully (status == ACTIVE_DISCONNECTED).
-    RendererDisconnected { renderer_id: i32 },
+    RendererDisconnected {
+        renderer_id: i32,
+    },
     /// Post-reconnect resync has been issued (safe-to-replay advisory).
     ResyncComplete,
     /// Granular connection lifecycle changed (Connecting/Reconnecting/Connected/Exhausted/Off).
-    LifecycleChanged { state: QconnectLifecycleState },
+    LifecycleChanged {
+        state: QconnectLifecycleState,
+    },
     /// Pass-through diagnostic (inbound-event preview, cloud error, max-reconnect, ...).
     /// `channel` is the legacy Tauri channel suffix so the mapper is mechanical.
     Diagnostic {
@@ -66,6 +72,28 @@ pub enum QconnectAppEvent {
 
 #[async_trait]
 pub trait QconnectEventSink: Send + Sync {
+    /// Observation only; hosts return None after their session is fenced.
+    fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
+        None
+    }
+
+    /// Current host policy, checked before reducing a volume/mute command.
+    /// Ignoring an unsupported command must not publish a fictitious new level.
+    fn allows_remote_volume(&self) -> bool {
+        true
+    }
+
+    /// Command execution has an acknowledgement distinct from observations.
+    /// Hosts override this to propagate engine/authority failures to reporting.
+    async fn execute_renderer_command(
+        &self, command: &RendererCommand, state: &QConnectRendererState,
+    ) -> Result<(), String> {
+        self.on_event(QconnectAppEvent::RendererCommandApplied {
+            command: command.clone(), state: state.clone(),
+        }).await;
+        Ok(())
+    }
+
     async fn on_event(&self, event: QconnectAppEvent);
 }
 

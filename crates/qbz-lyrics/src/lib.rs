@@ -40,7 +40,10 @@ pub mod wsync;
 
 pub use cache::{CachedLyrics, LyricsCacheDb, LyricsCacheStats};
 pub use lrc::{emit_lrc, parse_lrc, parse_plain, LrcSpan, MAX_SUNG_MS};
-pub use model::{build_cache_key, LyricsDoc, LyricsLine, LyricsPayload, LyricsProvider, Word};
+pub use model::{
+    build_cache_key, derive_has_translation, LyricsDoc, LyricsKind, LyricsLine, LyricsPayload,
+    LyricsProvider, TranslatedLyrics, Word,
+};
 pub use providers::LyricsData;
 pub use service::{
     HttpLyricsProviders, LyricsOutcome, LyricsProviders, LyricsRequest, LyricsResponse,

@@ -8,14 +8,8 @@ description = "Casting support for QBZ - Chromecast, DLNA"
 # Chromecast
 rust_cast = "0.21"
 
-# TLS provider selection. rust_cast uses rustls; in the multi-crate binary both
-# the aws-lc-rs and ring providers end up enabled (reqwest pulls ring), so
-# rustls can't auto-pick one and panics on connect. We install aws-lc-rs
-# explicitly before connecting (see `ensure_crypto_provider`).
-rustls = { version = "0.23", features = ["aws_lc_rs"] }
-
 # mDNS discovery
-mdns-sd = "0.11"
+mdns-sd = "0.21"
 
 # Local HTTP server for media streaming
 tiny_http = "0.12"
@@ -23,6 +17,10 @@ tiny_http = "0.12"
 # DLNA/UPnP
 rupnp = { version = "3", features = ["full_device_spec"] }
 futures-util = "0.3"
+
+# The workspace patches rupnp's service endpoint parser for legacy UPnP URLs
+# (#745). Keep http current; never downgrade the whole HTTP graph for a device.
+http = "1.5"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -34,5 +32,11 @@ thiserror = "2"
 # Logging
 log = "0.4"
 
+# CSPRNG for cast media path tokens (not RandomState hash)
+getrandom = "0.4"
+
 # Async runtime (for DLNA)
 tokio = { version = "1", features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }

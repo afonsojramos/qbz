@@ -1,0 +1,15 @@
+usr/bin/qbz
+usr/lib/systemd/user/qbzd.service
+usr/bin/qbzd
+usr/share/applications/com.blitzfc.qbz.desktop
+usr/share/metainfo/com.blitzfc.qbz.metainfo.xml
+usr/share/icons/hicolor/32x32/apps/qbz.png
+usr/share/icons/hicolor/48x48/apps/qbz.png
+usr/share/icons/hicolor/64x64/apps/qbz.png
+usr/share/icons/hicolor/128x128/apps/qbz.png
+usr/share/icons/hicolor/256x256/apps/qbz.png
+usr/share/icons/hicolor/512x512/apps/qbz.png
+usr/share/doc/qbz/third-party
+usr/share/bash-completion/completions/qbzd
+usr/share/zsh/site-functions/_qbzd
+usr/share/fish/vendor_completions.d/qbzd.fish

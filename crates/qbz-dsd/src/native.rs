@@ -39,6 +39,8 @@ pub struct NativeDsdStream {
     /// Carry-over bytes per channel when a demux read isn't a multiple of 4.
     carry: [Vec<u8>; 2],
     done: bool,
+    /// Set when demux I/O fails mid-stream (not clean EOF).
+    io_error: Option<String>,
 }
 
 const REFILL_BYTES_PER_CH: usize = 32 * 1024;
@@ -60,7 +62,13 @@ impl NativeDsdStream {
             idx: 0,
             carry: [Vec::new(), Vec::new()],
             done: false,
+            io_error: None,
         })
+    }
+
+    /// Mid-stream demux I/O error, if any. Clean EOF leaves this `None`.
+    pub fn io_error(&self) -> Option<&str> {
+        self.io_error.as_deref()
     }
 
     pub fn rate(&self) -> u32 {
@@ -91,7 +99,12 @@ impl NativeDsdStream {
         let pre = [planar[0].len(), planar[1].len()];
         let got = match self.demux.read_planar(&mut planar, REFILL_BYTES_PER_CH) {
             Ok(n) => n,
-            Err(_) => 0,
+            Err(e) => {
+                log::error!("[DSD/native] demux I/O error (not clean EOF): {e}");
+                self.io_error = Some(e.to_string());
+                self.done = true;
+                return false;
+            }
         };
         if self.lsb_first {
             for (i, chan) in planar.iter_mut().enumerate() {

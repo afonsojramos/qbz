@@ -1,0 +1,81 @@
+Source: qbz
+Section: sound
+Priority: optional
+Maintainer: Édouard Biton <dev@aarklendoia.com>
+Build-Depends:
+  debhelper-compat (= 13),
+  cargo,
+  rustc,
+  python3,
+  pkg-config,
+  cmake,
+  clang,
+  libclang-dev,
+  nasm,
+  libasound2-dev,
+  libjack-jackd2-dev,
+  libdbus-1-dev,
+  libssl-dev,
+  libgl1-mesa-dev,
+  libegl1-mesa-dev,
+  libxkbcommon-dev,
+  libwayland-dev,
+  qt6-base-dev,
+  qt6-declarative-dev,
+  qt6-svg-dev
+Standards-Version: 4.6.1
+Homepage: https://github.com/Aarklendoia/qbz
+Vcs-Git: https://github.com/Aarklendoia/qbz.git
+Vcs-Browser: https://github.com/Aarklendoia/qbz
+Rules-Requires-Root: no
+
+Package: qbz
+Architecture: any
+Depends:
+  ${shlibs:Depends},
+  ${misc:Depends},
+  qml-qt6,
+  qml6-module-qtquick,
+  qml6-module-qtquick-controls,
+  qml6-module-qtquick-window,
+  qml6-module-qtquick-effects,
+  qml6-module-qtqml-models,
+  qml6-module-qt-labs-qmlmodels,
+  libqt6svg6,
+  qt6-svg-plugins,
+  qt6-wayland,
+  xdg-utils
+Recommends: pipewire, pulseaudio-utils
+Conflicts: qbzd
+Description: Native hi-fi Qobuz desktop player (Qt6/QML)
+ QBZ is a native Qt6/QML Qobuz client for Linux with a focus on
+ bit-perfect, hi-res audio playback: DAC passthrough and automatic
+ sample-rate switching for each track.
+ .
+ It plays both your Qobuz subscription and local files, and also talks
+ to self-hosted servers (Plex, Jellyfin, Subsonic/Navidrome) through the
+ same interface and audio pipeline. No API keys or token extraction; zero
+ telemetry, with opt-in scrobbling, metadata enrichment and Discord Rich
+ Presence integrations.
+ .
+ This package also installs qbzd, the headless daemon QBZ's QConnect and
+ remote-control features share — see the separate qbzd package if you
+ only want the headless/server install with no Qt dependency.
+
+Package: qbzd
+Architecture: any
+Depends:
+  ${shlibs:Depends},
+  ${misc:Depends}
+Recommends: pipewire, pulseaudio-utils, xdg-utils
+Conflicts: qbz
+Description: QBZ headless Qobuz playback daemon
+ Headless Qobuz playback daemon for servers, Raspberry Pi and other
+ appliances — the daemon, its own CLI client, and a setup TUI in one
+ binary. No Qt dependency: install this instead of qbz on a box with no
+ display, wired straight to a DAC.
+ .
+ Includes a systemd user unit (shipped disabled — see
+ /usr/share/doc/qbzd/README.md, in particular the `loginctl
+ enable-linger` requirement for headless boxes) and can generate service
+ definitions for systemd, OpenRC or runit via its own CLI.

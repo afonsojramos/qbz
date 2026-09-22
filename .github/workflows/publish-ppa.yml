@@ -1,0 +1,110 @@
+name: Publish to Launchpad PPA
+
+# Automatically uploads a source package to ppa:aarklendoia-edtech/qbz on
+# every vX.Y.Z release tag (same trigger as build-debian.yml's GitHub
+# Release build). See docs/LAUNCHPAD.md for the full manual process this
+# automates, and for how the ~ppa1~<series>1 versioning scheme works.
+#
+# Only resolute (26.04) and newer are supported targets: qbz-qt needs
+# Qt >= 6.8 (QtQuick.Effects, Image.retainWhileLoading), which only reaches
+# the Ubuntu archive from 25.04 (Plucky) onward — Ubuntu 24.04 LTS ships
+# 6.4.2 and cannot build this package at all. Do not add noble/jammy as a
+# dispatch target without also solving that (e.g. an external-dependencies
+# Qt6 backport PPA) — see docs/LAUNCHPAD.md.
+#
+# Signs with a CI-only GPG key, registered as an additional OpenPGP key on
+# the aarklendoia-edtech Launchpad account — deliberately separate from the
+# maintainer's personal key (and from this account's other projects' own CI
+# keys), so a leaked CI secret only compromises this package's PPA-upload
+# rights. The private key has no passphrase (required for unattended
+# signing); it's stored only as the PPA_GPG_PRIVATE_KEY repository secret.
+#
+# GPG_KEY_ID below (F7D8F45FA911E67E87CA98262221AF44E6D29C4C) is the qbz CI
+# signing key, generated 2026-09-22 and pushed to keyserver.ubuntu.com. It
+# still needs to be registered on the aarklendoia-edtech Launchpad account
+# and its private key stored as the PPA_GPG_PRIVATE_KEY repository secret
+# before this workflow will actually work — see docs/LAUNCHPAD.md step 5.
+# Until then this fails harmlessly at "Import the CI signing key".
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      series:
+        description: 'Target Ubuntu series codename (>= 25.04/plucky only — see header comment)'
+        required: true
+        default: 'resolute'
+      rust_toolchain:
+        description: "That series' packaged cargo/rustc version (rmadison -u ubuntu cargo)"
+        required: true
+        default: '1.93.1'
+
+env:
+  PPA: 'ppa:aarklendoia-edtech/qbz'
+  GPG_KEY_ID: 'F7D8F45FA911E67E87CA98262221AF44E6D29C4C'
+  DEBFULLNAME: 'QBZ CI'
+  DEBEMAIL: 'aarklendoia+ci@proton.me'
+  SERIES: ${{ github.event.inputs.series || 'resolute' }}
+  RUST_TOOLCHAIN: ${{ github.event.inputs.rust_toolchain || '1.93.1' }}
+
+jobs:
+  publish-ppa:
+    runs-on: ubuntu-latest
+    # See kio-protondrive's own publish-ppa.yml: a stuck apt-get on a
+    # non-containerized runner can hang the full 6h GitHub Actions default
+    # and silently never publish. Keep this short so a repeat fails fast
+    # and visibly instead.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install packaging tools
+        # No project build-dependencies needed here (qt6-base-dev, ...) —
+        # debuild -S only tars the source, it doesn't compile anything, and
+        # cargo vendor doesn't run build scripts either.
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y devscripts dpkg-dev debhelper fakeroot quilt dput lintian gnupg jq
+
+      - name: Install Rust matching ${{ env.SERIES }}'s packaged toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Import the CI signing key
+        env:
+          PPA_GPG_PRIVATE_KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY }}
+        run: |
+          echo "$PPA_GPG_PRIVATE_KEY" | gpg --batch --import
+          gpg --list-secret-keys "$GPG_KEY_ID"
+
+      - name: Vendor Cargo dependencies
+        run: |
+          RUST_TOOLCHAIN="${{ env.RUST_TOOLCHAIN }}" ./debian/scripts/prepare-offline-build.sh
+
+      - name: Bump changelog for this PPA upload
+        env:
+          IS_TAG: ${{ github.ref_type == 'tag' }}
+        run: |
+          if [ "$IS_TAG" = "true" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # workflow_dispatch on a branch: no vX.Y.Z tag to derive from
+            VERSION="$(grep -m1 '^version' crates/Cargo.toml | sed -E 's/.*"(.+)"/\1/')"
+          fi
+          dch --newversion "${VERSION}~ppa1~${SERIES}1" --distribution "$SERIES" --urgency medium \
+            "Automated PPA build for ${SERIES}, release ${VERSION}."
+
+      - name: Build signed source package
+        run: |
+          rm -rf crates/target
+          debuild -S -sa -d -k"$GPG_KEY_ID"
+
+      - name: Upload to the PPA
+        run: |
+          dput "$PPA" ../qbz_*_source.changes
