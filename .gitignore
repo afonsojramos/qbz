@@ -68,3 +68,15 @@ test-results/
 
 # Isolated cargo test target dir (scripts / agents)
 /crates/target-test/
+
+# Debian/Launchpad PPA packaging (debian/scripts/prepare-offline-build.sh
+# output) — regenerated per release right before packaging, never committed.
+/vendor/
+debian/tmp/
+debian/.debhelper/
+debian/*.substvars
+debian/*.debhelper
+debian/*.debhelper.log
+debian/files
+debian/qbz/
+debian/qbzd/

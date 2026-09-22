@@ -1,0 +1,10 @@
+qbz (2.1.2) unstable; urgency=medium
+
+  * Initial Debian/Launchpad PPA packaging, built on top of upstream's
+    2.1.2 Qt6/QML rewrite (crates/Cargo.toml workspace version). Two
+    binary packages: qbz (GUI) and qbzd (headless daemon, also bundled
+    inside qbz). Targets Ubuntu resolute (26.04) and newer only — Qt
+    >= 6.8 is required (QtQuick.Effects, Image.retainWhileLoading) and
+    is not available in Ubuntu 24.04 LTS's archive.
+
+ -- Édouard Biton <aarklendoia@proton.me>  Tue, 22 Sep 2026 12:00:00 +0200

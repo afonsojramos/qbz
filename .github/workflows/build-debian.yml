@@ -1,0 +1,137 @@
+name: Build Debian Packages
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+# Needed for the "Create Release (on tag)" step (softprops/action-gh-release)
+# to create/update a GitHub release — the repo's default GITHUB_TOKEN
+# permissions are read-only (Settings → Actions → General), so without this
+# it fails with "Resource not accessible by integration". Same pattern as
+# release-please.yml.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # qt6-base-dev/qt6-declarative-dev only reach Qt >= 6.8 from Ubuntu
+    # 25.04 (Plucky) onward — qbz-qt needs QtQuick.Effects and
+    # Image.retainWhileLoading, both absent from Qt 6.4.2 — but ubuntu-latest
+    # is still Noble (24.04). Build inside a newer container instead (26.04,
+    # matching this project's own target series — see publish-ppa.yml's
+    # default SERIES).
+    container: ubuntu:26.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Install base tooling and build dependencies
+        # ca-certificates/git are needed for actions/checkout, curl for
+        # dtolnay/rust-toolchain (it shells out to rustup.rs) — all
+        # preinstalled on the regular ubuntu-latest VM image but not in this
+        # minimal container. The rest mirrors debian/control's Build-Depends.
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates \
+            curl \
+            git \
+            build-essential \
+            debhelper \
+            devscripts \
+            quilt \
+            lintian \
+            pkg-config \
+            cmake \
+            clang \
+            libclang-dev \
+            nasm \
+            libasound2-dev \
+            libjack-jackd2-dev \
+            libdbus-1-dev \
+            libssl-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev \
+            libxkbcommon-dev \
+            libwayland-dev \
+            qt6-base-dev \
+            qt6-declarative-dev \
+            qt6-svg-dev
+
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo build outputs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Generate debian/changelog entry for this release
+        # Only on the tag release-please creates (vX.Y.Z) — regular branch/PR
+        # builds keep whatever entry is already committed. Generated fresh at
+        # build time, never committed back: release-please already owns
+        # crates/Cargo.toml's version and CHANGELOG.md.
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          DEBFULLNAME: QBZ Team
+          DEBEMAIL: dev@aarklendoia.com
+        run: |
+          cd $GITHUB_WORKSPACE
+          VERSION="${GITHUB_REF_NAME#v}"
+          # No "-1" Debian revision suffix: "3.0 (native)" format (see
+          # debian/source/format) uses the upstream version alone.
+          dch --newversion "${VERSION}" --distribution unstable --urgency medium \
+            "Automated release ${VERSION}."
+
+      - name: Build Debian packages
+        run: |
+          cd $GITHUB_WORKSPACE
+          # -d: ignore Build-Depends version checks (cargo/rustc come from
+          # rustup here, not apt).
+          dpkg-buildpackage -us -uc -b -d
+          cp ../*.deb . 2>/dev/null || true
+          cp ../*.buildinfo . 2>/dev/null || true
+          cp ../*.changes . 2>/dev/null || true
+
+      - name: Run lintian checks
+        run: |
+          cd $GITHUB_WORKSPACE
+          lintian *.deb || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: debian-packages
+          path: |
+            *.deb
+            *.buildinfo
+            *.changes
+          retention-days: 30
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            *.deb
+            *.buildinfo
+            *.changes
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

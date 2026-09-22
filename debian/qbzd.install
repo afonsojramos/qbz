@@ -1,0 +1,7 @@
+usr/bin/qbzd
+usr/lib/systemd/user/qbzd.service
+usr/share/doc/qbzd/README.md
+usr/share/doc/qbzd/third-party
+usr/share/bash-completion/completions/qbzd
+usr/share/zsh/site-functions/_qbzd
+usr/share/fish/vendor_completions.d/qbzd.fish
