@@ -184,9 +184,7 @@ impl State {
                 })
             })
             .collect();
-        out.sort_by(|a, b| {
-            (a.x, a.y, a.width, a.height).cmp(&(b.x, b.y, b.width, b.height))
-        });
+        out.sort_by(|a, b| (a.x, a.y, a.width, a.height).cmp(&(b.x, b.y, b.width, b.height)));
         out
     }
 }

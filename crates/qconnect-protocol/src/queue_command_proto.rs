@@ -1,3 +1,6 @@
+// Variant names mirror the QConnect wire protocol's own MESSAGE_TYPE_*
+// enum exactly (traceability to the spec) — not a naming accident to fix.
+#[allow(clippy::enum_variant_names)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum QConnectMessageType {
@@ -924,8 +927,7 @@ pub struct QConnectMessage {
     #[prost(message, optional, tag = "26")]
     pub rndr_srvr_file_audio_quality_changed: Option<RendererFileAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "27")]
-    pub rndr_srvr_device_audio_quality_changed:
-        Option<RendererDeviceAudioQualityChangedMessage>,
+    pub rndr_srvr_device_audio_quality_changed: Option<RendererDeviceAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "28")]
     pub rndr_srvr_max_audio_quality_changed: Option<RendererMaxAudioQualityChangedMessage>,
     #[prost(message, optional, tag = "29")]

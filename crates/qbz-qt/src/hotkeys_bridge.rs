@@ -341,12 +341,7 @@ impl qbz_hotkeys::QbzHotkeys {
             let overrides = crate::hotkeys_qt::load_overrides();
             let keymap = crate::hotkeys_qt::active_keymap();
             match crate::hotkeys_qt::capture_step(
-                keymap,
-                &overrides,
-                &recording,
-                key,
-                modifiers,
-                &text,
+                keymap, &overrides, &recording, key, modifiers, &text,
             ) {
                 CaptureOutcome::Cancelled => {
                     clear_capture(self.as_mut());

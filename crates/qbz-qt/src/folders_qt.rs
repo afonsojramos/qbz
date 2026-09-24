@@ -89,7 +89,12 @@ pub fn playlist_settings_map() -> HashMap<u64, PlaylistSettingsLite> {
 pub fn playlist_play_counts() -> HashMap<u64, u32> {
     qbz_app::settings::playlist_play_history::all_recent_playlists()
         .into_iter()
-        .filter_map(|row| row.playlist_id.parse::<u64>().ok().map(|id| (id, row.plays)))
+        .filter_map(|row| {
+            row.playlist_id
+                .parse::<u64>()
+                .ok()
+                .map(|id| (id, row.plays))
+        })
         .collect()
 }
 

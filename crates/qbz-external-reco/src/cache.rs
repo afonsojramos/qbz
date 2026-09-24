@@ -105,7 +105,11 @@ impl RecoCache {
 
         match row {
             Some((found, qobuz_id, fetched_at)) => {
-                let ttl = if found != 0 { FOUND_TTL_SECS } else { MISS_TTL_SECS };
+                let ttl = if found != 0 {
+                    FOUND_TTL_SECS
+                } else {
+                    MISS_TTL_SECS
+                };
                 if Self::now() - fetched_at > ttl {
                     return CacheLookup::Miss; // expired
                 }
@@ -289,7 +293,10 @@ mod tests {
 
         // Store week A; exact-key hit + patch-latest both return it.
         cache.put_weekly("weekly-jams:mbid-A", "weekly-jams", "[\"A\"]");
-        assert_eq!(cache.get_weekly("weekly-jams:mbid-A").as_deref(), Some("[\"A\"]"));
+        assert_eq!(
+            cache.get_weekly("weekly-jams:mbid-A").as_deref(),
+            Some("[\"A\"]")
+        );
         assert_eq!(
             cache.get_latest_weekly_for_patch("weekly-jams").as_deref(),
             Some("[\"A\"]")
@@ -304,7 +311,9 @@ mod tests {
         );
 
         // Patches are isolated from each other.
-        assert!(cache.get_latest_weekly_for_patch("weekly-exploration").is_none());
+        assert!(cache
+            .get_latest_weekly_for_patch("weekly-exploration")
+            .is_none());
 
         let _ = std::fs::remove_dir_all(dir);
     }

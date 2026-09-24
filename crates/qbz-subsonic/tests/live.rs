@@ -111,7 +111,10 @@ async fn the_fast_sweep_is_detected_and_paginates() {
     let second = c.search_page(500).await.expect("page 500");
     assert!(!second.is_empty(), "the second page came back empty");
     // Real pagination, not the same page twice.
-    assert_ne!(first[0].id, second[0].id, "songOffset did not move the window");
+    assert_ne!(
+        first[0].id, second[0].id,
+        "songOffset did not move the window"
+    );
 
     let hires = first
         .iter()
@@ -123,7 +126,11 @@ async fn the_fast_sweep_is_detected_and_paginates() {
         "no row carried a bit depth — this server is not returning OpenSubsonic fields"
     );
     for t in first.iter().filter(|t| t.suffix == "mp3") {
-        assert_eq!(t.bit_depth, None, "an mp3 reported a bit depth: {}", t.title);
+        assert_eq!(
+            t.bit_depth, None,
+            "an mp3 reported a bit depth: {}",
+            t.title
+        );
     }
     eprintln!(
         "page 0: {} rows, {} with a bit depth, {} hi-res",
@@ -149,7 +156,11 @@ async fn the_per_album_sweep_also_returns_tracks() {
     }
     // getAlbumList2 caps at 500 whatever `size` asks for.
     assert!(ids.len() <= 500, "the server returned {} albums", ids.len());
-    eprintln!("per-album: {} album ids, first album has {} tracks", ids.len(), tracks.len());
+    eprintln!(
+        "per-album: {} album ids, first album has {} tracks",
+        ids.len(),
+        tracks.len()
+    );
 }
 
 /// THE audio contract. `format=raw` must hand back the ORIGINAL bytes, and the
@@ -171,7 +182,11 @@ async fn the_stream_is_raw_seekable_and_the_reported_size() {
         .send()
         .await
         .expect("range request");
-    assert_eq!(resp.status().as_u16(), 206, "the server refused a Range request");
+    assert_eq!(
+        resp.status().as_u16(),
+        206,
+        "the server refused a Range request"
+    );
     let range = resp
         .headers()
         .get(reqwest::header::CONTENT_RANGE)
@@ -203,7 +218,10 @@ async fn the_stream_is_raw_seekable_and_the_reported_size() {
         track.size.unwrap(),
         "streamed length differs from the reported file size — the server re-encoded"
     );
-    eprintln!("stream: {} -> 206 {ctype}, total {total} == reported size", track.title);
+    eprintln!(
+        "stream: {} -> 206 {ctype}, total {total} == reported size",
+        track.title
+    );
 }
 
 /// Cover art works WITH credentials, and — the trap again — an unauthenticated
@@ -228,7 +246,10 @@ async fn cover_art_needs_credentials_and_says_so_with_a_200() {
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    assert!(ctype.starts_with("image/"), "authenticated cover returned {ctype}");
+    assert!(
+        ctype.starts_with("image/"),
+        "authenticated cover returned {ctype}"
+    );
     let len = resp.bytes().await.expect("cover body").len();
     assert!(len > 1024);
 
@@ -240,7 +261,11 @@ async fn cover_art_needs_credentials_and_says_so_with_a_200() {
         art
     );
     let bad = reqwest::get(&naked).await.expect("naked cover");
-    assert_eq!(bad.status().as_u16(), 200, "an unauthenticated cover was NOT a 200");
+    assert_eq!(
+        bad.status().as_u16(),
+        200,
+        "an unauthenticated cover was NOT a 200"
+    );
     let bad_ct = bad
         .headers()
         .get(reqwest::header::CONTENT_TYPE)

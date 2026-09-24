@@ -25,11 +25,12 @@ pub struct TrackToAnalyse {
 // ============ Quality Types ============
 
 /// Audio quality format IDs (matches Qobuz API format IDs)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 #[repr(u32)]
 pub enum Quality {
     Mp3 = 5,
-    Lossless = 6,    // 16-bit/44.1kHz (CD Quality)
+    #[default]
+    Lossless = 6, // 16-bit/44.1kHz (CD Quality)
     HiRes = 7,       // 24-bit/≤96kHz
     UltraHiRes = 27, // 24-bit/>96kHz
 }
@@ -85,12 +86,6 @@ impl Quality {
     /// with tier. Used to clamp a requested tier against a cap (#638).
     pub fn min_tier(a: Quality, b: Quality) -> Quality {
         a.min(b)
-    }
-}
-
-impl Default for Quality {
-    fn default() -> Self {
-        Quality::Lossless
     }
 }
 
@@ -1471,6 +1466,10 @@ pub struct RadioResponse {
 /// One entry of the Qobuz `most_popular` block in a combined search.
 /// Serde tagging matches the legacy `V2MostPopularItem` so the Tauri
 /// command's response shape is unchanged.
+// Boxing the largest variant would change every construction/match site
+// across the app for a rarely-allocated response type — not a mechanical
+// fix, left to a deliberate follow-up if this enum ever gets hot-path use.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "content", rename_all = "lowercase")]
 pub enum MostPopularItem {
@@ -1766,9 +1765,9 @@ pub struct PageArtistAward {
 /// Qobuz uses three different embedded shapes across endpoints:
 /// - `/discover/index` — {id: int, name, awarded_at: "YYYY-MM-DD"}
 /// - `/album/get`      — LegacyAwardDto {awardId: string, name,
-///                        publicationId, publicationName, awardSlug,
-///                        awardedAt: long, …}
+///   publicationId, publicationName, awardSlug, awardedAt: long, …}
 /// - `/artist/page`    — PageArtistAward {id: int, name, awarded_at}
+///
 /// id is emitted as String downstream so the frontend has a single
 /// type to carry into /award/page and /award/getAlbums. The `alias`
 /// list covers the LegacyAwardDto field name the web app never sees

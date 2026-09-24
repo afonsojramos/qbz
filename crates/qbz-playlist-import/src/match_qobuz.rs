@@ -255,11 +255,7 @@ fn score_candidate(track: &ImportTrack, candidate: &Track) -> f32 {
         track.duration_ms,
         Some((candidate.duration as u64).saturating_mul(1000)),
     ) {
-        let diff = if import_duration > candidate_duration {
-            import_duration - candidate_duration
-        } else {
-            candidate_duration - import_duration
-        };
+        let diff = import_duration.abs_diff(candidate_duration);
 
         if diff <= 3000 {
             score += 0.05;
@@ -334,9 +330,7 @@ fn remove_bracketed(input: &str) -> String {
                 depth += 1;
             }
             ')' | ']' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             _ => {
                 if depth == 0 {

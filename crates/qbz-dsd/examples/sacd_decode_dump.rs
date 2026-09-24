@@ -31,7 +31,10 @@ fn main() {
         .find(|t| t.number == track_no)
         .expect("track");
 
-    for layout in [ChannelLayout::BlockPerChannel, ChannelLayout::ByteInterleaved] {
+    for layout in [
+        ChannelLayout::BlockPerChannel,
+        ChannelLayout::ByteInterleaved,
+    ] {
         for sync in [false, true] {
             let demux = SacdDemuxer::open_with(&path, track, layout, sync).expect("open");
             let mut conv = DsdPcmConverter::new(Box::new(demux), 0.0).expect("converter");

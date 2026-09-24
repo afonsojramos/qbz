@@ -56,7 +56,12 @@ pub(crate) fn parse(text: &str, filename: &str) -> Result<ImportPlaylist, Playli
 
     let mut tracks: Vec<ImportTrack> = Vec::new();
     for row in rows.into_values() {
-        let (artist, title) = match row.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        let (artist, title) = match row
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             Some(t) => split_artist_title(t),
             // No TitleN: the FileN stem is all there is.
             None => (
@@ -65,10 +70,7 @@ pub(crate) fn parse(text: &str, filename: &str) -> Result<ImportPlaylist, Playli
             ),
         };
         // `-1` (and 0) mean unknown. Seconds -> ms.
-        let duration_ms = row
-            .length
-            .filter(|l| *l > 0)
-            .map(|l| l as u64 * 1000);
+        let duration_ms = row.length.filter(|l| *l > 0).map(|l| l as u64 * 1000);
         if let Some(t) = track_or_skip(title, artist, None, duration_ms, None) {
             tracks.push(t);
         }

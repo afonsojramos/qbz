@@ -300,7 +300,7 @@ impl SectorImage {
     }
 
     fn validate_length(&self) -> Result<(), SacdError> {
-        if self.bytes % self.layout.stride() != 0 {
+        if !self.bytes.is_multiple_of(self.layout.stride()) {
             return Err(SacdError::InvalidImageLength(self.bytes));
         }
         Ok(())
@@ -1522,6 +1522,10 @@ mod tests {
     }
 
     #[test]
+    // The 2075 > 2048 assertion is narrative, not a real invariant check —
+    // both are literals here, illustrating in-line why 11 bits (not 12) is
+    // the right read, not gating on a value that could actually vary.
+    #[allow(clippy::assertions_on_constants)]
     fn an_eleven_bit_length_is_what_makes_a_sector_add_up() {
         // 0x181B, read off LSN 1254. Twelve bits give a length larger than the
         // sector it lives in, which is how the widely-copied layout refutes

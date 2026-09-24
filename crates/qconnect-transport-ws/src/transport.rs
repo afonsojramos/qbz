@@ -82,7 +82,10 @@ pub enum TransportEvent {
     /// JWT). Only numeric protocol metadata crosses this boundary: `descr` is
     /// server-controlled and may reflect credentials, endpoints, account data,
     /// or session identifiers, so it is zeroized at decode time.
-    CloudError { msg_id: u32, code: u32 },
+    CloudError {
+        msg_id: u32,
+        code: u32,
+    },
     InboundQueueServerEvent(QueueServerEvent),
     InboundRendererServerCommand(RendererServerCommand),
     InboundReceived(InboundEnvelope),
@@ -976,7 +979,8 @@ fn handle_incoming_binary(
                     descr.zeroize();
                     log::warn!(
                         "[QConnect/Transport] Cloud error frame: msg_id={} code={}",
-                        msg_id, code
+                        msg_id,
+                        code
                     );
                     emit(events_tx, TransportEvent::CloudError { msg_id, code });
                 }

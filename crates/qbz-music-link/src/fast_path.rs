@@ -158,14 +158,7 @@ async fn try_tidal_metadata(url: &str, is_track: bool) -> Option<(String, String
 /// Get an OAuth token from the QBZ proxy for the given platform.
 async fn get_proxy_token(platform: &str) -> Option<String> {
     let url = format!("{}/{}/token", QBZ_PROXY_BASE, platform);
-    let data: serde_json::Value = client()
-        .get(&url)
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()?;
+    let data: serde_json::Value = client().get(&url).send().await.ok()?.json().await.ok()?;
     data.get("access_token")
         .and_then(|v| v.as_str())
         .map(|v| v.to_string())

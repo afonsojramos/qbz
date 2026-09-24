@@ -166,7 +166,9 @@ pub fn theme_from_base(base: &CustomThemeBase) -> ThemeColors {
     // (muted must clear >= 3:1; disabled is intentionally lower — a visual cue).
     let tp_pal = to_pal(text_primary);
     let muted_raw = tp_pal.shift_lightness(if is_dark { -0.25 } else { 0.25 });
-    let text_muted = from_pal(ensure_text_contrast_target(muted_raw, &sm_pal, is_dark, 3.0));
+    let text_muted = from_pal(ensure_text_contrast_target(
+        muted_raw, &sm_pal, is_dark, 3.0,
+    ));
     let text_disabled =
         from_pal(to_pal(text_muted).shift_lightness(if is_dark { -0.10 } else { 0.10 }));
 
@@ -182,7 +184,8 @@ pub fn theme_from_base(base: &CustomThemeBase) -> ThemeColors {
 
     // Borders: subtle = the base token, strong = a polarity-aware shift of it.
     let border_subtle = border;
-    let border_strong = from_pal(to_pal(border).shift_lightness(if is_dark { 0.08 } else { -0.08 }));
+    let border_strong =
+        from_pal(to_pal(border).shift_lightness(if is_dark { 0.08 } else { -0.08 }));
 
     // Polarity translucent edges (white base on dark, black base on light) — the
     // exact registry/generator pattern.

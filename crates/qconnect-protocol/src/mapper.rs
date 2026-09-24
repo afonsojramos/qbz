@@ -12,11 +12,11 @@ use crate::{
     queue_command_proto::{
         AskForQueueStateMessage, AskForRendererStateMessage, AutoplayLoadTracksMessage,
         AutoplayRemoveTracksMessage, ClearQueueMessage, DeviceCapabilitiesMessage,
-        DeviceInfoMessage, RendererDeviceInfoUpdatedMessage, JoinSessionMessage, MuteVolumeMessage, PlaybackPositionMessage,
+        DeviceInfoMessage, JoinSessionMessage, MuteVolumeMessage, PlaybackPositionMessage,
         QConnectMessage, QConnectMessageType, QConnectMessages, QueueAddTracksMessage,
         QueueInsertTracksMessage, QueueLoadTracksMessage, QueueRemoveTracksMessage,
         QueueReorderTracksMessage, QueueVersionRef, RendererDeviceAudioQualityChangedMessage,
-        RendererFileAudioQualityChangedMessage,
+        RendererDeviceInfoUpdatedMessage, RendererFileAudioQualityChangedMessage,
         RendererMaxAudioQualityChangedMessage, RendererStateMessage, RendererStateUpdatedMessage,
         RendererVolumeChangedMessage, RendererVolumeMutedMessage, SetActiveRendererMessage,
         SetAutoplayModeMessage, SetLoopModeMessage, SetMaxAudioQualityMessage,
@@ -871,7 +871,7 @@ fn parse_renderer_initial_state(
         current_position: playback_position,
         duration: optional_i32(source, "duration")?,
         queue_version: optional_queue_version(source, "queue_version")?
-            .map(|v| to_proto_queue_version(v))
+            .map(to_proto_queue_version)
             .transpose()?,
         current_queue_item_id: optional_i32(source, "current_queue_item_id")?,
         next_queue_item_id: optional_i32(source, "next_queue_item_id")?,
@@ -959,14 +959,21 @@ mod tests {
         for permission in [1u8, 2] {
             for nested in [false, true] {
                 let info = json!({"capabilities": {"volume_remote_control": permission}});
-                let payload = if nested { json!({"device_info": info}) } else { info };
+                let payload = if nested {
+                    json!({"device_info": info})
+                } else {
+                    info
+                };
                 let report = RendererReport::new(
                     RendererReportType::RndrSrvrDeviceInfoUpdated,
                     "00000000-0000-0000-0000-000000000000",
-                    QueueVersion::default(), payload,
+                    QueueVersion::default(),
+                    payload,
                 );
-                assert_eq!(map_renderer_report(&report).unwrap().encode_to_vec(),
-                    vec![0x08, 22, 0xb2, 0x01, 6, 0x0a, 4, 0x3a, 2, 0x18, permission]);
+                assert_eq!(
+                    map_renderer_report(&report).unwrap().encode_to_vec(),
+                    vec![0x08, 22, 0xb2, 0x01, 6, 0x0a, 4, 0x3a, 2, 0x18, permission]
+                );
             }
         }
     }

@@ -642,7 +642,7 @@ impl QobuzClient {
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-App-Id",
-            HeaderValue::from_str(&app_id).map_err(|_| ApiError::InvalidAppId)?,
+            HeaderValue::from_str(app_id).map_err(|_| ApiError::InvalidAppId)?,
         );
         headers.insert(
             "X-User-Auth-Token",
@@ -1486,7 +1486,7 @@ impl QobuzClient {
         query.push(("limit", limit.to_string()));
 
         // Derive method name from endpoint path: "/discover/newReleases" -> "discovernewReleases"
-        let method_name = endpoint.replace('/', "").replace('.', "");
+        let method_name = endpoint.replace(['/', '.'], "");
         let http_response = self
             .signed_get_auth(
                 &url,
@@ -1898,7 +1898,7 @@ impl QobuzClient {
     pub async fn get_artist_basic(&self, artist_id: u64) -> Result<Artist> {
         let url = endpoints::build_url(paths::ARTIST_GET);
         let locale = self.locale().await;
-        let query = vec![
+        let query = [
             ("artist_id", artist_id.to_string()),
             ("lang", locale),
             // No "extra" parameter = only basic info (id, name, image)
@@ -2829,7 +2829,8 @@ impl QobuzClient {
     ) -> Result<(StreamUrl, Quality)> {
         Self::resolve_stream_url_with_fallback(track_id, preferred, |quality| {
             self.get_stream_url(track_id, quality)
-        }).await
+        })
+        .await
     }
 
     async fn resolve_stream_url_with_fallback<F, Fut>(
@@ -3367,7 +3368,7 @@ impl QobuzClient {
         limit: u32,
     ) -> Result<ArtistStoryResponse> {
         let url = endpoints::build_url(paths::ARTIST_STORY);
-        let query = vec![
+        let query = [
             ("artist_id", artist_id.to_string()),
             ("offset", offset.to_string()),
             ("limit", limit.to_string()),
@@ -3607,11 +3608,14 @@ mod tests {
 
     fn available_master(format_id: u32) -> StreamUrl {
         StreamUrl {
-            url: "https://cdn.example.test/audio".into(), format_id,
+            url: "https://cdn.example.test/audio".into(),
+            format_id,
             mime_type: "audio/flac".into(),
             sampling_rate: if format_id == 6 { 44.1 } else { 96.0 },
             bit_depth: Some(if format_id == 6 { 16 } else { 24 }),
-            track_id: 7, restrictions: Vec::new(), sample: false,
+            track_id: 7,
+            restrictions: Vec::new(),
+            sample: false,
         }
     }
 
@@ -3619,12 +3623,13 @@ mod tests {
     async fn successful_request_keeps_available_format_without_extra_attempts() {
         for format_id in [6, 7] {
             let mut attempts = Vec::new();
-            let (url, actual) = QobuzClient::resolve_stream_url_with_fallback(
-                7, Quality::UltraHiRes, |quality| {
+            let (url, actual) =
+                QobuzClient::resolve_stream_url_with_fallback(7, Quality::UltraHiRes, |quality| {
                     attempts.push(quality);
                     std::future::ready(Ok(available_master(format_id)))
-                },
-            ).await.unwrap();
+                })
+                .await
+                .unwrap();
             assert_eq!(attempts, vec![Quality::UltraHiRes]);
             assert_eq!(actual, Quality::UltraHiRes);
             assert_eq!(url.format_id, format_id);
@@ -3634,8 +3639,8 @@ mod tests {
     #[tokio::test]
     async fn successful_request_reports_actual_fallback_not_initial_preference() {
         let mut attempts = Vec::new();
-        let (url, actual) = QobuzClient::resolve_stream_url_with_fallback(
-            7, Quality::UltraHiRes, |quality| {
+        let (url, actual) =
+            QobuzClient::resolve_stream_url_with_fallback(7, Quality::UltraHiRes, |quality| {
                 attempts.push(quality);
                 let mut url = available_master(7);
                 if quality == Quality::UltraHiRes {
@@ -3644,8 +3649,9 @@ mod tests {
                     });
                 }
                 std::future::ready(Ok(url))
-            },
-        ).await.unwrap();
+            })
+            .await
+            .unwrap();
         assert_eq!(attempts, vec![Quality::UltraHiRes, Quality::HiRes]);
         assert_eq!(actual, Quality::HiRes);
         assert_eq!(url.format_id, 7);
@@ -3653,18 +3659,21 @@ mod tests {
 
     #[tokio::test]
     async fn successful_request_aborts_auth_failure_without_lower_quality_requests() {
-        for error in [ApiError::Forbidden("fixture".into()),
+        for error in [
+            ApiError::Forbidden("fixture".into()),
             ApiError::ForbiddenCircuitOpen(30),
-            ApiError::AuthenticationError("fixture".into()), ApiError::InvalidAppSecret] {
+            ApiError::AuthenticationError("fixture".into()),
+            ApiError::InvalidAppSecret,
+        ] {
             let expected = std::mem::discriminant(&error);
             let mut error = Some(error);
             let mut attempts = Vec::new();
-            let result = QobuzClient::resolve_stream_url_with_fallback(
-                7, Quality::UltraHiRes, |quality| {
+            let result =
+                QobuzClient::resolve_stream_url_with_fallback(7, Quality::UltraHiRes, |quality| {
                     attempts.push(quality);
                     std::future::ready(Err(error.take().expect("must abort after first failure")))
-                },
-            ).await;
+                })
+                .await;
             assert_eq!(std::mem::discriminant(&result.unwrap_err()), expected);
             assert_eq!(attempts, vec![Quality::UltraHiRes]);
         }
@@ -3778,6 +3787,10 @@ mod tests {
     /// parallel, so the shared lock serializes gate-touching tests and the
     /// drop guard reopens the gate even if the test panics.
     #[tokio::test]
+    // The lock is held across .await by design: it serializes tests that
+    // touch the process-global offline gate, each on its own single-test
+    // runtime — not a same-runtime contention hazard.
+    #[allow(clippy::await_holding_lock)]
     async fn offline_gate_fails_fast_with_typed_error() {
         ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
@@ -3792,7 +3805,7 @@ mod tests {
         let result = client.get_album_suggest("0060254735180").await;
         let elapsed = started.elapsed();
 
-        let err = result.err().expect("offline gate must fail the request");
+        let err = result.expect_err("offline gate must fail the request");
         assert!(
             matches!(err, ApiError::OfflineMode),
             "expected ApiError::OfflineMode, got: {err}"
@@ -3812,6 +3825,8 @@ mod tests {
     /// on the missing bundle tokens instead — never `ApiError::OfflineMode`,
     /// and without touching the network.
     #[tokio::test]
+    // See offline_gate_fails_fast_with_typed_error's own comment.
+    #[allow(clippy::await_holding_lock)]
     async fn offline_gate_exempts_login_methods() {
         ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
@@ -3826,8 +3841,7 @@ mod tests {
         let err = client
             .login("user@example.com", "pw")
             .await
-            .err()
-            .expect("uninitialized client must fail");
+            .expect_err("uninitialized client must fail");
         assert!(
             !matches!(err, ApiError::OfflineMode),
             "login must bypass the offline gate, got: {err}"
@@ -3836,8 +3850,7 @@ mod tests {
         let err = client
             .login_with_oauth_code("code")
             .await
-            .err()
-            .expect("uninitialized client must fail");
+            .expect_err("uninitialized client must fail");
         assert!(
             !matches!(err, ApiError::OfflineMode),
             "login_with_oauth_code must bypass the offline gate, got: {err}"
@@ -3846,8 +3859,7 @@ mod tests {
         let err = client
             .login_with_token("token")
             .await
-            .err()
-            .expect("uninitialized client must fail");
+            .expect_err("uninitialized client must fail");
         assert!(
             !matches!(err, ApiError::OfflineMode),
             "login_with_token must bypass the offline gate, got: {err}"

@@ -125,7 +125,11 @@ where
         // Keep every message frame-aligned. 4096 is not divisible by every
         // legal channel count (notably 3), and splitting an interleaved frame
         // would shift both RMS analyzers at the next batch boundary.
-        if self.buffer.len() >= BATCH_SIZE && self.buffer.len() % self.channels.max(1) as usize == 0
+        if self.buffer.len() >= BATCH_SIZE
+            && self
+                .buffer
+                .len()
+                .is_multiple_of(self.channels.max(1) as usize)
         {
             self.flush_buffer();
         }
@@ -248,7 +252,7 @@ mod tests {
             Some(track(41)),
             0,
         );
-        assert!(matches!(first.next(), Some(_)));
+        assert!(first.next().is_some());
         assert!(
             matches!(rx.recv().unwrap(), AnalyzerMessage::NewTrack(info) if info.track_id == 41)
         );
@@ -261,7 +265,7 @@ mod tests {
         let mut queued =
             AnalyzerTap::new_with_waveform(source(vec![0.2, 0.2]), tx, enabled, Some(track(42)), 0);
         assert!(rx.try_recv().is_err());
-        assert!(matches!(queued.next(), Some(_)));
+        assert!(queued.next().is_some());
         assert!(
             matches!(rx.recv().unwrap(), AnalyzerMessage::NewTrack(info) if info.track_id == 42)
         );

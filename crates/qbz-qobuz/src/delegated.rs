@@ -802,6 +802,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // Held across .await by design: serializes tests touching the
+    // process-global offline gate, each on its own single-test runtime.
+    #[allow(clippy::await_holding_lock)]
     async fn access_preflight_uses_only_bearer_and_app_id() {
         let _lock = crate::offline_gate::test_lock()
             .lock()
@@ -825,6 +828,8 @@ mod tests {
     }
 
     #[tokio::test]
+    // See access_preflight_uses_only_bearer_and_app_id's own comment.
+    #[allow(clippy::await_holding_lock)]
     async fn metadata_request_keeps_delegated_headers_and_is_signed() {
         let _lock = crate::offline_gate::test_lock()
             .lock()

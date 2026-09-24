@@ -749,7 +749,13 @@ pub async fn load_album(
     let tracks: Vec<TrackRow> = album
         .tracks
         .as_ref()
-        .map(|container| container.items.iter().map(|t| map_track(t, artist_credits)).collect())
+        .map(|container| {
+            container
+                .items
+                .iter()
+                .map(|t| map_track(t, artist_credits))
+                .collect()
+        })
         .unwrap_or_default();
 
     // External links are built from the SAME artist/title the header shows.
@@ -1153,8 +1159,7 @@ pub(crate) fn publish_unavailable(album_id: String, gone: bool, error: String) {
         return;
     }
     crate::spawn(async move {
-        let found =
-            crate::track_replace_qt::ranked_alternatives(&album_id, &title, &artist).await;
+        let found = crate::track_replace_qt::ranked_alternatives(&album_id, &title, &artist).await;
         let cards: Vec<AlbumCardData> = found.iter().take(12).map(album_to_card).collect();
         let value = serde_json::to_value(&cards).unwrap_or_else(|_| json!([]));
         publish_patch(generation, move |doc| {
@@ -1178,7 +1183,11 @@ fn album_to_card(album: &Album) -> AlbumCardData {
         title: format_album_title(&album.title, album.version.as_deref()),
         artist,
         artist_id,
-        genre: album.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
+        genre: album
+            .genre
+            .as_ref()
+            .map(|g| g.name.clone())
+            .unwrap_or_default(),
         year: qbz_text_utils::dates::release_label(date),
         release_sort_key: qbz_text_utils::dates::release_sort_key(date),
         quality_tier: home_qt::quality_tier_from_depth(album.maximum_bit_depth).to_string(),
@@ -1672,19 +1681,32 @@ mod tests {
 
     #[test]
     fn featured_list_resolves_ids_from_the_album_credits_and_leaves_the_rest_searchable() {
-        let performers = "Alice, MainArtist - Bob, FeaturedArtist - Carol, Vocalist, FeaturedArtist";
-        let credits = [credit(1, "Alice", "main-artist"), credit(2, "bob", "featured-artist")];
+        let performers =
+            "Alice, MainArtist - Bob, FeaturedArtist - Carol, Vocalist, FeaturedArtist";
+        let credits = [
+            credit(1, "Alice", "main-artist"),
+            credit(2, "bob", "featured-artist"),
+        ];
         assert_eq!(
             featured_list(Some(performers), "Alice", "Song", &credits),
             vec![
-                FeaturedArtist { name: "Bob".into(), id: "2".into() },
-                FeaturedArtist { name: "Carol".into(), id: String::new() },
+                FeaturedArtist {
+                    name: "Bob".into(),
+                    id: "2".into()
+                },
+                FeaturedArtist {
+                    name: "Carol".into(),
+                    id: String::new()
+                },
             ]
         );
         assert!(featured_list(None, "Alice", "Song", &credits).is_empty());
         assert_eq!(
             featured_list(Some(performers), "Alice", "Song", &[])[0],
-            FeaturedArtist { name: "Bob".into(), id: String::new() }
+            FeaturedArtist {
+                name: "Bob".into(),
+                id: String::new()
+            }
         );
     }
 }

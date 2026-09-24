@@ -75,7 +75,10 @@ impl PlaybackCacheSettings {
             return;
         }
         let directory = self.disk_directory.take();
-        *self = Self { disk_directory: directory, ..Self::default() };
+        *self = Self {
+            disk_directory: directory,
+            ..Self::default()
+        };
         match profile {
             PlaybackMemoryProfile::High => {
                 self.dynamic = true;
@@ -169,14 +172,23 @@ mod tests {
     #[test]
     fn switching_memory_profiles_preserves_playback_storage() {
         let mut policy = PlaybackCacheSettings::default();
-        let path = std::env::temp_dir().join("playback-drive").to_string_lossy().into_owned();
+        let path = std::env::temp_dir()
+            .join("playback-drive")
+            .to_string_lossy()
+            .into_owned();
         policy.disk_directory = Some(path.clone());
-        for profile in [PlaybackMemoryProfile::High, PlaybackMemoryProfile::Low,
-            PlaybackMemoryProfile::Desktop, PlaybackMemoryProfile::Custom, PlaybackMemoryProfile::Auto] {
+        for profile in [
+            PlaybackMemoryProfile::High,
+            PlaybackMemoryProfile::Low,
+            PlaybackMemoryProfile::Desktop,
+            PlaybackMemoryProfile::Custom,
+            PlaybackMemoryProfile::Auto,
+        ] {
             policy.select_profile(profile);
             assert_eq!(policy.disk_directory.as_deref(), Some(path.as_str()));
             policy.validate().unwrap();
-            let restored: PlaybackCacheSettings = serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
+            let restored: PlaybackCacheSettings =
+                serde_json::from_str(&serde_json::to_string(&policy).unwrap()).unwrap();
             assert_eq!(restored.disk_directory, policy.disk_directory);
         }
     }

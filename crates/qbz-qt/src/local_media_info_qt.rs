@@ -347,12 +347,11 @@ pub fn open_empty(kind: &'static str) {
 pub fn open_track_by_row_id(row_id: i64) {
     begin();
     crate::spawn(async move {
-        let track = tokio::task::spawn_blocking(move || {
-            crate::local_playback::find_track_blocking(row_id)
-        })
-        .await
-        .ok()
-        .flatten();
+        let track =
+            tokio::task::spawn_blocking(move || crate::local_playback::find_track_blocking(row_id))
+                .await
+                .ok()
+                .flatten();
         match track {
             Some(track) => open_track(track),
             None => open_empty("track"),

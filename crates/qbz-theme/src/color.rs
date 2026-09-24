@@ -22,6 +22,9 @@ impl Rgba {
     }
 
     /// Color with explicit alpha.
+    // Renaming would touch every call site across the codebase for a
+    // public constructor that reads clearly as-is; left alone.
+    #[allow(clippy::self_named_constructors)]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
@@ -142,16 +145,23 @@ pub fn apca_lc(text: Rgba, bg: Rgba) -> f64 {
         return 0.0;
     }
 
-    let out;
-    if bg_y > txt_y {
+    let out = if bg_y > txt_y {
         // Normal polarity: dark text on light bg -> positive Lc.
         let c = (bg_y.powf(APCA_NORM_BG) - txt_y.powf(APCA_NORM_TXT)) * APCA_SCALE;
-        out = if c < APCA_LO_CLIP { 0.0 } else { c - APCA_LO_CLIP * 0.027 };
+        if c < APCA_LO_CLIP {
+            0.0
+        } else {
+            c - APCA_LO_CLIP * 0.027
+        }
     } else {
         // Reverse polarity: light text on dark bg -> negative Lc.
         let c = (bg_y.powf(APCA_REV_BG) - txt_y.powf(APCA_REV_TXT)) * APCA_SCALE;
-        out = if c > -APCA_LO_CLIP { 0.0 } else { c + APCA_LO_CLIP * 0.027 };
-    }
+        if c > -APCA_LO_CLIP {
+            0.0
+        } else {
+            c + APCA_LO_CLIP * 0.027
+        }
+    };
     out * 100.0
 }
 
@@ -163,7 +173,10 @@ mod tests {
     fn hex_roundtrip() {
         assert_eq!(Rgba::from_hex("#0f0f0f"), Some(Rgba::rgb(15, 15, 15)));
         assert_eq!(Rgba::from_hex("ffffff"), Some(Rgba::rgb(255, 255, 255)));
-        assert_eq!(Rgba::from_hex("#ffffff14"), Some(Rgba::rgba(255, 255, 255, 0x14)));
+        assert_eq!(
+            Rgba::from_hex("#ffffff14"),
+            Some(Rgba::rgba(255, 255, 255, 0x14))
+        );
         assert_eq!(Rgba::from_hex("nope"), None);
     }
 
@@ -185,9 +198,15 @@ mod tests {
     fn apca_sign_convention() {
         // light text on dark bg -> negative
         let lc = apca_lc(Rgba::rgb(255, 255, 255), Rgba::rgb(15, 15, 15));
-        assert!(lc < -60.0, "white on near-black should be strongly negative, got {lc}");
+        assert!(
+            lc < -60.0,
+            "white on near-black should be strongly negative, got {lc}"
+        );
         // dark text on light bg -> positive
         let lc = apca_lc(Rgba::rgb(0, 0, 0), Rgba::rgb(255, 255, 255));
-        assert!(lc > 90.0, "black on white should be strongly positive, got {lc}");
+        assert!(
+            lc > 90.0,
+            "black on white should be strongly positive, got {lc}"
+        );
     }
 }

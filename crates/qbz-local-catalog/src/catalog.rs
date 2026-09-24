@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::types::Value;
 use rusqlite::{
-    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Row,
-    Statement,
+    params, params_from_iter, Connection, OpenFlags, OptionalExtension, Row, Statement,
 };
 
 use crate::bootstrap::{BootstrapBatch, SourceCheckpoint, BOOTSTRAP_BATCH_ROWS};
@@ -1737,8 +1736,7 @@ fn filter_parts(
         if !descriptor.formats().is_empty() {
             format_arms.push(format!(
                 "{alias}.format IN ({})",
-                std::iter::repeat("?")
-                    .take(descriptor.formats().len())
+                std::iter::repeat_n("?", descriptor.formats().len())
                     .collect::<Vec<_>>()
                     .join(",")
             ));
@@ -2188,8 +2186,7 @@ fn album_filter_parts(
         if !descriptor.formats().is_empty() {
             format_arms.push(format!(
                 "am.format IN ({})",
-                std::iter::repeat("?")
-                    .take(descriptor.formats().len())
+                std::iter::repeat_n("?", descriptor.formats().len())
                     .collect::<Vec<_>>()
                     .join(",")
             ));

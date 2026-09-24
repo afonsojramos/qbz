@@ -22,11 +22,11 @@ const HTAPS: [f64; HTAPS_LEN] = [
     0.0379429484910187, 0.02490921351762261, 0.0133774746265897,
     0.003883043418804416, -0.003284703416210726, -0.008080250212687497,
     -0.01067241812471033, -0.01139427235000863, -0.0106813877974587,
-    -0.009007905078766049, -0.006828859761015335, -0.004535184322001496,
+    -0.009_007_905_078_766_05, -0.006828859761015335, -0.004535184322001496,
     -0.002425035959059578, -0.0006922187080790708, 0.0005700762133516592,
     0.001353838005269448, 0.001713709169690937, 0.001742046839472948,
     0.001545601648013235, 0.001226696225277855, 0.0008704322683580222,
-    0.0005381636200535649, 0.000266446345425276, 7.002968738383528e-05,
+    0.000_538_163_620_053_565, 0.000266446345425276, 7.002968738383528e-05,
     -5.279407053811266e-05, -0.0001140625650874684, -0.0001304796361231895,
     -0.0001189970287491285, -9.396247155265073e-05, -6.577634378272832e-05,
     -4.07492895872535e-05, -2.17407957554587e-05, -9.163058931391722e-06,
@@ -40,6 +40,11 @@ struct Tables {
     ctables: [[f32; 256]; CTABLES],
 }
 
+// Both range loops below are direct, verbatim ports of dsd2pcm.c's own
+// precalc loops (see their own comments) — `t`/`e` carry Gray-code/bit-
+// position meaning beyond plain indexing, so keeping the literal C-loop
+// shape here is deliberate, not an oversight to "fix".
+#[allow(clippy::needless_range_loop)]
 fn tables() -> &'static Tables {
     static TABLES: OnceLock<Tables> = OnceLock::new();
     TABLES.get_or_init(|| {
@@ -70,7 +75,10 @@ fn tables() -> &'static Tables {
                 ctables[CTABLES - 1 - t][e] = acc as f32;
             }
         }
-        Tables { bitreverse, ctables }
+        Tables {
+            bitreverse,
+            ctables,
+        }
     })
 }
 
@@ -89,7 +97,10 @@ pub struct Dsd2Pcm {
 impl Dsd2Pcm {
     pub fn new() -> Self {
         // 0x69 is DSD silence; priming the FIFO with it avoids a start click.
-        Self { fifo: [0x69; FIFO_SIZE], pos: 0 }
+        Self {
+            fifo: [0x69; FIFO_SIZE],
+            pos: 0,
+        }
     }
 
     /// Translate DSD bytes to float samples, appending to `dst`.
@@ -99,7 +110,11 @@ impl Dsd2Pcm {
         let mut ffp = self.pos;
         dst.reserve(src.len());
         for &byte in src {
-            let bite1 = if lsb_first { tb.bitreverse[byte as usize] } else { byte };
+            let bite1 = if lsb_first {
+                tb.bitreverse[byte as usize]
+            } else {
+                byte
+            };
             self.fifo[ffp] = bite1;
             // Pre-reverse the byte that just crossed the filter midpoint so
             // the mirrored half reads straight from the table (dsd2pcm.c).
@@ -159,7 +174,10 @@ mod tests {
         let mut b = Dsd2Pcm::new();
         let (mut oa, mut ob) = (Vec::new(), Vec::new());
         let pattern: Vec<u8> = (0..=255u8).cycle().take(2048).collect();
-        let reversed: Vec<u8> = pattern.iter().map(|&x| tables().bitreverse[x as usize]).collect();
+        let reversed: Vec<u8> = pattern
+            .iter()
+            .map(|&x| tables().bitreverse[x as usize])
+            .collect();
         a.translate(&pattern, false, &mut oa);
         b.translate(&reversed, true, &mut ob);
         assert_eq!(oa, ob);

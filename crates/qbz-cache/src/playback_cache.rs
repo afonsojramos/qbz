@@ -29,9 +29,16 @@ impl FileIdentity {
         use std::os::unix::fs::MetadataExt;
         Some(Self {
             size: meta.len(),
-            modified_ns: meta.modified().ok()?.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_nanos(),
-            #[cfg(unix)] device: meta.dev(),
-            #[cfg(unix)] inode: meta.ino(),
+            modified_ns: meta
+                .modified()
+                .ok()?
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .ok()?
+                .as_nanos(),
+            #[cfg(unix)]
+            device: meta.dev(),
+            #[cfg(unix)]
+            inode: meta.ino(),
         })
     }
 }
@@ -180,18 +187,30 @@ impl PlaybackCache {
         Some(file)
     }
 
-    pub fn open_with_quality(&self, track_id: u64) -> Option<(fs::File, Option<crate::CacheQuality>)> {
+    pub fn open_with_quality(
+        &self,
+        track_id: u64,
+    ) -> Option<(fs::File, Option<crate::CacheQuality>)> {
         let file = self.open(track_id)?;
         let quality = (|| {
             let identity = FileIdentity::read(&file)?;
             let mut bytes = Vec::new();
-            fs::File::open(self.quality_path(track_id)).ok()?.take(4096).read_to_end(&mut bytes).ok()?;
+            fs::File::open(self.quality_path(track_id))
+                .ok()?
+                .take(4096)
+                .read_to_end(&mut bytes)
+                .ok()?;
             let record: QualityRecord = serde_json::from_slice(&bytes).ok()?;
-            if record.file != identity { return None; }
+            if record.file != identity {
+                return None;
+            }
             match record.version {
                 // v1 did not record the successful request. Never infer it
                 // from the preference or from a response's available format.
-                1 => crate::CacheQuality::from_resolved(record.quality.requested, record.quality.resolved.id()),
+                1 => crate::CacheQuality::from_resolved(
+                    record.quality.requested,
+                    record.quality.resolved.id(),
+                ),
                 2 => Some(record.quality),
                 _ => None,
             }
@@ -208,14 +227,20 @@ impl PlaybackCache {
         let published = (|| -> Option<()> {
             let quality = quality?;
             let file = fs::File::open(self.track_path(track_id)).ok()?;
-            let record = QualityRecord { version: 2, file: FileIdentity::read(&file)?, quality };
+            let record = QualityRecord {
+                version: 2,
+                file: FileIdentity::read(&file)?,
+                quality,
+            };
             let bytes = serde_json::to_vec(&record).ok()?;
             let mut pending = tempfile::NamedTempFile::new_in(&self.cache_dir).ok()?;
             pending.write_all(&bytes).ok()?;
             pending.persist(&path).ok()?;
             Some(())
         })();
-        if published.is_none() { let _ = fs::remove_file(path); }
+        if published.is_none() {
+            let _ = fs::remove_file(path);
+        }
     }
 
     /// Temporary playback spools live on the cache disk, never the system /tmp
@@ -278,7 +303,12 @@ impl PlaybackCache {
         self.insert_with_quality(track_id, data, None)
     }
 
-    pub fn insert_with_quality(&self, track_id: u64, data: &[u8], quality: Option<crate::CacheQuality>) -> bool {
+    pub fn insert_with_quality(
+        &self,
+        track_id: u64,
+        data: &[u8],
+        quality: Option<crate::CacheQuality>,
+    ) -> bool {
         let _write = self.writes.lock().unwrap();
         let size = data.len() as u64;
 
@@ -294,7 +324,9 @@ impl PlaybackCache {
         }
 
         // Evict old entries if needed
-        if !self.evict_if_needed(size) { return false; }
+        if !self.evict_if_needed(size) {
+            return false;
+        }
 
         let path = self.track_path(track_id);
         let pending = path.with_extension(format!("audio.{}.tmp", std::process::id()));
@@ -370,7 +402,13 @@ impl PlaybackCache {
         self.insert_from_with_quality(track_id, size_hint, None, fill)
     }
 
-    pub fn insert_from_with_quality<F>(&self, track_id: u64, size_hint: u64, quality: Option<crate::CacheQuality>, fill: F) -> bool
+    pub fn insert_from_with_quality<F>(
+        &self,
+        track_id: u64,
+        size_hint: u64,
+        quality: Option<crate::CacheQuality>,
+        fill: F,
+    ) -> bool
     where
         F: FnOnce(&mut fs::File) -> std::io::Result<usize>,
     {
@@ -393,7 +431,9 @@ impl PlaybackCache {
             }
             drop(file);
             if !self.evict_if_needed(written) {
-                return Err(std::io::Error::other("playback cache budget could not be reclaimed"));
+                return Err(std::io::Error::other(
+                    "playback cache budget could not be reclaimed",
+                ));
             }
             fs::rename(&pending, self.track_path(track_id))?;
             Ok(written)
@@ -428,8 +468,11 @@ impl PlaybackCache {
     /// Evict oldest entries to make room for new data
     fn evict_if_needed(&self, needed_bytes: u64) -> bool {
         let mut state = self.state.lock().unwrap();
-        let mut candidates: Vec<_> = state.entries.values()
-            .map(|entry| (entry.track_id, entry.last_accessed)).collect();
+        let mut candidates: Vec<_> = state
+            .entries
+            .values()
+            .map(|entry| (entry.track_id, entry.last_accessed))
+            .collect();
         candidates.sort_by_key(|(_, accessed)| *accessed);
         for (track_id, _) in candidates {
             if state.current_size <= self.max_size_bytes.saturating_sub(needed_bytes) {
@@ -520,7 +563,8 @@ mod disk_reader_tests {
         use qbz_models::Quality;
         let temp = tempfile::tempdir().unwrap();
         let cache = PlaybackCache::with_path(temp.path().into(), 1024).unwrap();
-        let quality = crate::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 7);
+        let quality =
+            crate::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 7);
         assert!(cache.insert_with_quality(7, b"first", quality));
         let record = fs::read(cache.quality_path(7)).unwrap();
         assert_eq!(cache.open_with_quality(7).unwrap().1, quality);
@@ -533,7 +577,8 @@ mod disk_reader_tests {
         fs::write(cache.quality_path(7), b"invalid metadata").unwrap();
         assert_eq!(cache.open_with_quality(7).unwrap().1, None);
         let mut file = cache.open(7).unwrap();
-        let mut bytes = Vec::new(); file.read_to_end(&mut bytes).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
         assert_eq!(bytes, b"other");
     }
 
@@ -542,7 +587,11 @@ mod disk_reader_tests {
         let temp = tempfile::tempdir().unwrap();
         let disk = std::sync::Arc::new(PlaybackCache::with_path(temp.path().into(), 1024).unwrap());
         let memory = crate::AudioCache::with_playback_cache(5, disk.clone());
-        let quality = crate::CacheQuality::from_acquisition(qbz_models::Quality::UltraHiRes, qbz_models::Quality::UltraHiRes, 6);
+        let quality = crate::CacheQuality::from_acquisition(
+            qbz_models::Quality::UltraHiRes,
+            qbz_models::Quality::UltraHiRes,
+            6,
+        );
         memory.insert_with_quality(1, b"first".to_vec(), quality);
         assert_eq!(memory.get(1).unwrap().quality, quality);
         memory.insert(2, b"other".to_vec());
@@ -556,12 +605,19 @@ mod disk_reader_tests {
         use qbz_models::Quality;
         let temp = tempfile::tempdir().unwrap();
         let cache = PlaybackCache::with_path(temp.path().into(), 1024).unwrap();
-        let quality = crate::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 6);
+        let quality =
+            crate::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 6);
         assert!(cache.insert_with_quality(7, b"complete audio", quality));
         let path = cache.quality_path(7);
-        let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(record["version"], 2);
-        assert!(cache.open_with_quality(7).unwrap().1.unwrap().satisfies(Quality::UltraHiRes));
+        assert!(cache
+            .open_with_quality(7)
+            .unwrap()
+            .1
+            .unwrap()
+            .satisfies(Quality::UltraHiRes));
         // Even a stray new field in an old record cannot grant new trust.
         record["version"] = 1.into();
         fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
@@ -580,8 +636,16 @@ mod disk_reader_tests {
         let cache = PlaybackCache::with_path(temp.path().into(), 1024).unwrap();
         assert!(cache.insert(1, b"older"));
         assert!(cache.insert(2, b"newer"));
-        filetime::set_file_atime(&temp.path().join("1.audio"), filetime::FileTime::from_unix_time(1, 0)).unwrap();
-        filetime::set_file_atime(&temp.path().join("2.audio"), filetime::FileTime::from_unix_time(2, 0)).unwrap();
+        filetime::set_file_atime(
+            temp.path().join("1.audio"),
+            filetime::FileTime::from_unix_time(1, 0),
+        )
+        .unwrap();
+        filetime::set_file_atime(
+            temp.path().join("2.audio"),
+            filetime::FileTime::from_unix_time(2, 0),
+        )
+        .unwrap();
         fs::write(temp.path().join("offline.flac"), b"keep").unwrap();
         drop(cache);
         let cache = PlaybackCache::with_path(temp.path().into(), 5).unwrap();

@@ -63,11 +63,9 @@ fn install_with_file_sink(default_level: &str, file_name: Option<&str>) {
     // discord_rich_presence warns on every failed IPC connect ("find_pipe:
     // could not find pipe"); qbz-integrations logs its own single line and
     // backs off, so the crate's copy only needs to surface real errors.
-    let inner = env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or(format!(
-            "{default_level},zbus=warn,tracing=warn,discord_rich_presence=error"
-        )),
-    )
+    let inner = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(
+        format!("{default_level},zbus=warn,tracing=warn,discord_rich_presence=error"),
+    ))
     .build();
     let level = inner.filter();
     let sink = file_name.and_then(open_log_file);
@@ -122,6 +120,7 @@ fn open_log_file_at(path: &Path) -> Option<FileSink> {
 
     let lock = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(dir.join(format!("{name}.lock")))
@@ -216,7 +215,9 @@ mod tests {
 
     #[test]
     fn named_log_paths_share_the_logs_directory() {
-        let Some(default) = log_file_path() else { return };
+        let Some(default) = log_file_path() else {
+            return;
+        };
         let daemon = log_file_path_named("qbzd.log").unwrap();
         assert_eq!(default.parent(), daemon.parent());
         assert_eq!(default.file_name().unwrap(), DEFAULT_LOG_FILE);

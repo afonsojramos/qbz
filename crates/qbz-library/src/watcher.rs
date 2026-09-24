@@ -65,7 +65,8 @@ impl LocalRootWatcher {
             let _ = self.watcher.unwatch(&path);
             self.roots.remove(&root_id);
         }
-        self.failures.retain(|id, (path, _)| desired.get(id) == Some(path));
+        self.failures
+            .retain(|id, (path, _)| desired.get(id) == Some(path));
         for (root_id, path) in &desired {
             if self.roots.get(root_id) == Some(path) {
                 continue;
@@ -192,9 +193,15 @@ mod tests {
             let _ = std::fs::read_dir(temp.path()).unwrap().collect::<Vec<_>>();
             assert_eq!(std::fs::read(&path).unwrap(), b"fixture");
         }
-        assert_eq!(watcher.recv_timeout(Duration::from_millis(300)), RootWatchEvent::Timeout);
+        assert_eq!(
+            watcher.recv_timeout(Duration::from_millis(300)),
+            RootWatchEvent::Timeout
+        );
         std::fs::write(&path, b"changed").unwrap();
-        assert_eq!(watcher.recv_timeout(Duration::from_secs(5)), RootWatchEvent::Changed(vec![4]));
+        assert_eq!(
+            watcher.recv_timeout(Duration::from_secs(5)),
+            RootWatchEvent::Changed(vec![4])
+        );
     }
 
     fn folder(id: i64, path: &std::path::Path, network: bool) -> LibraryFolder {

@@ -106,19 +106,34 @@ mod tests {
     #[test]
     fn xml_is_sniffed_as_xspf_whatever_the_extension_says() {
         let body = br#"<?xml version="1.0"?><playlist><trackList/></playlist>"#;
-        assert_eq!(detect_format(body, "mislabeled.m3u").unwrap(), FileFormat::Xspf);
+        assert_eq!(
+            detect_format(body, "mislabeled.m3u").unwrap(),
+            FileFormat::Xspf
+        );
     }
 
     #[test]
     fn a_pls_header_or_a_bare_file_key_is_enough() {
-        assert_eq!(detect_format(b"[playlist]\nFile1=a\n", "x.txt").unwrap(), FileFormat::Pls);
-        assert_eq!(detect_format(b"File1=a.flac\nTitle1=A\n", "x.txt").unwrap(), FileFormat::Pls);
+        assert_eq!(
+            detect_format(b"[playlist]\nFile1=a\n", "x.txt").unwrap(),
+            FileFormat::Pls
+        );
+        assert_eq!(
+            detect_format(b"File1=a.flac\nTitle1=A\n", "x.txt").unwrap(),
+            FileFormat::Pls
+        );
     }
 
     #[test]
     fn extm3u_is_sniffed_and_a_bare_list_falls_back_to_the_extension() {
-        assert_eq!(detect_format(b"#EXTM3U\na.flac\n", "x.txt").unwrap(), FileFormat::M3u);
-        assert_eq!(detect_format(b"/music/a.flac\n", "list.m3u8").unwrap(), FileFormat::M3u);
+        assert_eq!(
+            detect_format(b"#EXTM3U\na.flac\n", "x.txt").unwrap(),
+            FileFormat::M3u
+        );
+        assert_eq!(
+            detect_format(b"/music/a.flac\n", "list.m3u8").unwrap(),
+            FileFormat::M3u
+        );
     }
 
     #[test]

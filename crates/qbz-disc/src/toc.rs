@@ -96,4 +96,3 @@ impl Toc {
         format!("{h:016x}")
     }
 }
-

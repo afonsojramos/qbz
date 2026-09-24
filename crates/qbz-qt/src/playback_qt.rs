@@ -294,23 +294,32 @@ pub(crate) fn memory_apply_busy() -> bool {
 /// drains owner work and prevents the poller from repopulating gapless/L1 while
 /// Stop is acknowledged. Disk cache, queue order and audio settings survive.
 pub(crate) async fn apply_playback_memory(request: &str) -> Result<(), String> {
-    let (mode, expected_track) = request.split_once(':')
+    let (mode, expected_track) = request
+        .split_once(':')
         .filter(|(mode, _)| matches!(*mode, "idle" | "restart"))
         .ok_or("Playback changed. Apply again to confirm the current track.")?;
-    if MEMORY_APPLY_BUSY.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if MEMORY_APPLY_BUSY
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Ok(());
     }
     struct BusyGuard;
     impl Drop for BusyGuard {
-        fn drop(&mut self) { MEMORY_APPLY_BUSY.store(false, Ordering::SeqCst); }
+        fn drop(&mut self) {
+            MEMORY_APPLY_BUSY.store(false, Ordering::SeqCst);
+        }
     }
     let _busy = BusyGuard;
     crate::settings_qt::publish_snapshot().await;
     let runtime = crate::APP.get().ok_or("Playback is not ready yet.")?;
     let service = crate::qconnect_qt::service().ok_or("Playback is not ready yet.")?;
     let (_lane, _fence) = tokio::time::timeout(
-        std::time::Duration::from_secs(20), service.playback_memory_fence(),
-    ).await.map_err(|_| "Playback is busy. Try applying the memory profile again.".to_string())??;
+        std::time::Duration::from_secs(20),
+        service.playback_memory_fence(),
+    )
+    .await
+    .map_err(|_| "Playback is busy. Try applying the memory profile again.".to_string())??;
     if crate::cast_qt::is_casting().await || service.is_peer_renderer_active().await {
         return Err("Playback memory can only be applied to local playback.".into());
     }
@@ -321,7 +330,11 @@ pub(crate) async fn apply_playback_memory(request: &str) -> Result<(), String> {
     let active = player.has_loaded_audio() || event.is_playing || pending != 0;
     let current = runtime.core().current_track().await;
     if (restart && mode != "restart")
-        || (active && !current.as_ref().is_some_and(|t| t.id.to_string() == expected_track)) {
+        || (active
+            && !current
+                .as_ref()
+                .is_some_and(|t| t.id.to_string() == expected_track))
+    {
         return Err("Playback changed. Apply again to confirm the current track.".into());
     }
     let _ = begin_resolved_play();
@@ -339,7 +352,9 @@ pub(crate) async fn apply_playback_memory(request: &str) -> Result<(), String> {
         }
     }
     refresh_now_playing(runtime).await;
-    log::info!("[playback-memory] Applied profile; old playback buffers and L1 released, L2 retained");
+    log::info!(
+        "[playback-memory] Applied profile; old playback buffers and L1 released, L2 retained"
+    );
     Ok(())
 }
 
@@ -617,7 +632,10 @@ async fn kick_prefetch(
     let memory = runtime.core().player().playback_prefetch_policy();
     if qbz_app::memory_watchdog::prefetch_halted()
         || ((!memory.allow_hires || qbz_app::memory_watchdog::hires_prefetch_paused())
-            && matches!(quality, Quality::HiRes | Quality::UltraHiRes)) { return; }
+            && matches!(quality, Quality::HiRes | Quality::UltraHiRes))
+    {
+        return;
+    }
     let throttle_cap = qbz_audio::network_throttle::state().current_prefetch_cap(
         qbz_audio::network_throttle::playback_mbps_for_quality(prefetch_quality_tag(quality)),
         MAX_CONCURRENT_PREFETCH.min(memory.concurrency),
@@ -627,7 +645,10 @@ async fn kick_prefetch(
         return;
     }
 
-    let upcoming = runtime.core().peek_upcoming(PREFETCH_LOOKAHEAD.min(memory.lookahead)).await;
+    let upcoming = runtime
+        .core()
+        .peek_upcoming(PREFETCH_LOOKAHEAD.min(memory.lookahead))
+        .await;
     let candidates: Vec<PrefetchCandidate> = upcoming.iter().map(PrefetchCandidate::from).collect();
     let track_ids = prefetch_track_ids(streaming_only, offline, throttle_cap, &candidates);
     for track_id in track_ids {
@@ -650,7 +671,11 @@ async fn kick_prefetch(
                 return;
             };
             let player = runtime.core().player();
-            if !player.playback_prefetch_policy().allow_hires && matches!(quality, Quality::HiRes | Quality::UltraHiRes) { return; }
+            if !player.playback_prefetch_policy().allow_hires
+                && matches!(quality, Quality::HiRes | Quality::UltraHiRes)
+            {
+                return;
+            }
             if let Err(error) = player.prefetch_into_cache(client, track_id, quality).await {
                 log::debug!("[qbz-qt] prefetch: track {track_id} failed: {error}");
             }
@@ -3151,7 +3176,10 @@ pub(crate) async fn request_playing(
         return;
     };
     // A connected renderer owns transport — the local player is stopped.
-    match crate::cast_qt::service().request_playing_if_cast(requested).await {
+    match crate::cast_qt::service()
+        .request_playing_if_cast(requested)
+        .await
+    {
         Ok(true) => return,
         Ok(false) => {}
         Err(e) => {
@@ -3165,7 +3193,10 @@ pub(crate) async fn request_playing(
     // is no local fallback (a peer owns audio; a local resume would
     // double-play).
     if let Some(svc) = crate::qconnect_qt::service() {
-        match svc.request_remote_renderer_playback_if_active(requested).await {
+        match svc
+            .request_remote_renderer_playback_if_active(requested)
+            .await
+        {
             Ok(true) => return,
             Ok(false) => {}
             Err(e) => {
@@ -4961,8 +4992,17 @@ pub fn start_poll_loop(runtime: Arc<AppRuntime<LoggingAdapter>>) {
                                     // retain the existing offline-aware resolver below.
                                     let throttle_cap = qbz_audio::network_throttle::state()
                                         .current_prefetch_cap(
-                                            qbz_audio::network_throttle::playback_mbps_for_quality(prefetch_quality_tag(quality)), 1);
-                                    if !should_stream_gapless_successor(streaming_only, player_cached, offline_cached, throttle_cap) {
+                                            qbz_audio::network_throttle::playback_mbps_for_quality(
+                                                prefetch_quality_tag(quality),
+                                            ),
+                                            1,
+                                        );
+                                    if !should_stream_gapless_successor(
+                                        streaming_only,
+                                        player_cached,
+                                        offline_cached,
+                                        throttle_cap,
+                                    ) {
                                         log::info!("[qbz-qt] [GAPLESS] successor {next_id} skipped: network throttle cap 0");
                                         return;
                                     }
@@ -5344,11 +5384,10 @@ mod tests {
         begin_resolved_play, cancel_owner_playback_tasks, capture_owner_scoped_snapshot,
         filter_queue_with, gapless_edge_matches, gapless_successor_changed,
         owner_generation_changed, playback_recovery_cause, prefetch_track_ids,
-        purchase_quality_badge, quality_badge_from, reconcile_device_cap,
-        resolved_play_is_current, should_stream_gapless_successor, source_change_targets_current,
-        spawn_owner_playback_task, stream_error_text, xorshift_shuffle_seeded,
-        OwnerActionObservation, OwnerActionToken, OwnerScopedSnapshot, PlaybackRecoveryCause,
-        PrefetchCandidate, PrefetchTrackEdge,
+        purchase_quality_badge, quality_badge_from, reconcile_device_cap, resolved_play_is_current,
+        should_stream_gapless_successor, source_change_targets_current, spawn_owner_playback_task,
+        stream_error_text, xorshift_shuffle_seeded, OwnerActionObservation, OwnerActionToken,
+        OwnerScopedSnapshot, PlaybackRecoveryCause, PrefetchCandidate, PrefetchTrackEdge,
     };
     use qbz_models::{Quality, QualityLimit, QueueTrack};
     use qbz_player::PlaybackEvent;
@@ -6152,7 +6191,8 @@ mod offline_gapless_regressions {
 
     fn queue_row(source: &str, is_local: bool) -> QueueTrack {
         let mut row = crate::local_playback::local_queue_track(&qbz_library::LocalTrack {
-            id: 42, ..Default::default()
+            id: 42,
+            ..Default::default()
         });
         row.source = Some(source.into());
         row.is_local = is_local;

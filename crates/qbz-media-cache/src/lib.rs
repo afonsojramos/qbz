@@ -407,7 +407,9 @@ fn row_to_track(row: &rusqlite::Row<'_>) -> rusqlite::Result<CachedTrack> {
             .map(|v| v as u32),
         channels: row.get::<_, Option<i64>>("channels")?.map(|v| v as u32),
         bitrate_kbps: row.get::<_, Option<i64>>("bitrate_kbps")?.map(|v| v as u32),
-        isrc: row.get::<_, Option<String>>("isrc")?.filter(|v| !v.is_empty()),
+        isrc: row
+            .get::<_, Option<String>>("isrc")?
+            .filter(|v| !v.is_empty()),
         recording_mbid: row
             .get::<_, Option<String>>("recording_mbid")?
             .filter(|v| !v.is_empty()),
@@ -1079,6 +1081,10 @@ pub fn search_page(
     search_page_filtered(conn, source, needle, offset, limit, sort, &[], false, &[])
 }
 
+// A params-struct refactor would touch every call site across the crate for
+// a query function whose parameters read plainly at each call — left as is
+// rather than done as a drive-by during a lint sweep.
+#[allow(clippy::too_many_arguments)]
 pub fn search_page_filtered(
     conn: &Connection,
     source: RemoteSource,
@@ -1843,7 +1849,7 @@ mod tests {
         row.codec = Some("flac".into());
         row.bit_depth = Some(24);
         row.sample_rate_hz = Some(192_000);
-        save_tracks(&mut c, RemoteSource::Jellyfin, &[row.clone()]).unwrap();
+        save_tracks(&mut c, RemoteSource::Jellyfin, std::slice::from_ref(&row)).unwrap();
         let generation = begin_source_sync(&mut c, RemoteSource::Jellyfin)
             .unwrap()
             .generation;
@@ -1978,8 +1984,13 @@ mod tests {
             .unwrap()
             .generation;
         let first = track("same", "album", Some(1), Some(1));
-        save_essential_tracks(&mut c, RemoteSource::Jellyfin, generation, &[first.clone()])
-            .unwrap();
+        save_essential_tracks(
+            &mut c,
+            RemoteSource::Jellyfin,
+            generation,
+            std::slice::from_ref(&first),
+        )
+        .unwrap();
         let mut duplicate = first;
         duplicate.title = "Wrong duplicate".into();
         assert!(
@@ -2015,7 +2026,7 @@ mod tests {
             &mut c,
             RemoteSource::Subsonic,
             first.generation,
-            &[keep.clone()],
+            std::slice::from_ref(&keep),
         )
         .unwrap();
         let visible = track_by_item_id(&c, RemoteSource::Subsonic, "keep")

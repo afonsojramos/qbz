@@ -60,8 +60,7 @@ pub const CMAF_FETCH_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(15);
 /// so the caller can emit UI progress events without knowing the CMAF
 /// internals. Callbacks must be `Send + Sync` because segments are
 /// fetched in parallel.
-pub type CmafProgressCallback =
-    std::sync::Arc<dyn Fn(CmafProgressUpdate) + Send + Sync>;
+pub type CmafProgressCallback = std::sync::Arc<dyn Fn(CmafProgressUpdate) + Send + Sync>;
 
 /// A single progress tick. `segments_completed` is cumulative (1..=n),
 /// `n_segments` is the total including the init segment if you count it.
@@ -127,7 +126,9 @@ pub async fn setup_streaming(
     track_id: u64,
     quality: Quality,
 ) -> std::result::Result<CmafStreamingInfo, String> {
-    let file_url = client.get_file_url(track_id, quality).await
+    let file_url = client
+        .get_file_url(track_id, quality)
+        .await
         .map_err(|e| format!("get_file_url failed: {}", e))?;
 
     let url_template = file_url
@@ -135,12 +136,11 @@ pub async fn setup_streaming(
         .as_ref()
         .ok_or("No url_template in file/url response")?
         .clone();
-    let key_str = file_url
-        .key
-        .as_ref()
-        .ok_or("No key in file/url response")?;
+    let key_str = file_url.key.as_ref().ok_or("No key in file/url response")?;
 
-    let (_session_id, infos) = client.ensure_cmaf_session().await
+    let (_session_id, infos) = client
+        .ensure_cmaf_session()
+        .await
         .map_err(|e| format!("ensure_cmaf_session failed: {}", e))?;
 
     let session_key = qbz_cmaf::derive_session_key(crate::auth::CMAF_SEED, &infos)
@@ -263,49 +263,78 @@ pub async fn download_full_with_quality_progress(
 /// Futures belong to this stream: cancellation/error drops outstanding HTTP
 /// work, and a slow leading segment cannot accumulate the rest of the track.
 async fn assemble_download(
-    http: &reqwest::Client, setup: &CmafStreamingInfo,
+    http: &reqwest::Client,
+    setup: &CmafStreamingInfo,
     on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<Vec<u8>, String> {
     use futures_util::{stream, StreamExt};
     if setup.segment_table.len() != usize::from(setup.n_segments) {
         return Err("CMAF segment count disagrees with init table".into());
     }
-    let expected_size = setup.segment_table.iter().try_fold(setup.flac_header.len(), |total, entry| {
-        total.checked_add(entry.byte_len as usize).ok_or("CMAF output size overflow")
-    })?;
+    let expected_size =
+        setup
+            .segment_table
+            .iter()
+            .try_fold(setup.flac_header.len(), |total, entry| {
+                total
+                    .checked_add(entry.byte_len as usize)
+                    .ok_or("CMAF output size overflow")
+            })?;
     let mut output = Vec::new();
-    output.try_reserve_exact(expected_size).map_err(|_| "CMAF output allocation failed")?;
+    output
+        .try_reserve_exact(expected_size)
+        .map_err(|_| "CMAF output allocation failed")?;
     output.extend_from_slice(&setup.flac_header);
-    let mut segments = stream::iter(1..=setup.n_segments).map(|index| async move {
-        let url = setup.url_template.replace("$SEGMENT$", &index.to_string());
-        let data = fetch_cdn_bytes_with_retry(http, &url, "CMAF-FULL").await?;
-        // Preserve the existing CDN pacing per occupied request slot.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        Ok::<_, String>((index, data))
-    }).buffered(CMAF_PREFETCH_CONCURRENCY);
+    let mut segments = stream::iter(1..=setup.n_segments)
+        .map(|index| async move {
+            let url = setup.url_template.replace("$SEGMENT$", &index.to_string());
+            let data = fetch_cdn_bytes_with_retry(http, &url, "CMAF-FULL").await?;
+            // Preserve the existing CDN pacing per occupied request slot.
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            Ok::<_, String>((index, data))
+        })
+        .buffered(CMAF_PREFETCH_CONCURRENCY);
     while let Some(segment) = segments.next().await {
         let (index, data) = segment?;
-        append_verified_segment(&data, &setup.content_key,
-            setup.segment_table[usize::from(index) - 1].byte_len as usize, &mut output)?;
+        append_verified_segment(
+            &data,
+            &setup.content_key,
+            setup.segment_table[usize::from(index) - 1].byte_len as usize,
+            &mut output,
+        )?;
         if let Some(progress) = &on_progress {
-            progress(CmafProgressUpdate { segments_completed: u32::from(index),
-                n_segments: u32::from(setup.n_segments), bytes_this_segment: data.len() as u64 });
+            progress(CmafProgressUpdate {
+                segments_completed: u32::from(index),
+                n_segments: u32::from(setup.n_segments),
+                bytes_this_segment: data.len() as u64,
+            });
         }
     }
-    if output.len() != expected_size { return Err("CMAF assembled size mismatch".into()); }
+    if output.len() != expected_size {
+        return Err("CMAF assembled size mismatch".into());
+    }
     Ok(output)
 }
 
-fn append_verified_segment(data: &[u8], key: &[u8; 16], expected: usize, output: &mut Vec<u8>)
-    -> std::result::Result<(), String> {
+fn append_verified_segment(
+    data: &[u8],
+    key: &[u8; 16],
+    expected: usize,
+    output: &mut Vec<u8>,
+) -> std::result::Result<(), String> {
     let crypto = qbz_cmaf::parse_segment_crypto(data).map_err(|e| e.to_string())?;
-    let size = crypto.mdat_end.checked_sub(crypto.data_offset).ok_or("CMAF invalid media bounds")?;
+    let size = crypto
+        .mdat_end
+        .checked_sub(crypto.data_offset)
+        .ok_or("CMAF invalid media bounds")?;
     if crypto.mdat_end > data.len() || size != expected {
         return Err("CMAF segment size disagrees with init table".into());
     }
     let mut cursor = crypto.data_offset;
     for entry in &crypto.entries {
-        cursor = cursor.checked_add(entry.size as usize).filter(|end| *end <= crypto.mdat_end)
+        cursor = cursor
+            .checked_add(entry.size as usize)
+            .filter(|end| *end <= crypto.mdat_end)
             .ok_or("CMAF frame exceeds media bounds")?;
     }
     // All bounds have been checked before the first mutation. Append and
@@ -315,7 +344,9 @@ fn append_verified_segment(data: &[u8], key: &[u8; 16], expected: usize, output:
         let end = cursor + entry.size as usize;
         let start = output.len();
         output.extend_from_slice(&data[cursor..end]);
-        if entry.flags != 0 { qbz_cmaf::decrypt_frame(key, &entry.iv, &mut output[start..]); }
+        if entry.flags != 0 {
+            qbz_cmaf::decrypt_frame(key, &entry.iv, &mut output[start..]);
+        }
         cursor = end;
     }
     output.extend_from_slice(&data[cursor..crypto.mdat_end]);
@@ -351,7 +382,9 @@ pub async fn download_raw_with_progress(
     quality: Quality,
     on_progress: Option<CmafProgressCallback>,
 ) -> std::result::Result<CmafRawBundle, String> {
-    let file_url = client.get_file_url(track_id, quality).await
+    let file_url = client
+        .get_file_url(track_id, quality)
+        .await
         .map_err(|e| format!("get_file_url failed: {}", e))?;
 
     let url_template = file_url
@@ -359,12 +392,11 @@ pub async fn download_raw_with_progress(
         .as_ref()
         .ok_or("No url_template in file/url response")?
         .clone();
-    let key_str = file_url
-        .key
-        .as_ref()
-        .ok_or("No key in file/url response")?;
+    let key_str = file_url.key.as_ref().ok_or("No key in file/url response")?;
 
-    let (_session_id, infos) = client.ensure_cmaf_session().await
+    let (_session_id, infos) = client
+        .ensure_cmaf_session()
+        .await
         .map_err(|e| format!("ensure_cmaf_session failed: {}", e))?;
 
     let session_key = qbz_cmaf::derive_session_key(crate::auth::CMAF_SEED, &infos)
@@ -539,7 +571,10 @@ async fn fetch_all_segments(
         let counter = completed_count.clone();
 
         fetches.spawn(async move {
-            let permit = sem.acquire_owned().await.map_err(|e| format!("semaphore: {}", e))?;
+            let permit = sem
+                .acquire_owned()
+                .await
+                .map_err(|e| format!("semaphore: {}", e))?;
             let seg_data = fetch_cdn_bytes_with_retry(
                 &http,
                 &seg_url,
@@ -642,7 +677,10 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&44u32.to_be_bytes());
         data.extend_from_slice(b"uuid");
-        data.extend_from_slice(&[0x3b,0x42,0x12,0x92,0x56,0xf3,0x5f,0x75,0x92,0x36,0x63,0xb6,0x9a,0x1f,0x52,0xb2]);
+        data.extend_from_slice(&[
+            0x3b, 0x42, 0x12, 0x92, 0x56, 0xf3, 0x5f, 0x75, 0x92, 0x36, 0x63, 0xb6, 0x9a, 0x1f,
+            0x52, 0xb2,
+        ]);
         data.extend_from_slice(&0u32.to_be_bytes());
         data.extend_from_slice(&52u32.to_be_bytes());
         data.extend_from_slice(&[0, 0, 0, 1]); // no IV, one clear frame
@@ -660,8 +698,11 @@ mod tests {
         let mut output = b"fLaC".to_vec();
         append_verified_segment(&segment, &[0; 16], 10, &mut output).unwrap();
         assert_eq!(output, b"fLaCframe-tail");
-        for (data, expected) in [(segment.clone(), 9), (segment_fixture(b"frame", 6), 5),
-            (segment[..segment.len()-1].to_vec(), 10)] {
+        for (data, expected) in [
+            (segment.clone(), 9),
+            (segment_fixture(b"frame", 6), 5),
+            (segment[..segment.len() - 1].to_vec(), 10),
+        ] {
             let mut output = b"fLaC".to_vec();
             assert!(append_verified_segment(&data, &[0; 16], expected, &mut output).is_err());
             assert_eq!(output, b"fLaC");
@@ -687,35 +728,64 @@ mod tests {
                     let mut request = [0; 1024];
                     let len = socket.read(&mut request).await.unwrap();
                     let request = std::str::from_utf8(&request[..len]).unwrap();
-                    let index: u8 = request.split_whitespace().nth(1).unwrap()[1..].parse().unwrap();
+                    let index: u8 = request.split_whitespace().nth(1).unwrap()[1..]
+                        .parse()
+                        .unwrap();
                     observed.fetch_add(1, Ordering::SeqCst);
-                    if index == 1 { release.notified().await; }
+                    if index == 1 {
+                        release.notified().await;
+                    }
                     let body = segment_fixture(&[index], 1);
-                    let header = format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                    let header = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
                     socket.write_all(header.as_bytes()).await.unwrap();
                     socket.write_all(&body).await.unwrap();
                 });
             }
-            while let Some(result) = requests.join_next().await { result.unwrap(); }
+            while let Some(result) = requests.join_next().await {
+                result.unwrap();
+            }
         });
         let download = tokio::spawn(async move {
             let setup = CmafStreamingInfo {
-                url_template: format!("http://{address}/$SEGMENT$"), n_segments: 6,
-                content_key: [0; 16], flac_header: b"fLaC".to_vec(),
-                segment_table: vec![qbz_cmaf::SegmentTableEntry { byte_len: 1, sample_count: 1 }; 6],
-                format_id: 27, sampling_rate: Some(96_000), bit_depth: Some(24), init_fetch_ms: 0,
+                url_template: format!("http://{address}/$SEGMENT$"),
+                n_segments: 6,
+                content_key: [0; 16],
+                flac_header: b"fLaC".to_vec(),
+                segment_table: vec![
+                    qbz_cmaf::SegmentTableEntry {
+                        byte_len: 1,
+                        sample_count: 1
+                    };
+                    6
+                ],
+                format_id: 27,
+                sampling_rate: Some(96_000),
+                bit_depth: Some(24),
+                init_fetch_ms: 0,
             };
-            assemble_download(&build_cdn_client().unwrap(), &setup, None).await.unwrap()
+            assemble_download(&build_cdn_client().unwrap(), &setup, None)
+                .await
+                .unwrap()
         });
         tokio::time::timeout(Duration::from_secs(2), async {
-            while requested.load(Ordering::SeqCst) < 3 { tokio::task::yield_now().await; }
-        }).await.unwrap();
+            while requested.load(Ordering::SeqCst) < 3 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         // The following two requests have completed, but the leading request
         // still owns its slot: no unbounded task/segment accumulation.
         tokio::time::sleep(Duration::from_millis(600)).await;
         assert_eq!(requested.load(Ordering::SeqCst), 3);
         release_first.notify_one();
-        let bytes = tokio::time::timeout(Duration::from_secs(4), download).await.unwrap().unwrap();
+        let bytes = tokio::time::timeout(Duration::from_secs(4), download)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(bytes, b"fLaC\x01\x02\x03\x04\x05\x06");
         server.await.unwrap();
     }
@@ -730,9 +800,7 @@ mod tests {
     #[tokio::test]
     async fn stalled_segment_body_times_out_and_retries() {
         install_tls_provider();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let accepts = Arc::new(AtomicU32::new(0));
         let server_accepts = accepts.clone();
@@ -785,9 +853,7 @@ mod tests {
     #[tokio::test]
     async fn aborting_full_fetch_cancels_its_segment_tasks() {
         install_tls_provider();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let (headers_tx, headers_rx) = tokio::sync::oneshot::channel();
         let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
@@ -796,9 +862,7 @@ mod tests {
             let mut request = [0u8; 1024];
             let _ = socket.read(&mut request).await;
             socket
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n",
-                )
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n")
                 .await
                 .unwrap();
             let _ = headers_tx.send(());

@@ -385,9 +385,7 @@ impl DaemonDelegationHost {
         // If shutdown cancellation drops this future, the original snapshot
         // remains available to the idempotent teardown retry.
         let snapshot = recover_lock(&self.owner_snapshot).as_ref().cloned();
-        let Some(snapshot) = snapshot else {
-            return None;
-        };
+        let snapshot = snapshot?;
         let _ = self.runtime.core().stop();
         self.runtime
             .core()
@@ -728,9 +726,12 @@ impl DelegationHost for DaemonDelegationHost {
             .await
             .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
         bootstrap_prepared_owner_presence(
-            &common.app, common.custom_name.clone(), common.volume_mode,
-        ).await
-            .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
+            &common.app,
+            common.custom_name.clone(),
+            common.volume_mode,
+        )
+        .await
+        .map_err(|_| DelegationErrorCode::OwnerRestoreFailed)?;
         common
             .preflight
             .wait_for_owner_session(cancellation)
@@ -1427,9 +1428,15 @@ async fn handle_delegated_event(
         }
         DelegatedRuntimeEventDirective::Rejoin => {
             if send_delegated_join(
-                app, session_id, true, custom_name, sink.volume_mode(), quality,
-            ).await
-                .is_err()
+                app,
+                session_id,
+                true,
+                custom_name,
+                sink.volume_mode(),
+                quality,
+            )
+            .await
+            .is_err()
             {
                 request_restore(coordinator, generation).await;
                 return false;

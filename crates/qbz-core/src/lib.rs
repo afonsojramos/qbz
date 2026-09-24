@@ -67,5 +67,5 @@ pub use core::{normalize_artist_name, QbzCore, QueueAuthoritySnapshot};
 // the progress label, and the typed error to tell "offline" and "the upstreams
 // all failed" apart from an honest empty result — which the untyped
 // `CoreError` cannot express and which the view's error state depends on.
-pub use core::{CancelToken, ScenePhase, SceneDiscoveryError};
+pub use core::{CancelToken, SceneDiscoveryError, ScenePhase};
 pub use error::CoreError;

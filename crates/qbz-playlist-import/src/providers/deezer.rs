@@ -26,22 +26,19 @@ pub fn detect_resource(url: &str) -> Option<super::MusicResource> {
 
     let parts: Vec<&str> = url.split('/').collect();
     for (idx, part) in parts.iter().enumerate() {
+        let next_is_nonempty = parts.get(idx + 1).map(|s| !s.is_empty()).unwrap_or(false);
         match *part {
-            "track" => {
-                if parts.get(idx + 1).map(|s| !s.is_empty()).unwrap_or(false) {
-                    return Some(super::MusicResource::Track {
-                        provider: super::MusicProvider::Deezer,
-                        url: url.to_string(),
-                    });
-                }
+            "track" if next_is_nonempty => {
+                return Some(super::MusicResource::Track {
+                    provider: super::MusicProvider::Deezer,
+                    url: url.to_string(),
+                });
             }
-            "album" => {
-                if parts.get(idx + 1).map(|s| !s.is_empty()).unwrap_or(false) {
-                    return Some(super::MusicResource::Album {
-                        provider: super::MusicProvider::Deezer,
-                        url: url.to_string(),
-                    });
-                }
+            "album" if next_is_nonempty => {
+                return Some(super::MusicResource::Album {
+                    provider: super::MusicProvider::Deezer,
+                    url: url.to_string(),
+                });
             }
             _ => {}
         }

@@ -47,9 +47,7 @@ use qbz_integrations::listenbrainz::{AdditionalInfo, ListenBrainzClient};
 use qbz_integrations::NowListening;
 use qbz_models::QueueTrack;
 
-use crate::playback_qt::{
-    begin_owner_action, begin_owner_action_exact, OwnerActionToken,
-};
+use crate::playback_qt::{begin_owner_action, begin_owner_action_exact, OwnerActionToken};
 use crate::settings_qt::{pref_bool, save_pref};
 
 // ---------------------------------------------------------------------------
@@ -482,12 +480,7 @@ pub fn discord_push_observed(
     expected_track_id: u64,
 ) {
     let expected_generation = SCROBBLE_GEN.load(Ordering::SeqCst);
-    spawn_discord_observed(
-        runtime,
-        owner_token,
-        expected_track_id,
-        expected_generation,
-    );
+    spawn_discord_observed(runtime, owner_token, expected_track_id, expected_generation);
 }
 
 /// Discord-only peer edge. It shares the playback integration generation so
@@ -498,12 +491,7 @@ pub fn discord_track_change_edge(
     expected_track_id: u64,
 ) {
     let expected_generation = SCROBBLE_GEN.fetch_add(1, Ordering::SeqCst) + 1;
-    spawn_discord_observed(
-        runtime,
-        owner_token,
-        expected_track_id,
-        expected_generation,
-    );
+    spawn_discord_observed(runtime, owner_token, expected_track_id, expected_generation);
 }
 
 fn spawn_discord_observed(
@@ -520,12 +508,7 @@ fn spawn_discord_observed(
         let Some(_owner_action) = begin_owner_action_exact(owner_token).await else {
             return;
         };
-        push_discord_current(
-            &runtime,
-            Some(expected_track_id),
-            Some(expected_generation),
-        )
-        .await;
+        push_discord_current(&runtime, Some(expected_track_id), Some(expected_generation)).await;
     });
 }
 
@@ -534,18 +517,14 @@ async fn push_discord_current(
     expected_track_id: Option<u64>,
     expected_generation: Option<u64>,
 ) {
-    if expected_generation
-        .is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst))
-    {
+    if expected_generation.is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst)) {
         return;
     }
     let state = runtime.core().get_queue_state().await;
     // The queue read yields. A newer track edge may have advanced the shared
     // generation while this task was suspended; in particular, an old empty
     // snapshot must not clear the newer track's Discord activity.
-    if expected_generation
-        .is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst))
-    {
+    if expected_generation.is_some_and(|expected| expected != SCROBBLE_GEN.load(Ordering::SeqCst)) {
         return;
     }
     let Some(track) = state.current_track else {
@@ -1130,12 +1109,7 @@ pub fn on_track_change_edge(
         }
         // UNGUARDED, 1:1 with the reference — Discord follows the peer.
         if discord().is_enabled() {
-            push_discord_current(
-                &rt,
-                Some(expected_track_id),
-                Some(expected_generation),
-            )
-            .await;
+            push_discord_current(&rt, Some(expected_track_id), Some(expected_generation)).await;
         }
     });
 }

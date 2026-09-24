@@ -13,7 +13,7 @@ use rodio::{
 use serde::{Deserialize, Serialize};
 
 /// Supported audio backends
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AudioBackendType {
     /// PipeWire backend (modern, recommended)
     /// - Supports device selection without changing system default
@@ -47,6 +47,7 @@ pub enum AudioBackendType {
     /// - No resampling: the DAC is commanded to the track's own rate
     /// - Selecting a device is required, by ENDPOINT ID (Windows gives several
     ///   endpoints the same friendly name)
+    ///
     /// The trait's `create_output_stream` for this type is the SHARED CPAL one:
     /// the exclusive stream bypasses the trait entirely, exactly as ALSA Direct
     /// and JACK do.
@@ -55,26 +56,25 @@ pub enum AudioBackendType {
     /// System default backend (non-Linux platforms)
     /// - Uses CPAL default host (CoreAudio on macOS, WASAPI on Windows)
     /// - Automatic device selection via OS audio system
+    ///
+    /// "System" everywhere: the OOTB default plays through the OS default
+    /// output, shared with other apps (no bit-perfect, no `pactl`). Audiophile
+    /// users opt into PipeWire / ALSA explicitly. This was PipeWire on Linux,
+    /// which hard-required `pactl` and froze OOTB playback without it (#470).
+    #[default]
     SystemDefault,
 }
 
-impl Default for AudioBackendType {
-    fn default() -> Self {
-        // "System" everywhere: the OOTB default plays through the OS default
-        // output, shared with other apps (no bit-perfect, no `pactl`). Audiophile
-        // users opt into PipeWire / ALSA explicitly. This was PipeWire on Linux,
-        // which hard-required `pactl` and froze OOTB playback without it (#470).
-        AudioBackendType::SystemDefault
-    }
-}
-
 /// ALSA plugin type (only relevant for ALSA backend)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AlsaPlugin {
     /// Direct hardware access (hw)
     /// - Bit-perfect, exclusive
     /// - No automatic format conversion
     /// - Blocks device for other apps
+    ///
+    /// The audiophile choice, hence the default.
+    #[default]
     Hw,
 
     /// Plug hardware access (plughw)
@@ -87,13 +87,6 @@ pub enum AlsaPlugin {
     /// - Generic ALSA device
     /// - Most compatible
     Pcm,
-}
-
-impl Default for AlsaPlugin {
-    fn default() -> Self {
-        // Hw is the audiophile choice
-        AlsaPlugin::Hw
-    }
 }
 
 /// Audio device information
@@ -1076,7 +1069,11 @@ pub struct DirectWriteError {
 
 impl From<String> for DirectWriteError {
     fn from(message: String) -> Self {
-        Self { frames_written: 0, canceled: false, message }
+        Self {
+            frames_written: 0,
+            canceled: false,
+            message,
+        }
     }
 }
 
@@ -1085,14 +1082,23 @@ pub trait DirectSink: Send + Sync + 'static {
     /// IS the back-pressure that paces the writer thread.
     fn write_f32(&self, samples: &[f32]) -> Result<(), String>;
     /// Backends with interruptible I/O override this to report partial progress.
-    fn write_f32_interruptible(&self, samples: &[f32], cancel: &std::sync::atomic::AtomicBool)
-        -> Result<usize, DirectWriteError> {
+    fn write_f32_interruptible(
+        &self,
+        samples: &[f32],
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<usize, DirectWriteError> {
         if cancel.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(DirectWriteError { frames_written: 0, canceled: true, message: "write canceled".into() });
+            return Err(DirectWriteError {
+                frames_written: 0,
+                canceled: true,
+                message: "write canceled".into(),
+            });
         }
         let channels = usize::from(self.channels());
-        if channels == 0 || samples.len() % channels != 0 {
-            return Err(DirectWriteError::from("PCM input must contain whole frames".to_string()));
+        if channels == 0 || !samples.len().is_multiple_of(channels) {
+            return Err(DirectWriteError::from(
+                "PCM input must contain whole frames".to_string(),
+            ));
         }
         self.write_f32(samples).map_err(DirectWriteError::from)?;
         Ok(samples.len() / channels)

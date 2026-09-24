@@ -166,8 +166,15 @@ impl AudioCache {
     }
 
     /// Inspect one immutable entry without copying a track-sized allocation.
-    pub fn peek_with_quality(&self, track_id: u64) -> Option<(Arc<Vec<u8>>, Option<crate::CacheQuality>)> {
-        self.state.lock().unwrap().tracks.get(&track_id)
+    pub fn peek_with_quality(
+        &self,
+        track_id: u64,
+    ) -> Option<(Arc<Vec<u8>>, Option<crate::CacheQuality>)> {
+        self.state
+            .lock()
+            .unwrap()
+            .tracks
+            .get(&track_id)
             .map(|track| (track.data.clone(), track.quality))
     }
 
@@ -309,11 +316,21 @@ impl AudioCache {
         self.insert_shared_with_quality(track_id, data, None)
     }
 
-    pub fn insert_with_quality(&self, track_id: u64, data: Vec<u8>, quality: Option<crate::CacheQuality>) -> CacheAdmission {
+    pub fn insert_with_quality(
+        &self,
+        track_id: u64,
+        data: Vec<u8>,
+        quality: Option<crate::CacheQuality>,
+    ) -> CacheAdmission {
         self.insert_shared_with_quality(track_id, Arc::new(data), quality)
     }
 
-    pub fn insert_shared_with_quality(&self, track_id: u64, data: Arc<Vec<u8>>, quality: Option<crate::CacheQuality>) -> CacheAdmission {
+    pub fn insert_shared_with_quality(
+        &self,
+        track_id: u64,
+        data: Arc<Vec<u8>>,
+        quality: Option<crate::CacheQuality>,
+    ) -> CacheAdmission {
         self.admit(track_id, data, true, quality)
     }
 
@@ -322,7 +339,12 @@ impl AudioCache {
         self.promote_from_disk_with_quality(track_id, data, None)
     }
 
-    pub fn promote_from_disk_with_quality(&self, track_id: u64, data: Vec<u8>, quality: Option<crate::CacheQuality>) -> CacheAdmission {
+    pub fn promote_from_disk_with_quality(
+        &self,
+        track_id: u64,
+        data: Vec<u8>,
+        quality: Option<crate::CacheQuality>,
+    ) -> CacheAdmission {
         self.admit(track_id, Arc::new(data), false, quality)
     }
 
@@ -370,7 +392,13 @@ impl AudioCache {
         }
     }
 
-    fn admit(&self, track_id: u64, data: Arc<Vec<u8>>, spill_rejected: bool, quality: Option<crate::CacheQuality>) -> CacheAdmission {
+    fn admit(
+        &self,
+        track_id: u64,
+        data: Arc<Vec<u8>>,
+        spill_rejected: bool,
+        quality: Option<crate::CacheQuality>,
+    ) -> CacheAdmission {
         let size = data.len();
         let mut retired = Vec::new();
         let admitted = {
@@ -668,19 +696,28 @@ mod memory_profile_tests {
     use qbz_models::playback_cache::PlaybackMemoryProfile;
     #[test]
     fn memory_profile_switches_live_budget_and_high_growth_requires_headroom() {
-        let cache=AudioCache::new(400<<20);
-        let mut policy=PlaybackCacheSettings::default();policy.select_profile(PlaybackMemoryProfile::High);
+        let cache = AudioCache::new(400 << 20);
+        let mut policy = PlaybackCacheSettings::default();
+        policy.select_profile(PlaybackMemoryProfile::High);
         cache.configure(policy.clone()).unwrap();
         assert!(!cache.can_buffer_in_memory(681736251));
-        cache.maintain(Some(MemoryHeadroom { total:4<<30, available:3<<30 }),Instant::now());
+        cache.maintain(
+            Some(MemoryHeadroom {
+                total: 4 << 30,
+                available: 3 << 30,
+            }),
+            Instant::now(),
+        );
         assert!(cache.can_buffer_in_memory(681736251));
-        assert_eq!(cache.stats().ceiling_size_bytes,1600<<20);
-        assert!(cache.stats().max_size_bytes>400<<20);
-        policy.select_profile(PlaybackMemoryProfile::Low);cache.configure(policy.clone()).unwrap();
-        assert_eq!(cache.stats().max_size_bytes,50<<20);
+        assert_eq!(cache.stats().ceiling_size_bytes, 1600 << 20);
+        assert!(cache.stats().max_size_bytes > 400 << 20);
+        policy.select_profile(PlaybackMemoryProfile::Low);
+        cache.configure(policy.clone()).unwrap();
+        assert_eq!(cache.stats().max_size_bytes, 50 << 20);
         assert!(!cache.can_buffer_in_memory(681736251));
-        assert_eq!(cache.stats().profile,"low");
-        policy.dynamic=true;assert!(cache.configure(policy).is_err());
-        assert_eq!(cache.stats().profile,"low");
+        assert_eq!(cache.stats().profile, "low");
+        policy.dynamic = true;
+        assert!(cache.configure(policy).is_err());
+        assert_eq!(cache.stats().profile, "low");
     }
 }

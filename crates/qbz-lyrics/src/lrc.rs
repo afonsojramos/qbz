@@ -48,9 +48,7 @@ fn stamp_regex() -> &'static Regex {
 
 fn offset_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)^\s*\[offset\s*:\s*([+-]?\d+)\s*\]").expect("valid regex")
-    })
+    RE.get_or_init(|| Regex::new(r"(?i)^\s*\[offset\s*:\s*([+-]?\d+)\s*\]").expect("valid regex"))
 }
 
 /// Parse an LRC blob into synced lines.
@@ -290,7 +288,10 @@ mod tests {
         let lrc = "[00:10.00][00:50.00]chorus\n";
         let lines = parse_lrc(lrc);
         assert_eq!(lines.len(), 2);
-        assert_eq!(line(&lines, 0), (10_000, Some(10_000 + MAX_SUNG_MS), "chorus"));
+        assert_eq!(
+            line(&lines, 0),
+            (10_000, Some(10_000 + MAX_SUNG_MS), "chorus")
+        );
         assert_eq!(line(&lines, 1).0, 50_000);
         // No stamp leaks into the displayed text.
         assert!(!lines[0].text.contains('['));
@@ -336,7 +337,9 @@ mod tests {
         let lines = parse_plain("a\n\n  b  \n\t\nc");
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[1].text, "b");
-        assert!(lines.iter().all(|l| l.time_ms.is_none() && l.end_ms.is_none()));
+        assert!(lines
+            .iter()
+            .all(|l| l.time_ms.is_none() && l.end_ms.is_none()));
     }
 
     #[test]
@@ -361,7 +364,8 @@ mod tests {
             },
         ];
         let lrc = emit_lrc(&spans);
-        let expected = "[00:01.000] first\n[00:03.000] second\n[00:05.000]\n[00:09.000] third\n[00:10.000]\n";
+        let expected =
+            "[00:01.000] first\n[00:03.000] second\n[00:05.000]\n[00:09.000] third\n[00:10.000]\n";
         assert_eq!(lrc, expected);
     }
 

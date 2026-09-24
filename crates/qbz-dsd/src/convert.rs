@@ -49,7 +49,8 @@ fn halfband_taps() -> &'static [f32; HALFBAND_TAPS] {
             } else {
                 (std::f64::consts::PI * 0.5 * x).sin() / (std::f64::consts::PI * x)
             };
-            let w = 0.42 - 0.5 * (2.0 * std::f64::consts::PI * n as f64 / (HALFBAND_TAPS - 1) as f64).cos()
+            let w = 0.42
+                - 0.5 * (2.0 * std::f64::consts::PI * n as f64 / (HALFBAND_TAPS - 1) as f64).cos()
                 + 0.08 * (4.0 * std::f64::consts::PI * n as f64 / (HALFBAND_TAPS - 1) as f64).cos();
             let v = sinc * w;
             *t = v as f32;
@@ -126,7 +127,10 @@ impl DsdPcmConverter {
     pub fn new(demux: Box<dyn DsdDemuxer>, gain_db: f32) -> Result<Self, DsdError> {
         let info = demux.info().clone();
         let ratio = info.dsd_rate / OUTPUT_RATE; // 32 / 64 / 128 / 256
-        if info.dsd_rate % OUTPUT_RATE != 0 || !(ratio / 8).is_power_of_two() || ratio < 16 {
+        if !info.dsd_rate.is_multiple_of(OUTPUT_RATE)
+            || !(ratio / 8).is_power_of_two()
+            || ratio < 16
+        {
             return Err(DsdError::UnsupportedRate(info.dsd_rate));
         }
         let n_stages = (ratio / 8).trailing_zeros() as usize; // 2..=5
@@ -166,6 +170,12 @@ impl DsdPcmConverter {
     /// emitted frame count is exactly [`Self::total_frames`]: the final block
     /// is silence-padded or truncated as needed so the container size always
     /// matches the header.
+    // The frame index `f` indexes multiple per-channel slices in lockstep
+    // (per_ch[0][f], per_ch[1][f], per_ch[i][f] for the downmix taps below)
+    // — not a single-collection pattern an iterator rewrite fits cleanly,
+    // and this is audio-sample math better left in its direct, obviously-
+    // correct form than restructured during a lint sweep.
+    #[allow(clippy::needless_range_loop)]
     pub fn next_block(&mut self) -> Result<Option<Vec<f32>>, DsdError> {
         if self.finished {
             return Ok(None);
@@ -215,10 +225,8 @@ impl DsdPcmConverter {
             6 => (Some(2), Some(4), Some(5)),
             _ => (None, None, None),
         };
-        let norm = 1.0
-            / (1.0
-                + if ci.is_some() { K } else { 0.0 }
-                + if sli.is_some() { K } else { 0.0 });
+        let norm =
+            1.0 / (1.0 + if ci.is_some() { K } else { 0.0 } + if sli.is_some() { K } else { 0.0 });
         let mut out = Vec::with_capacity(frames * 2);
         for f in 0..frames {
             let (l, r) = match self.channels {

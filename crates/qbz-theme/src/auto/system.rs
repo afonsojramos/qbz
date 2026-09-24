@@ -43,24 +43,22 @@ pub fn detect_desktop_environment() -> DesktopEnvironment {
         env::var("DESKTOP_SESSION"),
     ];
 
-    for candidate in &candidates {
-        if let Ok(val) = candidate {
-            let upper = val.to_uppercase();
-            if upper.contains("GNOME") || upper.contains("UNITY") || upper.contains("UBUNTU") {
-                return DesktopEnvironment::Gnome;
-            }
-            if upper.contains("KDE") || upper.contains("PLASMA") {
-                return DesktopEnvironment::KdePlasma;
-            }
-            if upper.contains("COSMIC") {
-                return DesktopEnvironment::Cosmic;
-            }
-            if upper.contains("XFCE") {
-                return DesktopEnvironment::Xfce;
-            }
-            if upper.contains("CINNAMON") || upper.contains("X-CINNAMON") {
-                return DesktopEnvironment::Cinnamon;
-            }
+    for val in candidates.iter().flatten() {
+        let upper = val.to_uppercase();
+        if upper.contains("GNOME") || upper.contains("UNITY") || upper.contains("UBUNTU") {
+            return DesktopEnvironment::Gnome;
+        }
+        if upper.contains("KDE") || upper.contains("PLASMA") {
+            return DesktopEnvironment::KdePlasma;
+        }
+        if upper.contains("COSMIC") {
+            return DesktopEnvironment::Cosmic;
+        }
+        if upper.contains("XFCE") {
+            return DesktopEnvironment::Xfce;
+        }
+        if upper.contains("CINNAMON") || upper.contains("X-CINNAMON") {
+            return DesktopEnvironment::Cinnamon;
         }
     }
 
@@ -400,7 +398,8 @@ fn parse_gsettings_uri(raw: &str) -> Option<String> {
 
 /// Extract filesystem path from a `file:///path` URI.
 fn parse_file_uri(uri: &str) -> Option<String> {
-    uri.strip_prefix("file://").map(|path| path.replace("%20", " "))
+    uri.strip_prefix("file://")
+        .map(|path| path.replace("%20", " "))
 }
 
 /// Parse "r,g,b" CSV format (KDE).
@@ -442,7 +441,7 @@ fn extract_path_from_cosmic_config(content: &str) -> Option<String> {
         if let Some(start) = trimmed.find('/') {
             let potential = &trimmed[start..];
             let end = potential
-                .find(|c: char| c == '"' || c == '\'' || c == ')' || c == ',')
+                .find(['"', '\'', ')', ','])
                 .unwrap_or(potential.len());
             let path = &potential[..end];
             if is_image_path(path) && PathBuf::from(path).is_absolute() {
@@ -648,7 +647,10 @@ mod tests {
 
     #[test]
     fn parse_rgb_csv_ok() {
-        assert_eq!(parse_rgb_csv("66,133,244").unwrap(), PaletteColor::new(66, 133, 244));
+        assert_eq!(
+            parse_rgb_csv("66,133,244").unwrap(),
+            PaletteColor::new(66, 133, 244)
+        );
         assert_eq!(
             parse_rgb_csv(" 66 , 133 , 244 ").unwrap(),
             PaletteColor::new(66, 133, 244)

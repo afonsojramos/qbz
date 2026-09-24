@@ -6,6 +6,7 @@
 //!   - `nplurals=1; plural=0;`         (ja — no plural distinction)
 //!   - `nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 &&
 //!      (n%100<12 || n%100>14) ? 1 : 2);` (ru — Slavic one/few/many)
+//!
 //! Anything unrecognized falls back to the English default `if n==1 {0} else {1}`.
 
 /// The plural-selection kind extracted from a `Plural-Forms` header.
@@ -56,7 +57,9 @@ impl PluralRule {
         // two 2-form rules; anything else defaults to the English `(n != 1)`.
         let kind = if normalized.contains("n%10==1&&n%100!=11") {
             Kind::Russian
-        } else if nplurals == 1 || normalized.contains("plural=0;") || normalized.contains("plural=0")
+        } else if nplurals == 1
+            || normalized.contains("plural=0;")
+            || normalized.contains("plural=0")
         {
             Kind::Single
         } else if normalized.contains("plural=(n>1)") || normalized.contains("plural=n>1") {

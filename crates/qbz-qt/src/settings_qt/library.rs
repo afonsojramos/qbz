@@ -234,7 +234,13 @@ static ACCESSIBLE: LazyLock<Mutex<std::collections::HashMap<(i64, String), Folde
     LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FolderAccess { Available, Missing, Disconnected, Denied, Unavailable }
+enum FolderAccess {
+    Available,
+    Missing,
+    Disconnected,
+    Denied,
+    Unavailable,
+}
 impl FolderAccess {
     fn from_error(error: std::io::ErrorKind) -> Self {
         use std::io::ErrorKind::*;
@@ -242,7 +248,7 @@ impl FolderAccess {
             NotFound | NotADirectory => Self::Missing,
             PermissionDenied => Self::Denied,
             NotConnected | ConnectionAborted | ConnectionReset | ConnectionRefused
-                | NetworkUnreachable | HostUnreachable => Self::Disconnected,
+            | NetworkUnreachable | HostUnreachable => Self::Disconnected,
             _ => Self::Unavailable,
         }
     }
@@ -298,8 +304,11 @@ pub fn snapshot() -> Snapshot {
         .map(|f| {
             // Do not block settings publication on filesystem I/O. Unknown
             // paths remain visibly unchecked until the background probe finishes.
-            let accessible = ACCESSIBLE.lock().unwrap_or_else(|e| e.into_inner())
-                .get(&(f.id, f.path.clone())).copied();
+            let accessible = ACCESSIBLE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&(f.id, f.path.clone()))
+                .copied();
             FolderRow {
                 display_name: match f.alias.as_deref() {
                     Some(a) if !a.is_empty() => a.to_string(),
@@ -322,7 +331,10 @@ pub fn snapshot() -> Snapshot {
     let plex_cfg = crate::local_plex::settings();
     Snapshot {
         folders,
-        picked_path: PICKED_PATH.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+        picked_path: PICKED_PATH
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
         scanning: progress.running,
         processed: progress.processed as i32,
         total: progress.total as i32,
@@ -426,7 +438,9 @@ async fn probe_path(path: &str) -> FolderAccess {
     match tokio::time::timeout(
         std::time::Duration::from_secs(6),
         tokio::task::spawn_blocking(move || std::fs::read_dir(path).map(|_| ())),
-    ).await {
+    )
+    .await
+    {
         Ok(Ok(Ok(()))) => FolderAccess::Available,
         Ok(Ok(Err(error))) => FolderAccess::from_error(error.kind()),
         _ => FolderAccess::Unavailable,
@@ -586,14 +600,18 @@ pub async fn pick_and_add_folder() {
     else {
         return;
     };
-    *PICKED_PATH.lock().unwrap_or_else(|e| e.into_inner()) = dir.path().to_string_lossy().to_string();
+    *PICKED_PATH.lock().unwrap_or_else(|e| e.into_inner()) =
+        dir.path().to_string_lossy().to_string();
     super::publish_snapshot().await;
 }
 
 /// "Add folder": canonicalize once and let Local Library decide whether to
 /// add, refresh, reuse an ancestor, or reject an overlap.
 pub async fn add_folder(path: String) {
-    PICKED_PATH.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    PICKED_PATH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     let path = path.trim().to_string();
     if path.is_empty() {
         return;
@@ -822,7 +840,10 @@ pub fn reset_profile_state() {
         .clear();
     STATUS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     ACCESSIBLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    PICKED_PATH.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    PICKED_PATH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     *EDIT.lock().unwrap_or_else(|e| e.into_inner()) = FolderEdit::default();
 }
 

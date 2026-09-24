@@ -1613,7 +1613,7 @@ impl LibraryDatabase {
             ))
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
-        stmt.query_row(params![id], |row| Self::row_to_track(row))
+        stmt.query_row(params![id], Self::row_to_track)
             .optional()
             .map_err(|e| LibraryError::Database(e.to_string()))
     }
@@ -1628,7 +1628,7 @@ impl LibraryDatabase {
             ))
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
-        stmt.query_row(params![path], |row| Self::row_to_track(row))
+        stmt.query_row(params![path], Self::row_to_track)
             .optional()
             .map_err(|e| LibraryError::Database(e.to_string()))
     }
@@ -1971,7 +1971,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![group_key], |row| Self::row_to_track(row))
+            .query_map(params![group_key], Self::row_to_track)
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -2291,7 +2291,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![escaped_prefix], |row| Self::row_to_track(row))
+            .query_map(params![escaped_prefix], Self::row_to_track)
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -2539,6 +2539,7 @@ impl LibraryDatabase {
     /// with the local aggregation. Sort, filter, and pagination apply
     /// to the union as a single result set, so a Plex-dominant library
     /// behaves identically to a local-dominant one.
+    #[allow(clippy::too_many_arguments)]
     pub fn get_albums_metadata_page(
         &self,
         offset: u64,
@@ -2619,6 +2620,11 @@ impl LibraryDatabase {
             .is_ok()
     }
 
+    // NOT let-and-return style: returning the `any(...)` expression directly
+    // (clippy's own suggestion) fails to borrow-check — `stmt` doesn't live
+    // long enough once `rows` is consumed in tail position instead of a
+    // separate binding. Confirmed by a real E0597 here, not just a lint.
+    #[allow(clippy::let_and_return)]
     fn attached_has_column(&self, schema: &str, table: &str, column: &str) -> bool {
         let sql = format!("PRAGMA {schema}.table_info({table})");
         let Ok(mut stmt) = self.conn.prepare(&sql) else {
@@ -2694,6 +2700,7 @@ impl LibraryDatabase {
         None
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn get_albums_metadata_page_inner(
         &self,
         offset: u64,
@@ -3100,6 +3107,7 @@ impl LibraryDatabase {
     /// window-function-derived total isn't available) or when the
     /// frontend wants to know the count before requesting any page.
     /// Honours the same Plex attachment state as the caller used.
+    #[allow(clippy::too_many_arguments)]
     fn count_albums_metadata_for_page(
         &self,
         search: Option<&str>,
@@ -3254,7 +3262,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![metadata_key], |row| Self::row_to_track(row))
+            .query_map(params![metadata_key], Self::row_to_track)
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -3424,6 +3432,7 @@ impl LibraryDatabase {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn update_album_group_metadata(
         &mut self,
         group_key: &str,
@@ -3782,7 +3791,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map(params![&pattern], |row| Self::row_to_track(row))
+            .query_map(params![&pattern], Self::row_to_track)
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -3819,6 +3828,7 @@ impl LibraryDatabase {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn search_with_filter_page_faceted(
         &self,
         query: &str,
@@ -4230,22 +4240,20 @@ pub struct PlaylistSettings {
 }
 
 /// Status of local content availability for a playlist
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalContentStatus {
+    #[default]
     Unknown,
     No,
     SomeLocal,
     AllLocal,
 }
 
-impl Default for LocalContentStatus {
-    fn default() -> Self {
-        Self::Unknown
-    }
-}
-
 impl LocalContentStatus {
+    // Returns Self, not Result — not the std::str::FromStr shape, and
+    // renaming would touch every call site across the crate.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s {
             "no" => Self::No,
@@ -4425,10 +4433,12 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.sort_by = sort_by.to_string();
-            settings.sort_order = sort_order.to_string();
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                sort_by: sort_by.to_string(),
+                sort_order: sort_order.to_string(),
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4459,9 +4469,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.custom_artwork_path = artwork_path.map(|s| s.to_string());
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                custom_artwork_path: artwork_path.map(|s| s.to_string()),
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4492,9 +4504,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.last_search_query = query.map(|s| s.to_string());
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                last_search_query: query.map(|s| s.to_string()),
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4576,9 +4590,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.hidden = hidden;
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                hidden,
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4609,9 +4625,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.is_favorite = favorite;
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                is_favorite: favorite,
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4693,9 +4711,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.position = position;
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                position,
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -4723,9 +4743,11 @@ impl LibraryDatabase {
             // Ensure settings exist first
             let existing = self.get_playlist_settings(playlist_id)?;
             if existing.is_none() {
-                let mut settings = PlaylistSettings::default();
-                settings.qobuz_playlist_id = playlist_id;
-                settings.position = index as i32;
+                let settings = PlaylistSettings {
+                    qobuz_playlist_id: playlist_id,
+                    position: index as i32,
+                    ..Default::default()
+                };
                 self.save_playlist_settings(&settings)?;
             } else {
                 self.conn
@@ -4966,6 +4988,7 @@ impl LibraryDatabase {
     }
 
     /// Update a playlist folder
+    #[allow(clippy::too_many_arguments)]
     pub fn update_playlist_folder(
         &self,
         folder_id: &str,
@@ -5060,9 +5083,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.folder_id = folder_id.map(|s| s.to_string());
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                folder_id: folder_id.map(|s| s.to_string()),
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -5814,9 +5839,9 @@ impl LibraryDatabase {
         if moves.is_empty() {
             return Ok(Vec::new());
         }
-        let mut next = ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
+        let start = ((qobuz_track_count as i32) + sidecar_total as i32).max(max_pos + 1);
         let mut healed = Vec::with_capacity(moves.len());
-        for (kind, rowid, reference, old) in moves {
+        for (next, (kind, rowid, reference, old)) in (start..).zip(moves) {
             let sql = match kind {
                 "local" => "UPDATE playlist_local_tracks SET position = ?1 WHERE id = ?2",
                 "plex" => "UPDATE playlist_plex_tracks SET position = ?1 WHERE id = ?2",
@@ -5826,7 +5851,6 @@ impl LibraryDatabase {
                 LibraryError::Database(format!("Failed to heal sidecar position: {}", e))
             })?;
             healed.push(format!("{kind} {reference}: {old} -> {next}"));
-            next += 1;
         }
         Ok(healed)
     }
@@ -6180,7 +6204,7 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let rows = stmt
-            .query_map([], |row| Self::row_to_track(row))
+            .query_map([], Self::row_to_track)
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut tracks = Vec::new();
@@ -6241,6 +6265,7 @@ impl LibraryDatabase {
 
     /// Insert a Qobuz cached track into the library
     /// Note: Database source field remains 'qobuz_download' for compatibility
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_qobuz_cached_track_direct(
         &self,
         track_id: u64,
@@ -6303,6 +6328,7 @@ impl LibraryDatabase {
 
     /// Insert a Qobuz cached track with full metadata and album grouping
     /// Note: Database source field remains 'qobuz_download' for compatibility
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_qobuz_cached_track_with_grouping(
         &self,
         track_id: u64,
@@ -6482,10 +6508,8 @@ impl LibraryDatabase {
             })?;
 
         let mut map = std::collections::HashMap::new();
-        for row in rows {
-            if let Ok((artist_name, custom_image_path)) = row {
-                map.insert(artist_name, custom_image_path);
-            }
+        for (artist_name, custom_image_path) in rows.flatten() {
+            map.insert(artist_name, custom_image_path);
         }
         Ok(map)
     }
@@ -6541,10 +6565,8 @@ impl LibraryDatabase {
             })?;
 
         let mut map = std::collections::HashMap::new();
-        for row in rows {
-            if let Ok((artist_name, canonical_name)) = row {
-                map.insert(artist_name, canonical_name);
-            }
+        for (artist_name, canonical_name) in rows.flatten() {
+            map.insert(artist_name, canonical_name);
         }
         Ok(map)
     }
@@ -6672,10 +6694,8 @@ impl LibraryDatabase {
             })?;
 
         let mut map = std::collections::HashMap::new();
-        for row in rows {
-            if let Ok((album_id, path)) = row {
-                map.insert(album_id, path);
-            }
+        for (album_id, path) in rows.flatten() {
+            map.insert(album_id, path);
         }
         Ok(map)
     }
@@ -6797,10 +6817,8 @@ impl LibraryDatabase {
             .map_err(|e| LibraryError::Database(e.to_string()))?;
 
         let mut result = HashSet::new();
-        for row in rows {
-            if let Ok(id) = row {
-                result.insert(id as u64);
-            }
+        for id in rows.flatten() {
+            result.insert(id as u64);
         }
 
         Ok(result)
@@ -6820,9 +6838,11 @@ impl LibraryDatabase {
         // First check if settings exist, if not create default
         let existing = self.get_playlist_settings(qobuz_playlist_id)?;
         if existing.is_none() {
-            let mut settings = PlaylistSettings::default();
-            settings.qobuz_playlist_id = qobuz_playlist_id;
-            settings.has_local_content = status;
+            let settings = PlaylistSettings {
+                qobuz_playlist_id,
+                has_local_content: status,
+                ..Default::default()
+            };
             return self.save_playlist_settings(&settings);
         }
 
@@ -7315,14 +7335,16 @@ mod metadata_grouping_tests {
         artist: &str,
         album_group_key: &str,
     ) {
-        let mut t = LocalTrack::default();
-        t.file_path = file_path.to_string();
-        t.title = format!("Track at {}", file_path);
-        t.album = album.unwrap_or("").to_string();
-        t.album_artist = album_artist.map(String::from);
-        t.artist = artist.to_string();
-        t.album_group_key = album_group_key.to_string();
-        t.album_group_title = album.unwrap_or("").to_string();
+        let t = LocalTrack {
+            file_path: file_path.to_string(),
+            title: format!("Track at {}", file_path),
+            album: album.unwrap_or("").to_string(),
+            album_artist: album_artist.map(String::from),
+            artist: artist.to_string(),
+            album_group_key: album_group_key.to_string(),
+            album_group_title: album.unwrap_or("").to_string(),
+            ..Default::default()
+        };
         db.insert_track(&t).unwrap();
     }
 
@@ -7615,15 +7637,17 @@ mod metadata_grouping_tests {
         album_group_title: &str,
         year: Option<u32>,
     ) {
-        let mut t = LocalTrack::default();
-        t.file_path = file_path.to_string();
-        t.title = format!("Track at {}", file_path);
-        t.album = album.to_string();
-        t.album_artist = album_artist.map(String::from);
-        t.artist = artist.to_string();
-        t.album_group_key = album_group_key.to_string();
-        t.album_group_title = album_group_title.to_string();
-        t.year = year;
+        let t = LocalTrack {
+            file_path: file_path.to_string(),
+            title: format!("Track at {}", file_path),
+            album: album.to_string(),
+            album_artist: album_artist.map(String::from),
+            artist: artist.to_string(),
+            album_group_key: album_group_key.to_string(),
+            album_group_title: album_group_title.to_string(),
+            year,
+            ..Default::default()
+        };
         db.insert_track(&t).unwrap();
     }
 
@@ -7796,19 +7820,21 @@ mod folder_tree_tests {
         // row), so we never set track.source here. To insert with a
         // different source value (e.g. 'qobuz_download'), use
         // `insert_qobuz_download_at` below.
-        let mut t = LocalTrack::default();
-        t.file_path = file_path.to_string();
-        t.title = title.to_string();
-        t.album = "Test Album".to_string();
-        t.album_artist = Some("Test Artist".to_string());
-        t.artist = "Test Artist".to_string();
-        t.album_group_key = file_path
-            .rsplit_once('/')
-            .map(|(parent, _)| parent.to_string())
-            .unwrap_or_default();
-        t.album_group_title = "Test Album".to_string();
-        t.disc_number = disc;
-        t.track_number = track_no;
+        let t = LocalTrack {
+            file_path: file_path.to_string(),
+            title: title.to_string(),
+            album: "Test Album".to_string(),
+            album_artist: Some("Test Artist".to_string()),
+            artist: "Test Artist".to_string(),
+            album_group_key: file_path
+                .rsplit_once('/')
+                .map(|(parent, _)| parent.to_string())
+                .unwrap_or_default(),
+            album_group_title: "Test Album".to_string(),
+            disc_number: disc,
+            track_number: track_no,
+            ..Default::default()
+        };
         db.insert_track(&t).unwrap();
     }
 
@@ -8034,9 +8060,7 @@ mod folder_tree_tests {
             }] if path == "/m/SACD/Opera.iso" && segment == "Opera.iso"
         ));
 
-        let image = db
-            .list_folder_children("/m/SACD/Opera.iso", false)
-            .unwrap();
+        let image = db.list_folder_children("/m/SACD/Opera.iso", false).unwrap();
         assert_eq!(image.len(), 2);
         assert!(matches!(
             &image[0],
@@ -8057,7 +8081,10 @@ mod folder_tree_tests {
                 .len(),
             2
         );
-        assert_eq!(db.count_folder_tracks_recursive("/m/SACD", false).unwrap(), 2);
+        assert_eq!(
+            db.count_folder_tracks_recursive("/m/SACD", false).unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -8498,11 +8525,13 @@ mod sidecar_position_tests {
     fn seed_local_tracks(db: &LibraryDatabase, count: usize) -> Vec<i64> {
         (0..count)
             .map(|i| {
-                let mut t = LocalTrack::default();
-                t.file_path = format!("/t/track{i}.flac");
-                t.title = format!("T{i}");
-                t.artist = "A".into();
-                t.album = "B".into();
+                let t = LocalTrack {
+                    file_path: format!("/t/track{i}.flac"),
+                    title: format!("T{i}"),
+                    artist: "A".into(),
+                    album: "B".into(),
+                    ..Default::default()
+                };
                 db.insert_track(&t).unwrap()
             })
             .collect()
@@ -8544,11 +8573,13 @@ mod sidecar_position_tests {
         assert_eq!(local_positions(&db, 7).len(), 1);
 
         // What a rescan does: the same file, re-extracted, inserted again.
-        let mut again = LocalTrack::default();
-        again.file_path = "/t/track0.flac".into();
-        again.title = "T0 (retagged)".into();
-        again.artist = "A".into();
-        again.album = "B".into();
+        let again = LocalTrack {
+            file_path: "/t/track0.flac".into(),
+            title: "T0 (retagged)".into(),
+            artist: "A".into(),
+            album: "B".into(),
+            ..Default::default()
+        };
         let id_after = db.insert_track(&again).unwrap();
 
         assert_eq!(
@@ -8695,18 +8726,20 @@ mod remote_union_tests {
         let tmp = TempDir::new().unwrap();
         let db = LibraryDatabase::open(&tmp.path().join("library.db")).unwrap();
 
-        let mut t = LocalTrack::default();
-        t.file_path = "/m/local/01.flac".into();
-        t.title = "Local One".into();
-        t.album = "Local Album".into();
-        t.album_artist = Some("Local Artist".into());
-        t.artist = "Local Artist".into();
-        t.album_group_key = "/m/local".into();
-        t.album_group_title = "Local Album".into();
-        t.duration_secs = 100;
-        t.format = crate::AudioFormat::Flac;
-        t.bit_depth = Some(16);
-        t.sample_rate = 44100.0;
+        let t = LocalTrack {
+            file_path: "/m/local/01.flac".into(),
+            title: "Local One".into(),
+            album: "Local Album".into(),
+            album_artist: Some("Local Artist".into()),
+            artist: "Local Artist".into(),
+            album_group_key: "/m/local".into(),
+            album_group_title: "Local Album".into(),
+            duration_secs: 100,
+            format: crate::AudioFormat::Flac,
+            bit_depth: Some(16),
+            sample_rate: 44100.0,
+            ..Default::default()
+        };
         db.insert_track(&t).unwrap();
 
         // The shared mirror, written with plain SQL so this test does not

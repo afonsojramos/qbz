@@ -720,7 +720,10 @@ mod tests {
         // Malformed input is echoed verbatim, never blanked.
         assert_eq!(release_date_iso("not a date"), "not a date");
         assert_eq!(release_date_iso("2026/07/04"), "2026/07/04");
-        assert_eq!(release_date_iso("2026-13-04T00:00:00Z"), "2026-13-04T00:00:00Z");
+        assert_eq!(
+            release_date_iso("2026-13-04T00:00:00Z"),
+            "2026-13-04T00:00:00Z"
+        );
         assert_eq!(release_date_iso(""), "");
     }
 

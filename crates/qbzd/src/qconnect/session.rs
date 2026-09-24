@@ -36,8 +36,8 @@ use super::engine::VolumeMode; // T10 (OD4): join-time volume report honors the 
 use super::lan::DaemonLanProjectionSlot;
 use super::sink::{DaemonEventSink, DaemonQconnectApp};
 use super::transport::{
-    device_info_with_volume_mode, load_persisted_device_name,
-    resolve_transport_config, QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2,
+    device_info_with_volume_mode, load_persisted_device_name, resolve_transport_config,
+    QconnectJoinSessionRequest, AUDIO_QUALITY_HIRES_LEVEL2,
 };
 use super::{update_lifecycle_state_if_running, DaemonQconnectInner};
 use crate::adapter::DaemonAdapter;
@@ -156,8 +156,14 @@ impl SessionLoopHost for DaemonSessionLoopHost {
         let device_name = load_persisted_device_name();
         log::info!("[QConnect] reconnect: announcing device name {device_name:?}");
         if let Err(err) = bootstrap_remote_presence(
-            &self.app, device_name, self.volume_mode, &self.authority, self.stamp,
-        ).await {
+            &self.app,
+            device_name,
+            self.volume_mode,
+            &self.authority,
+            self.stamp,
+        )
+        .await
+        {
             if !self.authority.is_current(self.stamp) {
                 return;
             }
@@ -262,7 +268,8 @@ pub async fn bootstrap_remote_presence(
 ) -> Result<(), String> {
     bootstrap_remote_presence_with_gate(app, custom_device_name, volume_mode, || {
         authority.is_current(stamp)
-    }).await
+    })
+    .await
 }
 
 /// Complete the owner bootstrap on an isolated, authenticated/subscribed QWS
@@ -345,6 +352,7 @@ where
 /// `deferred_renderer_join`, reading the current track duration via
 /// `runtime.core().get_track` and the current volume via
 /// `runtime.core().get_playback_state()`.
+#[allow(clippy::too_many_arguments)]
 pub async fn deferred_renderer_join(
     app: &Arc<DaemonQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
@@ -379,9 +387,8 @@ pub async fn deferred_renderer_join(
         return;
     }
 
-    let device_info = device_info_with_volume_mode(
-        load_persisted_device_name().as_deref(), volume_mode,
-    );
+    let device_info =
+        device_info_with_volume_mode(load_persisted_device_name().as_deref(), volume_mode);
     if !authority.is_current(stamp) {
         return;
     }

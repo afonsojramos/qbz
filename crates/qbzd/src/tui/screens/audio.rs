@@ -182,15 +182,12 @@ pub fn visible_fields(a: &StagedAudio) -> Vec<AField> {
 
 /// Toggle cascades (items 1-3), fired the moment a toggle flips.
 pub fn cascade_on_toggle(a: &mut StagedAudio, field: AField) {
-    match field {
-        AField::Passthrough => {
-            if a.dac_passthrough {
-                a.skip_sink_switch = false; // item 1: mutually exclusive
-            } else {
-                a.pw_force_bitperfect = false; // item 2
-            }
+    if field == AField::Passthrough {
+        if a.dac_passthrough {
+            a.skip_sink_switch = false; // item 1: mutually exclusive
+        } else {
+            a.pw_force_bitperfect = false; // item 2
         }
-        _ => {}
     }
 }
 
@@ -1332,10 +1329,12 @@ mod tests {
     }
 
     fn alsa_screen() -> AudioState {
-        let mut settings = AudioSettings::default();
-        settings.backend_type = Some(AudioBackendType::Alsa);
-        settings.output_device = Some("hw:CARD=D50,DEV=0".to_string());
-        settings.alsa_plugin = Some(AlsaPlugin::Hw);
+        let settings = AudioSettings {
+            backend_type: Some(AudioBackendType::Alsa),
+            output_device: Some("hw:CARD=D50,DEV=0".to_string()),
+            alsa_plugin: Some(AlsaPlugin::Hw),
+            ..Default::default()
+        };
         AudioState::new(&settings)
     }
 

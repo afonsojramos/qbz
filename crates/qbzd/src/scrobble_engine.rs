@@ -402,8 +402,6 @@ mod tests {
         let restored_owner = authority.reserve(AuthorityOrigin::Owner);
         assert!(authority.install(restored_owner));
 
-        assert!(authority
-            .try_owner_action_permit_exact(old_token)
-            .is_none());
+        assert!(authority.try_owner_action_permit_exact(old_token).is_none());
     }
 }

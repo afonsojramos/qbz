@@ -102,7 +102,10 @@ impl LyricsCacheDb {
 
         if !has_wsync_column {
             self.conn
-                .execute("ALTER TABLE lyrics_cache ADD COLUMN qobuz_wsync_json TEXT", [])
+                .execute(
+                    "ALTER TABLE lyrics_cache ADD COLUMN qobuz_wsync_json TEXT",
+                    [],
+                )
                 .map_err(|e| format!("Failed to add qobuz_wsync_json column: {}", e))?;
         }
 
@@ -351,8 +354,12 @@ mod tests {
         assert_eq!(db.count_entries().unwrap(), 1);
 
         // New writes can use the column on the migrated DB.
-        db.upsert("new::row::1", &payload(Some(2), LyricsProvider::Qobuz), Some("{}"))
-            .unwrap();
+        db.upsert(
+            "new::row::1",
+            &payload(Some(2), LyricsProvider::Qobuz),
+            Some("{}"),
+        )
+        .unwrap();
         let new = db.get_by_track_id(2).unwrap().unwrap();
         assert_eq!(new.qobuz_wsync_json.as_deref(), Some("{}"));
 

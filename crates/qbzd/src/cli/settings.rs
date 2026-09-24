@@ -279,8 +279,13 @@ fn parse_opt_u32(v: &str) -> Result<Option<u32>, String> {
     })
 }
 fn parse_cache_mib(raw: &str) -> Result<Option<u32>, String> {
-    if raw.trim().is_empty() || raw.trim().eq_ignore_ascii_case("none") { return Ok(None); }
-    raw.trim().parse::<u32>().map(Some).map_err(|_| "Expected an integer budget in MiB or none".into())
+    if raw.trim().is_empty() || raw.trim().eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    raw.trim()
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| "Expected an integer budget in MiB or none".into())
 }
 fn render_opt_u32(v: Option<u32>) -> String {
     v.map(|r| r.to_string())
@@ -392,18 +397,26 @@ fn read_all(roots: &ProfileRoots) -> Result<Vec<(&'static str, String)>, String>
             "audio.stream_first_track" => render_bool(audio.stream_first_track),
             "audio.stream_buffer_seconds" => audio.stream_buffer_seconds.to_string(),
             "audio.streaming_only" => render_bool(audio.streaming_only),
-            "audio.playback_memory_profile" => audio.playback_cache.selected_profile().as_str().into(),
+            "audio.playback_memory_profile" => {
+                audio.playback_cache.selected_profile().as_str().into()
+            }
             "audio.playback_cache_dynamic" => render_bool(audio.playback_cache.dynamic),
             "audio.playback_cache_min_mib" => render_opt_u32(audio.playback_cache.min_mib),
             "audio.playback_cache_max_mib" => render_opt_u32(audio.playback_cache.max_mib),
-            "audio.playback_storage_folder" => audio.playback_cache.disk_directory.clone().unwrap_or_default(),
+            "audio.playback_storage_folder" => audio
+                .playback_cache
+                .disk_directory
+                .clone()
+                .unwrap_or_default(),
             "audio.limit_quality_to_device" => render_bool(audio.limit_quality_to_device),
             "audio.allow_quality_fallback" => render_bool(audio.allow_quality_fallback),
             "audio.quality_fallback_behavior" => audio.quality_fallback_behavior.clone(),
             "audio.gapless_enabled" => render_bool(audio.gapless_enabled),
             "audio.normalization_enabled" => render_bool(audio.normalization_enabled),
             "audio.normalization_target_lufs" => audio.normalization_target_lufs.to_string(),
-            "audio.normalization_prevent_clipping" => render_bool(audio.normalization_prevent_clipping),
+            "audio.normalization_prevent_clipping" => {
+                render_bool(audio.normalization_prevent_clipping)
+            }
             "audio.pw_force_bitperfect" => render_bool(audio.pw_force_bitperfect),
             "audio.reserve_dac_while_running" => render_bool(audio.reserve_dac_while_running),
             "audio.sync_audio_on_startup" => render_bool(audio.sync_audio_on_startup),
@@ -699,15 +712,31 @@ pub(crate) fn write_one(
                 .set_stream_buffer_seconds(v)
                 .map_err(SetError::Io)?
         }
-        "audio.playback_memory_profile" | "audio.playback_cache_dynamic" | "audio.playback_cache_min_mib" | "audio.playback_cache_max_mib" | "audio.playback_storage_folder" => {
+        "audio.playback_memory_profile"
+        | "audio.playback_cache_dynamic"
+        | "audio.playback_cache_min_mib"
+        | "audio.playback_cache_max_mib"
+        | "audio.playback_storage_folder" => {
             let store = open_audio(roots).map_err(SetError::Io)?;
             let mut policy = store.get_settings().map_err(SetError::Io)?.playback_cache;
-            if key != "audio.playback_memory_profile" && key != "audio.playback_storage_folder" { policy.make_custom(); }
+            if key != "audio.playback_memory_profile" && key != "audio.playback_storage_folder" {
+                policy.make_custom();
+            }
             match key {
-                "audio.playback_memory_profile" => policy.select_profile(qbz_models::playback_cache::PlaybackMemoryProfile::parse(raw).map_err(SetError::Usage)?),
-                "audio.playback_cache_dynamic" => policy.dynamic = parse_bool(raw).map_err(SetError::Usage)?,
-                "audio.playback_cache_min_mib" => policy.min_mib = parse_cache_mib(raw).map_err(SetError::Usage)?,
-                "audio.playback_storage_folder" => policy.disk_directory = (!raw.is_empty() && raw != "none").then(|| raw.to_string()),
+                "audio.playback_memory_profile" => policy.select_profile(
+                    qbz_models::playback_cache::PlaybackMemoryProfile::parse(raw)
+                        .map_err(SetError::Usage)?,
+                ),
+                "audio.playback_cache_dynamic" => {
+                    policy.dynamic = parse_bool(raw).map_err(SetError::Usage)?
+                }
+                "audio.playback_cache_min_mib" => {
+                    policy.min_mib = parse_cache_mib(raw).map_err(SetError::Usage)?
+                }
+                "audio.playback_storage_folder" => {
+                    policy.disk_directory =
+                        (!raw.is_empty() && raw != "none").then(|| raw.to_string())
+                }
                 _ => policy.max_mib = parse_cache_mib(raw).map_err(SetError::Usage)?,
             }
             policy.validate().map_err(SetError::Usage)?;
@@ -1681,41 +1710,92 @@ mod tests {
     #[test]
     fn playback_cache_cli_persists_reloads_and_rejects_inverted_bounds() {
         let roots = scratch_roots("playback-cache");
-        for (key, value) in [("audio.playback_cache_max_mib", "1600"), ("audio.playback_cache_min_mib", "400"), ("audio.playback_cache_dynamic", "true")] {
+        for (key, value) in [
+            ("audio.playback_cache_max_mib", "1600"),
+            ("audio.playback_cache_min_mib", "400"),
+            ("audio.playback_cache_dynamic", "true"),
+        ] {
             write_one(&roots, key, value).unwrap();
             assert_eq!(classify(key), Some(ApplyClass::Reload));
         }
-        let values: std::collections::HashMap<_, _> = read_all(&roots).unwrap().into_iter().collect();
+        let values: std::collections::HashMap<_, _> =
+            read_all(&roots).unwrap().into_iter().collect();
         assert_eq!(values["audio.playback_cache_dynamic"], "true");
         assert_eq!(values["audio.playback_cache_min_mib"], "400");
         assert_eq!(values["audio.playback_cache_max_mib"], "1600");
-        assert!(matches!(write_one(&roots, "audio.playback_cache_max_mib", "399"), Err(SetError::Usage(_))));
-        assert!(matches!(write_one(&roots, "audio.playback_cache_min_mib", "-1"), Err(SetError::Usage(_))));
+        assert!(matches!(
+            write_one(&roots, "audio.playback_cache_max_mib", "399"),
+            Err(SetError::Usage(_))
+        ));
+        assert!(matches!(
+            write_one(&roots, "audio.playback_cache_min_mib", "-1"),
+            Err(SetError::Usage(_))
+        ));
         write_one(&roots, "audio.playback_cache_dynamic", "false").unwrap();
         write_one(&roots, "audio.playback_cache_min_mib", "none").unwrap();
         write_one(&roots, "audio.playback_cache_max_mib", "none").unwrap();
         write_one(&roots, "audio.playback_memory_profile", "auto").unwrap();
-        assert_eq!(open_audio(&roots).unwrap().get_settings().unwrap().playback_cache, Default::default());
+        assert_eq!(
+            open_audio(&roots)
+                .unwrap()
+                .get_settings()
+                .unwrap()
+                .playback_cache,
+            Default::default()
+        );
         cleanup(&roots);
     }
 
     #[test]
     fn memory_profile_cli_presets_custom_reset_and_invalid_selection() {
-        let roots=scratch_roots("memory-profiles");
-        for (name,base,dynamic) in [("high",400,true),("desktop",400,false),("low",50,false)] {
-            write_one(&roots,"audio.playback_memory_profile",name).unwrap();
-            let p=open_audio(&roots).unwrap().get_settings().unwrap().playback_cache;
-            assert_eq!(p.selected_profile().as_str(),name);
-            assert_eq!(p.min_mib,Some(base));assert_eq!(p.dynamic,dynamic);
+        let roots = scratch_roots("memory-profiles");
+        for (name, base, dynamic) in [
+            ("high", 400, true),
+            ("desktop", 400, false),
+            ("low", 50, false),
+        ] {
+            write_one(&roots, "audio.playback_memory_profile", name).unwrap();
+            let p = open_audio(&roots)
+                .unwrap()
+                .get_settings()
+                .unwrap()
+                .playback_cache;
+            assert_eq!(p.selected_profile().as_str(), name);
+            assert_eq!(p.min_mib, Some(base));
+            assert_eq!(p.dynamic, dynamic);
         }
-        write_one(&roots,"audio.playback_cache_min_mib","64").unwrap();
-        let p=open_audio(&roots).unwrap().get_settings().unwrap().playback_cache;
-        assert_eq!(p.selected_profile().as_str(),"custom");
-        assert!(matches!(write_one(&roots,"audio.playback_memory_profile","unlimited"),Err(SetError::Usage(_))));
-        assert_eq!(open_audio(&roots).unwrap().get_settings().unwrap().playback_cache,p);
-        write_one(&roots,"audio.playback_memory_profile","auto").unwrap();
-        assert_eq!(open_audio(&roots).unwrap().get_settings().unwrap().playback_cache,Default::default());
-        assert_eq!(classify("audio.playback_memory_profile"),Some(ApplyClass::Reload));
+        write_one(&roots, "audio.playback_cache_min_mib", "64").unwrap();
+        let p = open_audio(&roots)
+            .unwrap()
+            .get_settings()
+            .unwrap()
+            .playback_cache;
+        assert_eq!(p.selected_profile().as_str(), "custom");
+        assert!(matches!(
+            write_one(&roots, "audio.playback_memory_profile", "unlimited"),
+            Err(SetError::Usage(_))
+        ));
+        assert_eq!(
+            open_audio(&roots)
+                .unwrap()
+                .get_settings()
+                .unwrap()
+                .playback_cache,
+            p
+        );
+        write_one(&roots, "audio.playback_memory_profile", "auto").unwrap();
+        assert_eq!(
+            open_audio(&roots)
+                .unwrap()
+                .get_settings()
+                .unwrap()
+                .playback_cache,
+            Default::default()
+        );
+        assert_eq!(
+            classify("audio.playback_memory_profile"),
+            Some(ApplyClass::Reload)
+        );
         cleanup(&roots);
     }
 

@@ -291,7 +291,13 @@ mod tests {
 
     #[test]
     fn a_malformed_sacd_reference_is_rejected() {
-        for bad in ["sacd:", "sacd:/x.iso", "sacd:#3", "sacd:/x.iso#", "sacd:/x.iso#abc"] {
+        for bad in [
+            "sacd:",
+            "sacd:/x.iso",
+            "sacd:#3",
+            "sacd:/x.iso#",
+            "sacd:/x.iso#abc",
+        ] {
             assert_eq!(SacdRef::parse(bad), None, "{bad} parsed");
         }
     }

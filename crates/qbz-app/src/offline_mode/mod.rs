@@ -220,7 +220,10 @@ impl OfflineModeEngine {
                     if let Ok(Some(snapshot)) = store.get_pre_offline_stream_first_track() {
                         let _ = audio_store.set_stream_first_track(snapshot);
                         let _ = store.set_pre_offline_stream_first_track(None);
-                        log::info!("[OfflineMode] stream_first_track restored to {} (#279)", snapshot);
+                        log::info!(
+                            "[OfflineMode] stream_first_track restored to {} (#279)",
+                            snapshot
+                        );
                     }
                 }
             }
@@ -336,7 +339,9 @@ mod tests {
     static GATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serialize() -> std::sync::MutexGuard<'static, ()> {
-        GATE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        GATE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn up() -> ConnectivitySnapshot {
@@ -422,7 +427,10 @@ mod tests {
 
         let status = engine.status();
         assert_eq!(status.mode, OfflineMode::RealOffline);
-        assert!(status.show_recovery_banner(), "banner: session offline but net is back");
+        assert!(
+            status.show_recovery_banner(),
+            "banner: session offline but net is back"
+        );
 
         engine.set_offline_session(false);
         assert_eq!(engine.status().mode, OfflineMode::Online);
@@ -459,10 +467,16 @@ mod tests {
         engine.init_for_user(&dir).unwrap();
 
         engine.set_induced(true, Some(&audio)).unwrap();
-        assert!(!audio.get_settings().unwrap().stream_first_track, "#279: forced false");
+        assert!(
+            !audio.get_settings().unwrap().stream_first_track,
+            "#279: forced false"
+        );
 
         engine.set_induced(false, Some(&audio)).unwrap();
-        assert!(audio.get_settings().unwrap().stream_first_track, "#279: restored");
+        assert!(
+            audio.get_settings().unwrap().stream_first_track,
+            "#279: restored"
+        );
 
         let _ = std::fs::remove_dir_all(dir);
         let _ = std::fs::remove_dir_all(audio_dir);
@@ -513,6 +527,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // Held across .await by design: serializes tests sharing process-global
+    // offline-mode state, each on its own single-test runtime.
+    #[allow(clippy::await_holding_lock)]
     async fn watch_broadcasts_on_change() {
         let _gate = serialize();
         let engine = std::sync::Arc::new(OfflineModeEngine::new());

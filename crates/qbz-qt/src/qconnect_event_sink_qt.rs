@@ -648,15 +648,19 @@ impl QconnectEventSink for QtQconnectEventSink {
     }
 
     async fn execute_renderer_command(
-        &self, command: &RendererCommand, state: &qconnect_app::QConnectRendererState,
+        &self,
+        command: &RendererCommand,
+        state: &qconnect_app::QConnectRendererState,
     ) -> Result<(), String> {
         if !self.is_current() {
             return Err("renderer authority retired".into());
         }
         // Recheck after the app's await points: a route change must not publish
         // a successful volume report for a newly locked output.
-        if matches!(command, RendererCommand::SetVolume { .. } | RendererCommand::MuteVolume { .. })
-            && !self.allows_remote_volume()
+        if matches!(
+            command,
+            RendererCommand::SetVolume { .. } | RendererCommand::MuteVolume { .. }
+        ) && !self.allows_remote_volume()
         {
             return Err("local output volume became locked".into());
         }
@@ -664,23 +668,38 @@ impl QconnectEventSink for QtQconnectEventSink {
             return Err("renderer command fenced by local authority".into());
         }
         qconnect_app::renderer::apply_renderer_command(
-            &self.engine, &self.sync_state, command, state,
-        ).await?;
+            &self.engine,
+            &self.sync_state,
+            command,
+            state,
+        )
+        .await?;
         if !self.is_current() {
             return Err("renderer authority retired during execution".into());
         }
-        if matches!(command, RendererCommand::SetActive { active: true }) && self.engine.has_loaded_audio() {
+        if matches!(command, RendererCommand::SetActive { active: true })
+            && self.engine.has_loaded_audio()
+        {
             self.report_active_renderer_ready().await;
         }
         let (volume, muted) = local_volume_ui_projection(command, state);
-        if let Some(volume) = volume { crate::now_playing::set_volume(volume); }
-        if let Some(muted) = muted { crate::now_playing::set_muted(muted); }
+        if let Some(volume) = volume {
+            crate::now_playing::set_volume(volume);
+        }
+        if let Some(muted) = muted {
+            crate::now_playing::set_muted(muted);
+        }
         if matches!(command, RendererCommand::SetState { .. }) {
             self.refresh_local_ui().await;
-        } else if matches!(command, RendererCommand::SetShuffleMode { .. } | RendererCommand::SetLoopMode { .. }) {
+        } else if matches!(
+            command,
+            RendererCommand::SetShuffleMode { .. } | RendererCommand::SetLoopMode { .. }
+        ) {
             self.refresh_transport_modes().await;
         }
-        if !self.is_current() { return Err("renderer authority retired".into()); }
+        if !self.is_current() {
+            return Err("renderer authority retired".into());
+        }
         Ok(())
     }
 

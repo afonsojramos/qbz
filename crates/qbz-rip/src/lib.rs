@@ -100,8 +100,8 @@ pub struct Progress {
 /// between machines, so this sanitises for the strictest of them.
 pub fn safe_filename(raw: &str) -> String {
     const RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     let mut s: String = raw
         .chars()
@@ -137,7 +137,7 @@ pub fn safe_filename(raw: &str) -> String {
 /// is a bit-exact copy of what came off the disc.
 pub fn cdda_to_samples(raw: &[u8], out: &mut Vec<i32>) {
     out.reserve(raw.len() / 2);
-    for pair in raw.chunks_exact(2) {
+    for pair in raw.as_chunks::<2>().0 {
         out.push(i16::from_le_bytes([pair[0], pair[1]]) as i32);
     }
 }
@@ -199,6 +199,7 @@ fn declare_fixed_blocksize(bytes: &mut [u8]) {
 }
 
 /// Write Vorbis comments onto a finished FLAC file.
+#[allow(clippy::too_many_arguments)]
 pub fn tag_flac(
     path: &Path,
     album: &str,
@@ -276,11 +277,7 @@ where
     let mut receipts: Vec<Receipt> = Vec::with_capacity(total);
 
     for (i, track) in plan.tracks.iter().enumerate() {
-        let name = format!(
-            "{:02} - {}.flac",
-            track.number,
-            safe_filename(&track.title)
-        );
+        let name = format!("{:02} - {}.flac", track.number, safe_filename(&track.title));
         let path = folder.join(&name);
 
         // Read the whole track before encoding. A CD track is at most ~170 MB
@@ -300,10 +297,12 @@ where
                     sectors: *sectors,
                     is_audio: true,
                 };
-                let mut reader = qbz_disc::cdda::TrackReader::open(device, &toc_track)
-                    .map_err(|e| RipError::Read {
-                        track: track.number,
-                        source: e,
+                let mut reader =
+                    qbz_disc::cdda::TrackReader::open(device, &toc_track).map_err(|e| {
+                        RipError::Read {
+                            track: track.number,
+                            source: e,
+                        }
                     })?;
                 let mut raw = Vec::new();
                 samples.reserve(*sectors as usize * qbz_disc::CDDA_SECTOR_BYTES / 2);
@@ -458,9 +457,217 @@ fn copy_cover(src: &Path, folder: &Path) -> std::io::Result<()> {
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .filter(|e| matches!(e.as_str(), "jpg" | "jpeg" | "png" | "webp"))
         .unwrap_or_else(|| "jpg".to_string());
-    let ext = if ext == "jpeg" { "jpg".to_string() } else { ext };
+    let ext = if ext == "jpeg" {
+        "jpg".to_string()
+    } else {
+        ext
+    };
     std::fs::copy(src, folder.join(format!("cover.{ext}")))?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// The log
+// ---------------------------------------------------------------------------
+
+/// A PROVENANCE record, deliberately not an EAC log.
+///
+/// An EAC or XLD log is trusted for what it PROVES, not for how it looks:
+/// test-and-copy (rip twice, compare), a drive read-offset correction, and an
+/// AccurateRip cross-check against thousands of other people's rips of the
+/// same disc. QBZ does none of the three. A file that imitated that format
+/// without the method would be worse than no file at all — it invites a claim
+/// this ripper cannot back, and the people who read rip logs are exactly the
+/// people who would check.
+///
+/// So the header says what this is and is not, in the first block, not in
+/// small print. What is left is genuinely useful and genuinely true:
+///
+///   * WHICH DISC — the MusicBrainz DiscID and the TOC fingerprint, both
+///     recomputable by anyone holding the same disc.
+///   * WHICH DRIVE — straight from sysfs.
+///   * PER TRACK — the audio MD5 that already lives in the file's STREAMINFO,
+///     verifiable with `flac -t` without QBZ. It checks the files against
+///     THEMSELVES (bit rot, a bad copy), not against the world.
+///   * READ ERRORS — zero, and it means zero: an unreadable sector aborts the
+///     rip rather than being written as silence. Which is a stronger promise
+///     than a burst-mode EAC rip makes.
+///
+/// English, because it is a technical file that gets shared.
+fn write_log(plan: &RipPlan, receipts: &[Receipt]) -> String {
+    use std::fmt::Write as _;
+    let mut s = String::with_capacity(2048);
+
+    let _ = writeln!(s, "QBZ rip log");
+    let _ = writeln!(s, "===========");
+    let _ = writeln!(s);
+    let _ = writeln!(s, "WHAT THIS IS, AND WHAT IT IS NOT");
+    let _ = writeln!(
+        s,
+        "  A record of where these files came from, not a verification log."
+    );
+    let _ = writeln!(
+        s,
+        "  QBZ does NOT do test-and-copy, does NOT apply a drive read offset,"
+    );
+    let _ = writeln!(
+        s,
+        "  and does NOT check AccurateRip. The checksums below verify these"
+    );
+    let _ = writeln!(
+        s,
+        "  files against themselves; they will not match an EAC or XLD log,"
+    );
+    let _ = writeln!(s, "  and are not meant to.");
+    let _ = writeln!(s);
+    let _ = writeln!(
+        s,
+        "  What it does promise: a sector that cannot be read ABORTS the rip."
+    );
+    let _ = writeln!(
+        s,
+        "  Silence is never written in place of audio, so \"0 read errors\""
+    );
+    let _ = writeln!(
+        s,
+        "  below means the disc was read in full or you would have no files."
+    );
+    let _ = writeln!(s);
+
+    let year = plan.year.map(|y| format!(" ({y})")).unwrap_or_default();
+    let _ = writeln!(s, "Ripped        {}", now_utc());
+    let _ = writeln!(s, "QBZ           {}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(
+        s,
+        "Album         {} - {}{}",
+        plan.album_artist, plan.album, year
+    );
+
+    let drive = plan.tracks.iter().find_map(|t| match &t.source {
+        RipSource::Cd { device, .. } => Some(device.clone()),
+        RipSource::Samples { .. } => None,
+    });
+    match drive.as_ref().map(|d| (d, qbz_disc::drive_model(d))) {
+        Some((dev, Some(model))) => {
+            let _ = writeln!(s, "Drive         {}  ({model})", dev.display());
+        }
+        // A "device" with no model behind it is the macOS shape: the OS mounted
+        // the disc and these bytes came out of ITS reader, not ours. Printing
+        // "Drive /Volumes/Fear Inoculum (unknown model)" would name a volume as
+        // if it were hardware, which is the log's first chance to lie.
+        Some((dev, None)) => {
+            let _ = writeln!(s, "Source        {}", dev.display());
+            let _ = writeln!(s, "              read by the operating system, not by QBZ");
+        }
+        None => {
+            let _ = writeln!(s, "Source        files");
+        }
+    }
+    let _ = writeln!(s, "Read offset   none applied");
+    let _ = writeln!(
+        s,
+        "Encoder       flacenc 0.5, default settings, fixed block size"
+    );
+    let _ = writeln!(s, "Read errors   0");
+    let _ = writeln!(s);
+
+    let _ = writeln!(s, "Disc");
+    let _ = writeln!(
+        s,
+        "  MusicBrainz DiscID   {}",
+        plan.disc_id.as_deref().unwrap_or("not computed")
+    );
+    let _ = writeln!(
+        s,
+        "  TOC fingerprint      {}",
+        plan.toc_fingerprint.as_deref().unwrap_or("not computed")
+    );
+    // A partial rip that does not say so reads as a four-track album.
+    if plan.disc_track_count > receipts.len() {
+        let _ = writeln!(
+            s,
+            "  Tracks               {} of {} on the disc (partial rip)",
+            receipts.len(),
+            plan.disc_track_count
+        );
+    } else {
+        let _ = writeln!(s, "  Tracks               {}", receipts.len());
+    }
+    let _ = writeln!(s);
+
+    let _ = writeln!(s, "Tracks");
+    for r in receipts {
+        let _ = writeln!(s, "  {:>2}  {}", r.number, r.title);
+        let _ = writeln!(s, "      file      {}", r.file);
+        let secs = r.frames as f64 / 44_100.0;
+        let _ = writeln!(
+            s,
+            "      length    {}:{:05.2}   frames {}   flac {} bytes",
+            (secs / 60.0) as u64,
+            secs % 60.0,
+            r.frames,
+            r.bytes
+        );
+        if let Some(n) = r.sectors {
+            let _ = writeln!(s, "      sectors   {n}");
+        }
+        match &r.md5 {
+            Some(md5) => {
+                let _ = writeln!(s, "      audio md5 {md5}");
+            }
+            None => {
+                let _ = writeln!(s, "      audio md5 not recorded by the encoder");
+            }
+        }
+    }
+    let _ = writeln!(s);
+    let _ = writeln!(s, "Verify these files without QBZ:");
+    let _ = writeln!(
+        s,
+        "  flac -t *.flac                 (checks each file against its own md5)"
+    );
+    let _ = writeln!(
+        s,
+        "  metaflac --show-md5sum *.flac  (prints the digests listed above)"
+    );
+    s
+}
+
+/// `2026-08-21 13:20:11 UTC`, with no dependency on a calendar crate.
+///
+/// UTC and not local time on purpose: a log is read on a different machine, in
+/// a different place, years later, and a bare local timestamp with no offset is
+/// the kind of fact that quietly means nothing.
+fn now_utc() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let (y, m, d) = civil_from_days(days);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
+        rem / 3600,
+        (rem % 3600) / 60,
+        rem % 60
+    )
+}
+
+/// Howard Hinnant's `civil_from_days` — the standard days-since-epoch to
+/// calendar conversion, correct across leap years and centuries. Written out
+/// rather than pulled in, because one timestamp is not worth a dependency and
+/// this algorithm has not changed since 2013.
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
 #[cfg(test)]
@@ -469,7 +676,10 @@ mod tests {
 
     #[test]
     fn a_filename_survives_every_filesystem_it_might_land_on() {
-        assert_eq!(safe_filename("AC/DC: Back in Black?"), "AC_DC_ Back in Black_");
+        assert_eq!(
+            safe_filename("AC/DC: Back in Black?"),
+            "AC_DC_ Back in Black_"
+        );
         // Windows drops a trailing dot silently, which would collide two
         // tracks whose titles differ only by it.
         assert_eq!(safe_filename("Intro."), "Intro");
@@ -554,13 +764,17 @@ mod tests {
                     number: 1,
                     title: "Fear Inoculum".into(),
                     artist: "Tool".into(),
-                    source: RipSource::Samples { pcm: vec![0i32; 8820] },
+                    source: RipSource::Samples {
+                        pcm: vec![0i32; 8820],
+                    },
                 },
                 RipTrack {
                     number: 7,
                     title: "7empest".into(),
                     artist: "Tool".into(),
-                    source: RipSource::Samples { pcm: vec![0i32; 8820] },
+                    source: RipSource::Samples {
+                        pcm: vec![0i32; 8820],
+                    },
                 },
             ],
             disc_id: Some("BeNBMsD8Du5NO2W61Yk.B2jwwIs-".into()),
@@ -582,7 +796,10 @@ mod tests {
         // that only shows up if something looks.
         let raw = std::fs::read(&out[0]).unwrap();
         let head = String::from_utf8_lossy(&raw[..raw.len().min(8192)]);
-        assert!(head.contains("Fear Inoculum"), "ALBUM tag missing from the file");
+        assert!(
+            head.contains("Fear Inoculum"),
+            "ALBUM tag missing from the file"
+        );
         assert!(head.contains("Tool"), "ARTIST tag missing from the file");
 
         // No .part files may survive a successful rip.
@@ -611,7 +828,9 @@ mod tests {
                 number: 2,
                 title: "Pneuma".into(),
                 artist: "Tool".into(),
-                source: RipSource::Samples { pcm: vec![0i32; 8820] },
+                source: RipSource::Samples {
+                    pcm: vec![0i32; 8820],
+                },
             }],
             disc_id: Some("BeNBMsD8Du5NO2W61Yk.B2jwwIs-".into()),
             toc_fingerprint: Some("38bef21351f7fca3".into()),
@@ -634,7 +853,10 @@ mod tests {
         assert!(log.contains("38bef21351f7fca3"));
         // A partial rip has to SAY it is partial, or one track reads as the
         // whole album.
-        assert!(log.contains("1 of 7"), "partial rips are named as such:\n{log}");
+        assert!(
+            log.contains("1 of 7"),
+            "partial rips are named as such:\n{log}"
+        );
         assert!(log.contains("Pneuma"));
         std::fs::remove_dir_all(&dir).ok();
     }
@@ -679,7 +901,9 @@ mod tests {
                 number: 1,
                 title: "T".into(),
                 artist: "B".into(),
-                source: RipSource::Samples { pcm: vec![0i32; 8820] },
+                source: RipSource::Samples {
+                    pcm: vec![0i32; 8820],
+                },
             }],
             disc_id: None,
             toc_fingerprint: None,
@@ -719,7 +943,9 @@ mod tests {
                 number: 1,
                 title: "T".into(),
                 artist: "B".into(),
-                source: RipSource::Samples { pcm: vec![0i32; 8820] },
+                source: RipSource::Samples {
+                    pcm: vec![0i32; 8820],
+                },
             }],
             disc_id: None,
             toc_fingerprint: None,
@@ -744,176 +970,9 @@ mod tests {
             disc_track_count: 0,
             cover: None,
         };
-        assert!(matches!(rip(&plan, |_| true), Err(RipError::Destination(_))));
+        assert!(matches!(
+            rip(&plan, |_| true),
+            Err(RipError::Destination(_))
+        ));
     }
-}
-
-// ---------------------------------------------------------------------------
-// The log
-// ---------------------------------------------------------------------------
-
-/// A PROVENANCE record, deliberately not an EAC log.
-///
-/// An EAC or XLD log is trusted for what it PROVES, not for how it looks:
-/// test-and-copy (rip twice, compare), a drive read-offset correction, and an
-/// AccurateRip cross-check against thousands of other people's rips of the
-/// same disc. QBZ does none of the three. A file that imitated that format
-/// without the method would be worse than no file at all — it invites a claim
-/// this ripper cannot back, and the people who read rip logs are exactly the
-/// people who would check.
-///
-/// So the header says what this is and is not, in the first block, not in
-/// small print. What is left is genuinely useful and genuinely true:
-///
-///   * WHICH DISC — the MusicBrainz DiscID and the TOC fingerprint, both
-///     recomputable by anyone holding the same disc.
-///   * WHICH DRIVE — straight from sysfs.
-///   * PER TRACK — the audio MD5 that already lives in the file's STREAMINFO,
-///     verifiable with `flac -t` without QBZ. It checks the files against
-///     THEMSELVES (bit rot, a bad copy), not against the world.
-///   * READ ERRORS — zero, and it means zero: an unreadable sector aborts the
-///     rip rather than being written as silence. Which is a stronger promise
-///     than a burst-mode EAC rip makes.
-///
-/// English, because it is a technical file that gets shared.
-fn write_log(plan: &RipPlan, receipts: &[Receipt]) -> String {
-    use std::fmt::Write as _;
-    let mut s = String::with_capacity(2048);
-
-    let _ = writeln!(s, "QBZ rip log");
-    let _ = writeln!(s, "===========");
-    let _ = writeln!(s);
-    let _ = writeln!(s, "WHAT THIS IS, AND WHAT IT IS NOT");
-    let _ = writeln!(s, "  A record of where these files came from, not a verification log.");
-    let _ = writeln!(s, "  QBZ does NOT do test-and-copy, does NOT apply a drive read offset,");
-    let _ = writeln!(s, "  and does NOT check AccurateRip. The checksums below verify these");
-    let _ = writeln!(s, "  files against themselves; they will not match an EAC or XLD log,");
-    let _ = writeln!(s, "  and are not meant to.");
-    let _ = writeln!(s);
-    let _ = writeln!(s, "  What it does promise: a sector that cannot be read ABORTS the rip.");
-    let _ = writeln!(s, "  Silence is never written in place of audio, so \"0 read errors\"");
-    let _ = writeln!(s, "  below means the disc was read in full or you would have no files.");
-    let _ = writeln!(s);
-
-    let year = plan.year.map(|y| format!(" ({y})")).unwrap_or_default();
-    let _ = writeln!(s, "Ripped        {}", now_utc());
-    let _ = writeln!(s, "QBZ           {}", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(s, "Album         {} - {}{}", plan.album_artist, plan.album, year);
-
-    let drive = plan.tracks.iter().find_map(|t| match &t.source {
-        RipSource::Cd { device, .. } => Some(device.clone()),
-        RipSource::Samples { .. } => None,
-    });
-    match drive.as_ref().map(|d| (d, qbz_disc::drive_model(d))) {
-        Some((dev, Some(model))) => {
-            let _ = writeln!(s, "Drive         {}  ({model})", dev.display());
-        }
-        // A "device" with no model behind it is the macOS shape: the OS mounted
-        // the disc and these bytes came out of ITS reader, not ours. Printing
-        // "Drive /Volumes/Fear Inoculum (unknown model)" would name a volume as
-        // if it were hardware, which is the log's first chance to lie.
-        Some((dev, None)) => {
-            let _ = writeln!(s, "Source        {}", dev.display());
-            let _ = writeln!(s, "              read by the operating system, not by QBZ");
-        }
-        None => {
-            let _ = writeln!(s, "Source        files");
-        }
-    }
-    let _ = writeln!(s, "Read offset   none applied");
-    let _ = writeln!(s, "Encoder       flacenc 0.5, default settings, fixed block size");
-    let _ = writeln!(s, "Read errors   0");
-    let _ = writeln!(s);
-
-    let _ = writeln!(s, "Disc");
-    let _ = writeln!(
-        s,
-        "  MusicBrainz DiscID   {}",
-        plan.disc_id.as_deref().unwrap_or("not computed")
-    );
-    let _ = writeln!(
-        s,
-        "  TOC fingerprint      {}",
-        plan.toc_fingerprint.as_deref().unwrap_or("not computed")
-    );
-    // A partial rip that does not say so reads as a four-track album.
-    if plan.disc_track_count > receipts.len() {
-        let _ = writeln!(
-            s,
-            "  Tracks               {} of {} on the disc (partial rip)",
-            receipts.len(),
-            plan.disc_track_count
-        );
-    } else {
-        let _ = writeln!(s, "  Tracks               {}", receipts.len());
-    }
-    let _ = writeln!(s);
-
-    let _ = writeln!(s, "Tracks");
-    for r in receipts {
-        let _ = writeln!(s, "  {:>2}  {}", r.number, r.title);
-        let _ = writeln!(s, "      file      {}", r.file);
-        let secs = r.frames as f64 / 44_100.0;
-        let _ = writeln!(
-            s,
-            "      length    {}:{:05.2}   frames {}   flac {} bytes",
-            (secs / 60.0) as u64,
-            secs % 60.0,
-            r.frames,
-            r.bytes
-        );
-        if let Some(n) = r.sectors {
-            let _ = writeln!(s, "      sectors   {n}");
-        }
-        match &r.md5 {
-            Some(md5) => {
-                let _ = writeln!(s, "      audio md5 {md5}");
-            }
-            None => {
-                let _ = writeln!(s, "      audio md5 not recorded by the encoder");
-            }
-        }
-    }
-    let _ = writeln!(s);
-    let _ = writeln!(s, "Verify these files without QBZ:");
-    let _ = writeln!(s, "  flac -t *.flac                 (checks each file against its own md5)");
-    let _ = writeln!(s, "  metaflac --show-md5sum *.flac  (prints the digests listed above)");
-    s
-}
-
-/// `2026-08-21 13:20:11 UTC`, with no dependency on a calendar crate.
-///
-/// UTC and not local time on purpose: a log is read on a different machine, in
-/// a different place, years later, and a bare local timestamp with no offset is
-/// the kind of fact that quietly means nothing.
-fn now_utc() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC",
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
-}
-
-/// Howard Hinnant's `civil_from_days` — the standard days-since-epoch to
-/// calendar conversion, correct across leap years and centuries. Written out
-/// rather than pulled in, because one timestamp is not worth a dependency and
-/// this algorithm has not changed since 2013.
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
 }

@@ -83,7 +83,7 @@ fn tag_has_editor_conflict(tagged_file: &lofty::file::TaggedFile) -> bool {
         let mut values = Vec::<String>::new();
         for tag in tagged_file.tags() {
             if let Some(value) = tag
-                .get_string(key.clone())
+                .get_string(key)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
             {
@@ -319,11 +319,11 @@ fn write_front_cover_at(target: &Path, bytes: &[u8]) -> Result<String, LibraryEr
         if backup.exists() {
             std::fs::remove_file(&backup).map_err(LibraryError::Io)?;
         }
-        std::fs::rename(&target, &backup).map_err(LibraryError::Io)?;
+        std::fs::rename(target, &backup).map_err(LibraryError::Io)?;
     }
-    if let Err(error) = std::fs::rename(&temporary, &target) {
+    if let Err(error) = std::fs::rename(&temporary, target) {
         if had_target {
-            let _ = std::fs::rename(&backup, &target);
+            let _ = std::fs::rename(&backup, target);
         }
         return Err(LibraryError::Io(error));
     }
@@ -672,9 +672,8 @@ fn verify_editor_write(
         && tag.genre().as_deref().map(str::trim).map(str::to_string) == expected_genre
         && normalized_tag_text(tag, ItemKey::AlbumArtist) == expected_album_artist
         && normalized_tag_text(tag, ItemKey::CatalogNumber) == expected_catalog
-        && expected_artist.map_or(true, |artist| {
-            tag.artist().as_deref().map(str::trim) == Some(artist)
-        });
+        && expected_artist
+            .is_none_or(|artist| tag.artist().as_deref().map(str::trim) == Some(artist));
     if let (Some(album), Some(track)) = (extended_album, extended_track) {
         let supports = |key: ItemKey| key.map_key(tag.tag_type()).is_some();
         let values_match = |key: ItemKey, expected: &[String]| {
@@ -754,6 +753,7 @@ fn verify_editor_write(
 /// `synchronize_secondary_tags`, existing writable modern layers are updated
 /// too; ID3v1 stays untouched because its 30-byte/Latin-1 limits would silently
 /// truncate or corrupt values that are valid in the canonical tag.
+#[allow(clippy::too_many_arguments)]
 fn write_album_tags_impl(
     album: &AlbumTagWrite,
     extended_album: &ExtendedAlbumTagWrite,

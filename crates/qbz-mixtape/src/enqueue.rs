@@ -96,12 +96,7 @@ pub fn next_item_index(queue: &[CoreQueueTrack], current: usize) -> Option<usize
         })
     };
     let current_boundary = boundary_of(current)?;
-    for i in (current + 1)..queue.len() {
-        if boundary_of(i) != Some(current_boundary) {
-            return Some(i);
-        }
-    }
-    None
+    ((current + 1)..queue.len()).find(|&i| boundary_of(i) != Some(current_boundary))
 }
 
 /// Mirror: depending on elapsed ms and whether we're at item-start, either

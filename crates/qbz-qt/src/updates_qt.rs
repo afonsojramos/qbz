@@ -1,10 +1,10 @@
 //! Local application updates. Orbit's selected host never owns this state.
 use cxx_qt_lib::QString;
-use qbz_updater::{Asset, Release, install::Installation, store::Store};
+use qbz_updater::{install::Installation, store::Store, Asset, Release};
 use serde::Serialize;
 use std::sync::{
-    LazyLock, Mutex,
     atomic::{AtomicBool, Ordering},
+    LazyLock, Mutex,
 };
 
 static STARTED: AtomicBool = AtomicBool::new(false);

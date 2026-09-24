@@ -1,9 +1,9 @@
 pub mod device_cap;
 pub mod diagnostics;
-pub mod memory_watchdog;
-pub mod offline_mode;
 pub mod graphics_autoconfig;
 pub mod listen_log;
+pub mod memory_watchdog;
+pub mod offline_mode;
 pub mod playback_context;
 pub mod playback_driver;
 pub mod qconnect_identity;
@@ -11,9 +11,9 @@ pub mod runtime;
 pub mod scrobble_timing;
 pub mod session_persist;
 pub mod session_store;
-pub mod subscription_lifecycle;
-pub mod shell;
 pub mod settings;
+pub mod shell;
+pub mod subscription_lifecycle;
 pub mod user_data;
 
 /// Install the rustls process-level `CryptoProvider` (aws-lc-rs) exactly once.

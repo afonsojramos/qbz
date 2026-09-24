@@ -256,9 +256,7 @@ pub fn reconcile_legacy_caches_at_with_progress(
         .collect::<Vec<_>>();
     let disabled_probes = active_sources
         .into_iter()
-        .filter(|(source, rows)| {
-            *rows > 0 && !locations.enabled_sources.contains(&source.source)
-        })
+        .filter(|(source, rows)| *rows > 0 && !locations.enabled_sources.contains(&source.source))
         .map(|(source, _)| SourceProbe {
             source: source.clone(),
             source_path: match source.source {
@@ -760,7 +758,9 @@ type LegacyRow = (i64, ProjectedTrack);
 /// An identity column is either an id or nothing — an empty string must not
 /// become a key that joins every untagged row to every other one.
 fn nonempty(value: Option<String>) -> Option<String> {
-    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 fn legacy_cursor(row: &LegacyRow) -> i64 {

@@ -8,17 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeveloperSettings {
     pub force_dmabuf: bool,
-}
-
-impl Default for DeveloperSettings {
-    fn default() -> Self {
-        Self {
-            force_dmabuf: false,
-        }
-    }
 }
 
 pub struct DeveloperSettingsStore {
@@ -63,13 +55,15 @@ impl DeveloperSettingsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open developer settings database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| {
-                format!(
-                    "Failed to enable WAL for developer settings database: {}",
-                    e
-                )
-            })?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| {
+            format!(
+                "Failed to enable WAL for developer settings database: {}",
+                e
+            )
+        })?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS developer_settings (

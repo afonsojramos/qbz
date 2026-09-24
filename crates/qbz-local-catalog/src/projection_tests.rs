@@ -253,7 +253,7 @@ fn projection_preflight_accounts_for_copying_the_active_generation() {
     let local = key(SourceKind::Local, "library");
     let initial_probe = probe(&local, "v1", 0);
     let (mut bootstrap, _) = layout
-        .prepare(&[initial_probe.clone()], Some(u64::MAX))
+        .prepare(std::slice::from_ref(&initial_probe), Some(u64::MAX))
         .unwrap();
     bootstrap
         .apply_batch(&BootstrapBatch {
@@ -265,7 +265,9 @@ fn projection_preflight_accounts_for_copying_the_active_generation() {
             complete: true,
         })
         .unwrap();
-    bootstrap.activate(&[initial_probe.clone()]).unwrap();
+    bootstrap
+        .activate(std::slice::from_ref(&initial_probe))
+        .unwrap();
 
     let error = match layout.prepare_projection(&[initial_probe], Some(256 * 1024 * 1024)) {
         Ok(_) => panic!("copying an active catalog needs room above the fixed floor"),

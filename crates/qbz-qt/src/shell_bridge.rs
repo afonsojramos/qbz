@@ -1389,7 +1389,8 @@ impl qbz_shell::QbzShell {
                 if *self.sidebar_state() != crate::panel_resize::SIDEBAR_OPEN {
                     // A state snap: animate it (flag first, then state).
                     self.as_mut().set_sidebar_snapping(true);
-                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_OPEN);
+                    self.as_mut()
+                        .snap_sidebar_state(crate::panel_resize::SIDEBAR_OPEN);
                 } else if *self.sidebar_snapping() {
                     // Back to pointer-following: the width tracks the mouse.
                     self.as_mut().set_sidebar_snapping(false);
@@ -1401,13 +1402,15 @@ impl qbz_shell::QbzShell {
             SidebarDrag::Mini => {
                 if *self.sidebar_state() != crate::panel_resize::SIDEBAR_MINI {
                     self.as_mut().set_sidebar_snapping(true);
-                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_MINI);
+                    self.as_mut()
+                        .snap_sidebar_state(crate::panel_resize::SIDEBAR_MINI);
                 }
             }
             SidebarDrag::Closed => {
                 if *self.sidebar_state() != crate::panel_resize::SIDEBAR_CLOSED {
                     self.as_mut().set_sidebar_snapping(true);
-                    self.as_mut().snap_sidebar_state(crate::panel_resize::SIDEBAR_CLOSED);
+                    self.as_mut()
+                        .snap_sidebar_state(crate::panel_resize::SIDEBAR_CLOSED);
                 }
             }
         }
@@ -1424,8 +1427,7 @@ impl qbz_shell::QbzShell {
 
     pub fn queue_panel_drag(mut self: Pin<&mut Self>, width: f64) {
         use crate::panel_resize::{queue_drag_target, ColumnDrag};
-        let queue_in_column =
-            *self.queue_open() && self.current_view().to_string() != "queue-view";
+        let queue_in_column = *self.queue_open() && self.current_view().to_string() != "queue-view";
         match queue_drag_target(width.round() as i32, queue_in_column) {
             ColumnDrag::Open(width) => {
                 if *self.queue_panel_width() != width {
@@ -1447,7 +1449,8 @@ impl qbz_shell::QbzShell {
             // expand button does (`QbzShell.navigateTo("queue-view")`).
             ColumnDrag::PushThrough => {
                 if *self.queue_panel_width() != crate::panel_resize::QUEUE_MAX_WIDTH {
-                    self.as_mut().set_queue_panel_width(crate::panel_resize::QUEUE_MAX_WIDTH);
+                    self.as_mut()
+                        .set_queue_panel_width(crate::panel_resize::QUEUE_MAX_WIDTH);
                 }
                 crate::navigate_to("queue-view");
             }

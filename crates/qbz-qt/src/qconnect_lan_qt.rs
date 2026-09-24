@@ -319,7 +319,11 @@ impl QtLanRuntime {
     pub(crate) fn lan_candidate(
         &self,
         device_uuid: &str,
-    ) -> Option<(LanRendererCandidate, LanRendererProbe, Arc<LanControllerClient>)> {
+    ) -> Option<(
+        LanRendererCandidate,
+        LanRendererProbe,
+        Arc<LanControllerClient>,
+    )> {
         let client = Arc::clone(self.client.as_ref()?);
         let c = self.candidates.lock().ok()?;
         let candidate = c.found.get(device_uuid)?.clone();

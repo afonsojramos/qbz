@@ -7,21 +7,21 @@ pub mod radio;
 pub mod settings;
 pub mod status;
 
+use crate::adapter::DaemonAdapter;
+use crate::paths::ProfileRoots;
+use crate::state::DaemonShared;
+use qbz_app::shell::AppRuntime;
+use qbz_audio::settings::AudioSettingsStore;
+use qbz_control::{artwork, browse, discover, fav, lyrics, playlist, reco, search};
+pub use qbz_control::{bind, serve, BindError};
+pub(crate) use qbz_control::{canon_volume, err_json, error_body, json};
+use qbz_models::CoreEvent;
 use std::io::Cursor;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 use tiny_http::{Request, Response};
 use tokio::sync::broadcast;
-use crate::adapter::DaemonAdapter;
-use crate::paths::ProfileRoots;
-use crate::state::DaemonShared;
-use qbz_app::shell::AppRuntime;
-use qbz_audio::settings::AudioSettingsStore;
-use qbz_models::CoreEvent;
-pub use qbz_control::{bind, serve, BindError};
-pub(crate) use qbz_control::{canon_volume, err_json, error_body, json};
-use qbz_control::{artwork, browse, discover, fav, lyrics, playlist, reco, search};
 
 /// Everything the route handlers read. Owned by the single serving thread
 /// (moved into it by [`serve`]), so it only needs `Send`, never `Sync` — which
@@ -74,8 +74,12 @@ pub struct DeviceCache {
 }
 
 impl qbz_control::HttpHost for ApiState {
-    fn token(&self) -> Option<&str> { self.token.as_deref() }
-    fn events(&self) -> &broadcast::Sender<CoreEvent> { &self.bus }
+    fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+    fn events(&self) -> &broadcast::Sender<CoreEvent> {
+        &self.bus
+    }
     fn route(&self, request: &mut Request) -> Response<Cursor<Vec<u8>>> {
         route(self, request)
     }
@@ -94,9 +98,7 @@ pub fn probe_is_qbzd(addr: SocketAddr) -> bool {
     };
     let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
-    let req = format!(
-        "GET /api/ping HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
-    );
+    let req = format!("GET /api/ping HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
     if stream.write_all(req.as_bytes()).is_err() {
         return false;
     }
@@ -116,13 +118,22 @@ fn route(state: &ApiState, req: &mut Request) -> Response<Cursor<Vec<u8>>> {
     if path == "/api/orbit/library" || path.starts_with("/api/orbit/library/") {
         return match &state.library {
             Some(library) => library.route(req),
-            None => err_json(404, "not_supported", "Orbit library is not enabled", "start the host with run --orbit"),
+            None => err_json(
+                404,
+                "not_supported",
+                "Orbit library is not enabled",
+                "start the host with run --orbit",
+            ),
         };
     }
     let catalog = qbz_control::CatalogContext {
         core: state.runtime.core(),
         rt: &state.rt,
-        needs_auth: state.shared.lock().map(|s| s.auth == crate::state::AuthState::NeedsAuth).unwrap_or(false),
+        needs_auth: state
+            .shared
+            .lock()
+            .map(|s| s.auth == crate::state::AuthState::NeedsAuth)
+            .unwrap_or(false),
     };
 
     match (method.as_str(), path.as_str()) {

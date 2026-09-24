@@ -410,7 +410,7 @@ pub fn list_snapshots(data_root: &Path) -> Vec<(u64, PathBuf)> {
             found.push((uid, path, modified));
         }
     }
-    found.sort_by(|a, b| b.2.cmp(&a.2));
+    found.sort_by_key(|a| std::cmp::Reverse(a.2));
     found
         .into_iter()
         .map(|(uid, path, _)| (uid, path))

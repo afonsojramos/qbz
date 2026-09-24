@@ -17,9 +17,8 @@ mod validation;
 
 pub use admission::{admission_channel, AdmissionInbox, AdmissionSender, SubmitError};
 pub use controller::{
-    endpoint_url, ordered_addresses, HandoffBody, LanBrowseEvent, LanBrowser,
-    LanControllerClient, LanControllerError, LanRendererCandidate, LanRendererProbe,
-    LanTokenOut,
+    endpoint_url, ordered_addresses, HandoffBody, LanBrowseEvent, LanBrowser, LanControllerClient,
+    LanControllerError, LanRendererCandidate, LanRendererProbe, LanTokenOut,
 };
 pub use model::{
     ConnectInfo, DeviceType, DisplayInfo, HandoffCandidate, LanJwtToken, MaxAudioQuality,

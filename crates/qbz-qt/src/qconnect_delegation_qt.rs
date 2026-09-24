@@ -223,13 +223,18 @@ impl QtDelegationHost {
         &self,
     ) -> Result<(OwnedMutexGuard<()>, OwnerActionFence), String> {
         let lane = Arc::clone(&self.transition_gate).lock_owned().await;
-        if self.authority.current().is_some_and(|s| s.origin() != AuthorityOrigin::Owner) {
+        if self
+            .authority
+            .current()
+            .is_some_and(|s| s.origin() != AuthorityOrigin::Owner)
+        {
             return Err("Playback memory can only be applied to local playback.".into());
         }
         let fence = OwnerActionFence::acquire_drained(
             Arc::clone(&self.authority),
             crate::playback_qt::cancel_owner_playback_tasks,
-        ).await;
+        )
+        .await;
         Ok((lane, fence))
     }
 
@@ -885,7 +890,8 @@ impl DelegationHost for QtDelegationHost {
             // but must never schedule audible playback or reopen the DAC.
             let _ = self.runtime.core().stop();
             if self.restore_owner_snapshot().await.is_some() {
-                self.shutdown_mode.store(SHUTDOWN_OWNER_QUEUE_RESTORED, Ordering::Release);
+                self.shutdown_mode
+                    .store(SHUTDOWN_OWNER_QUEUE_RESTORED, Ordering::Release);
             }
             None
         } else {

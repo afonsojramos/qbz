@@ -124,7 +124,11 @@ async fn a_full_round_trip_yields_tracks_with_real_quality() {
     );
     // ...and a lossy row must NOT invent one.
     for t in page.iter().filter(|t| t.container == "mp3") {
-        assert_eq!(t.bit_depth, None, "an mp3 reported a bit depth: {}", t.title);
+        assert_eq!(
+            t.bit_depth, None,
+            "an mp3 reported a bit depth: {}",
+            t.title
+        );
     }
     // Every row must be identifiable and groupable, or the cache cannot key it.
     for t in &page {
@@ -167,7 +171,11 @@ async fn the_stream_endpoint_is_direct_and_seekable() {
         .await
         .expect("range request");
 
-    assert_eq!(resp.status().as_u16(), 206, "the server refused a Range request");
+    assert_eq!(
+        resp.status().as_u16(),
+        206,
+        "the server refused a Range request"
+    );
     let te = resp
         .headers()
         .get(reqwest::header::TRANSFER_ENCODING)
@@ -220,8 +228,16 @@ async fn cover_art_needs_no_token() {
     let token = &session(&url, &user, &pass).await.access_token;
     assert!(!art.contains(token), "the cover url leaked the token");
 
-    let resp = reqwest::Client::new().get(&art).send().await.expect("cover");
-    assert!(resp.status().is_success(), "cover fetch failed: {}", resp.status());
+    let resp = reqwest::Client::new()
+        .get(&art)
+        .send()
+        .await
+        .expect("cover");
+    assert!(
+        resp.status().is_success(),
+        "cover fetch failed: {}",
+        resp.status()
+    );
     let ctype = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -245,7 +261,11 @@ async fn a_future_delta_returns_nothing() {
         .tracks_page(Some(&libs[0].id), 0, Some("2999-01-01T00:00:00Z"))
         .await
         .expect("delta page");
-    assert!(page.is_empty(), "a year-2999 delta returned {} rows", page.len());
+    assert!(
+        page.is_empty(),
+        "a year-2999 delta returned {} rows",
+        page.len()
+    );
 }
 
 /// The delta sweep really INCLUDES what changed. A future date alone cannot
@@ -263,7 +283,10 @@ async fn a_past_delta_returns_the_whole_library() {
         .essential_tracks_page(Some(&libs[0].id), 0, Some("2000-01-01T00:00:00Z"))
         .await
         .expect("delta page");
-    assert_eq!(reported, total, "a year-2000 delta did not report the library");
+    assert_eq!(
+        reported, total,
+        "a year-2000 delta did not report the library"
+    );
     assert_eq!(
         page.len() as u64,
         total.min(u64::from(qbz_jellyfin::PAGE_SIZE)),

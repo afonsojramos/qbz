@@ -49,13 +49,15 @@ impl RemoteControlSettingsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open remote control settings database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| {
-                format!(
-                    "Failed to enable WAL for remote control settings database: {}",
-                    e
-                )
-            })?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| {
+            format!(
+                "Failed to enable WAL for remote control settings database: {}",
+                e
+            )
+        })?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS remote_control_settings (
@@ -305,8 +307,10 @@ impl AllowedOriginsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open allowed origins database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| format!("Failed to enable WAL for allowed origins database: {}", e))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| format!("Failed to enable WAL for allowed origins database: {}", e))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS allowed_origins (
@@ -722,7 +726,9 @@ mod tests {
         store.restore_defaults().expect("restore defaults");
         let origins = store.get_origins().expect("get origins");
 
-        assert!(origins.iter().any(|entry| entry.origin == "control.qbz.lol"));
+        assert!(origins
+            .iter()
+            .any(|entry| entry.origin == "control.qbz.lol"));
         assert!(origins.iter().any(|entry| entry.id == origin.id));
         let _ = std::fs::remove_dir_all(dir);
     }

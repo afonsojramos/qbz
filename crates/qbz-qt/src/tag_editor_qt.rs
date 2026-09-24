@@ -113,7 +113,11 @@ fn remote_album_id(source: &str, group_key: &str) -> String {
 /// own key wins over the caller's fallback) and the sidecar target it edits.
 /// Media-server files live on the server, so the only writable layer is QBZ's
 /// own metadata sidecar — `validate_draft` refuses a direct write for it.
-fn remote_editor_target(source: &str, tracks: &[LocalTrack], fallback_group: &str) -> (String, EditorTarget) {
+fn remote_editor_target(
+    source: &str,
+    tracks: &[LocalTrack],
+    fallback_group: &str,
+) -> (String, EditorTarget) {
     let group = tracks
         .first()
         .map(|track| track.album_group_key.as_str())

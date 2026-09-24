@@ -73,14 +73,10 @@ pub fn run_mixtape_migrations(conn: &Connection) -> Result<()> {
                 "ALTER TABLE session_queue_state ADD COLUMN source_collection_id TEXT",
                 [],
             )?;
-            log::info!(
-                "[Mixtape/schema] added session_queue_state.source_collection_id"
-            );
+            log::info!("[Mixtape/schema] added session_queue_state.source_collection_id");
         }
     } else {
-        log::info!(
-            "[Mixtape/schema] session_queue_state not present yet; skipping ALTER"
-        );
+        log::info!("[Mixtape/schema] session_queue_state not present yet; skipping ALTER");
     }
 
     Ok(())
@@ -115,7 +111,8 @@ mod tests {
         conn.execute(
             "CREATE TABLE session_queue_state (user_id INTEGER, extra TEXT)",
             [],
-        ).unwrap();
+        )
+        .unwrap();
         run_mixtape_migrations(&conn).unwrap();
 
         let has_col: i64 = conn.query_row(

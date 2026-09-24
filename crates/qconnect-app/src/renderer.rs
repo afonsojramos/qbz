@@ -276,32 +276,64 @@ fn is_recent_load_attempt(state: &QconnectRemoteSyncState, track_id: u64) -> boo
 pub async fn ensure_remote_track_loaded(
     engine: &impl QconnectRendererEngine,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    track_id: u64, max_audio_quality: Option<i32>, start_position_secs: u64,
+    track_id: u64,
+    max_audio_quality: Option<i32>,
+    start_position_secs: u64,
 ) -> Result<bool, String> {
-    prepare_remote_track(engine, sync_state, track_id, max_audio_quality, start_position_secs, true, false).await
+    prepare_remote_track(
+        engine,
+        sync_state,
+        track_id,
+        max_audio_quality,
+        start_position_secs,
+        true,
+        false,
+    )
+    .await
 }
 
 pub async fn force_remote_track_stream(
     engine: &impl QconnectRendererEngine,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    track_id: u64, max_audio_quality: Option<i32>, start_position_secs: u64,
+    track_id: u64,
+    max_audio_quality: Option<i32>,
+    start_position_secs: u64,
 ) -> Result<bool, String> {
-    ensure_remote_track_loaded(engine, sync_state, track_id, max_audio_quality, start_position_secs).await
+    ensure_remote_track_loaded(
+        engine,
+        sync_state,
+        track_id,
+        max_audio_quality,
+        start_position_secs,
+    )
+    .await
 }
 
 async fn prepare_remote_track(
     engine: &impl QconnectRendererEngine,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,
-    track_id: u64, max_audio_quality: Option<i32>, start_position_secs: u64, playing: bool, force: bool,
+    track_id: u64,
+    max_audio_quality: Option<i32>,
+    start_position_secs: u64,
+    playing: bool,
+    force: bool,
 ) -> Result<bool, String> {
     use qbz_player::player::PlaybackBufferState;
     let buffer = engine.loading_state();
     let failed = matches!(buffer, Some((id, PlaybackBufferState::Error)) if id == track_id);
-    if !force && !failed && engine.get_playback_state().track_id == track_id && engine.has_loaded_audio() {
+    if !force
+        && !failed
+        && engine.get_playback_state().track_id == track_id
+        && engine.has_loaded_audio()
+    {
         return Ok(false);
     }
-    let pending = matches!(buffer, Some((id, PlaybackBufferState::InitialBuffering)) if id == track_id);
-    if !force && (pending || (buffer.is_none() && is_recent_load_attempt(&*sync_state.lock().await, track_id))) {
+    let pending =
+        matches!(buffer, Some((id, PlaybackBufferState::InitialBuffering)) if id == track_id);
+    if !force
+        && (pending
+            || (buffer.is_none() && is_recent_load_attempt(&*sync_state.lock().await, track_id)))
+    {
         return Ok(false);
     }
     let generation = sync_state.lock().await.renderer_generation;
@@ -312,14 +344,22 @@ async fn prepare_remote_track(
         if sync_state.lock().await.renderer_generation != generation {
             return Err("renderer activation changed during catalog lookup".into());
         }
-        engine.start_track_stream_with_state(
-            track_id, quality_from_max_audio_quality(max_audio_quality),
-            u64::from(track.duration), start_position_secs, playing,
-        ).await
-    }.await;
+        engine
+            .start_track_stream_with_state(
+                track_id,
+                quality_from_max_audio_quality(max_audio_quality),
+                u64::from(track.duration),
+                start_position_secs,
+                playing,
+            )
+            .await
+    }
+    .await;
     if result.is_err() {
         let mut state = sync_state.lock().await;
-        if state.last_load_attempt == Some(attempt) { state.last_load_attempt = None; }
+        if state.last_load_attempt == Some(attempt) {
+            state.last_load_attempt = None;
+        }
     }
     result.map(|()| true)
 }
@@ -342,24 +382,34 @@ pub async fn apply_renderer_command(
 ) -> Result<(), String> {
     match command {
         RendererCommand::SetState {
-            playing_state, current_position_ms, current_track, ..
+            playing_state,
+            current_position_ms,
+            current_track,
+            ..
         } => {
             let mut loaded = false;
             let mut new_occurrence = false;
             // Retained state can complete a fresh, partial target. Only explicit
             // fields request transport operations on already loaded audio.
             let desired = playing_state.or(renderer_state.playing_state);
-            let target = current_track.as_ref().or(renderer_state.current_track.as_ref());
+            let target = current_track
+                .as_ref()
+                .or(renderer_state.current_track.as_ref());
             let partial_target = {
                 let mut sync = sync_state.lock().await;
                 if let Some(track) = current_track.as_ref().filter(|_| desired.is_none()) {
                     sync.pending_transport_target = Some((sync.renderer_generation, track.clone()));
                 }
-                sync.pending_transport_target.as_ref().is_some_and(|(generation, pending)|
-                    *generation == sync.renderer_generation && target == Some(pending))
+                sync.pending_transport_target
+                    .as_ref()
+                    .is_some_and(|(generation, pending)| {
+                        *generation == sync.renderer_generation && target == Some(pending)
+                    })
             };
             if matches!(desired, Some(PLAYING_STATE_PLAYING | PLAYING_STATE_PAUSED)) {
-                if let Some(track) = target.filter(|_| current_track.is_some() || partial_target || !engine.has_loaded_audio()) {
+                if let Some(track) = target.filter(|_| {
+                    current_track.is_some() || partial_target || !engine.has_loaded_audio()
+                }) {
                     // Align only once transport intent is known. If the target
                     // arrived first, this preserves detection of a later move
                     // to another occurrence of the same recording.
@@ -369,19 +419,33 @@ pub async fn apply_renderer_command(
                         engine.stop()?;
                         sync_state.lock().await.last_load_attempt = None;
                     }
-                    let position = current_position_ms.or(renderer_state.current_position_ms).unwrap_or(0) / 1000;
-                    loaded = prepare_remote_track(engine, sync_state, track.track_id,
-                        renderer_state.max_audio_quality, position,
-                        desired == Some(PLAYING_STATE_PLAYING), new_occurrence).await?;
+                    let position = current_position_ms
+                        .or(renderer_state.current_position_ms)
+                        .unwrap_or(0)
+                        / 1000;
+                    loaded = prepare_remote_track(
+                        engine,
+                        sync_state,
+                        track.track_id,
+                        renderer_state.max_audio_quality,
+                        position,
+                        desired == Some(PLAYING_STATE_PLAYING),
+                        new_occurrence,
+                    )
+                    .await?;
                     sync_state.lock().await.pending_transport_target = None;
-                } else if !engine.has_loaded_audio() && playing_state == &Some(PLAYING_STATE_PLAYING) {
+                } else if !engine.has_loaded_audio()
+                    && playing_state == &Some(PLAYING_STATE_PLAYING)
+                {
                     // An unloaded retained local cursor is not a remote target.
                     return Ok(());
                 }
             }
             if !loaded {
                 match playing_state {
-                    Some(PLAYING_STATE_PLAYING) if !engine.get_playback_state().is_playing => engine.resume()?,
+                    Some(PLAYING_STATE_PLAYING) if !engine.get_playback_state().is_playing => {
+                        engine.resume()?
+                    }
                     Some(PLAYING_STATE_PAUSED) => engine.pause()?,
                     Some(PLAYING_STATE_STOPPED) => {
                         engine.stop()?;
@@ -393,9 +457,13 @@ pub async fn apply_renderer_command(
                 }
             }
             // Absence is never a seek. Zero is a valid explicit seek target.
-            if !loaded && desired != Some(PLAYING_STATE_STOPPED)
-                && (engine.has_loaded_audio() || engine.loading_state().is_some_and(|(_, state)|
-                    state == qbz_player::player::PlaybackBufferState::InitialBuffering)) {
+            if !loaded
+                && desired != Some(PLAYING_STATE_STOPPED)
+                && (engine.has_loaded_audio()
+                    || engine.loading_state().is_some_and(|(_, state)| {
+                        state == qbz_player::player::PlaybackBufferState::InitialBuffering
+                    }))
+            {
                 if let Some(position_ms) = current_position_ms {
                     let target = position_ms / 1000;
                     if engine.get_playback_state().position.abs_diff(target) > 2 {
@@ -738,24 +806,35 @@ async fn align_remote_occurrence(
         let (tracks, _) = engine.get_all_queue_tracks().await;
         return Ok(before != tracks.iter().position(|track| track.id == target.track_id));
     };
-    let same = |item: &qconnect_core::QueueItem|
-        item.queue_item_id == target.queue_item_id && item.track_id == target.track_id;
-    let queued = queue.queue_items.iter().position(|item| same(item));
-    if queued.is_none() && !queue.autoplay_items.iter().any(|item| same(item)) {
+    let same = |item: &qconnect_core::QueueItem| {
+        item.queue_item_id == target.queue_item_id && item.track_id == target.track_id
+    };
+    let queued = queue.queue_items.iter().position(&same);
+    if queued.is_none() && !queue.autoplay_items.iter().any(same) {
         return Err("renderer occurrence is absent from synchronized queue".into());
     }
     // Only queue_items are materialized locally; autoplay stays session-side.
     let (tracks, current) = engine.get_all_queue_tracks().await;
-    if tracks.len() != queue.queue_items.len() || !tracks.iter().zip(&queue.queue_items)
-        .all(|(track, item)| track.id == item.track_id && qconnect_queue_track_is_resolvable(track)) {
+    if tracks.len() != queue.queue_items.len()
+        || !tracks.iter().zip(&queue.queue_items).all(|(track, item)| {
+            track.id == item.track_id && qconnect_queue_track_is_resolvable(track)
+        })
+    {
         return Err("local queue does not match synchronized occurrences".into());
     }
     // An autoplay suggestion has no local occurrence: the caller loads it by
     // id; the local cursor and the shuffle projection stay untouched.
-    let Some(index) = queued else { return Ok(false) };
-    let renderer = QConnectRendererState { current_track: Some(target.clone()), ..Default::default() };
+    let Some(index) = queued else {
+        return Ok(false);
+    };
+    let renderer = QConnectRendererState {
+        current_track: Some(target.clone()),
+        ..Default::default()
+    };
     let projected = sync_remote_shuffle_projection(engine, sync, &queue, &renderer).await?;
-    if !projected && current != Some(index) { engine.play_index(index).await; }
+    if !projected && current != Some(index) {
+        engine.play_index(index).await;
+    }
     Ok(current != Some(index))
 }
 
@@ -769,11 +848,16 @@ pub async fn align_queue_cursor(
         tracks.len(),
         current_index
     );
-    let matches: Vec<_> = tracks.iter().enumerate()
+    let matches: Vec<_> = tracks
+        .iter()
+        .enumerate()
         .filter(|(_, track)| track.id == track_id && qconnect_queue_track_is_resolvable(track))
-        .map(|(index, _)| index).collect();
+        .map(|(index, _)| index)
+        .collect();
     if let [target_index] = matches.as_slice() {
-        if current_index != Some(*target_index) { engine.play_index(*target_index).await; }
+        if current_index != Some(*target_index) {
+            engine.play_index(*target_index).await;
+        }
         return Ok(());
     }
     Err("renderer needs an authoritative queue occurrence before moving the cursor".into())
@@ -925,11 +1009,19 @@ mod tests {
             Ok(())
         }
         async fn start_track_stream_with_state(
-            &self, track_id: u64, quality: Quality, duration: u64, position: u64, playing: bool,
+            &self,
+            track_id: u64,
+            quality: Quality,
+            duration: u64,
+            position: u64,
+            playing: bool,
         ) -> Result<(), String> {
             self.calls().initial_playing.push(playing);
-            if self.fail_load { return Err("injected load failure".into()); }
-            self.start_track_stream(track_id, quality, duration, position).await
+            if self.fail_load {
+                return Err("injected load failure".into());
+            }
+            self.start_track_stream(track_id, quality, duration, position)
+                .await
         }
         fn current_output_format(&self) -> Option<(u32, u32)> {
             Some((44_100, 16))
@@ -959,14 +1051,27 @@ mod tests {
         engine.fail_load = true;
         engine.queue_tracks = vec![mock_queue_track(7)];
         let sync = sync();
-        let command = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PLAYING),
-            current_position_ms: Some(45_000), current_track: Some(qi(7, 0)), next_track: None };
-        assert!(apply_renderer_command(&engine, &sync, &command, &QConnectRendererState::default()).await.is_err());
+        let command = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: Some(45_000),
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        assert!(apply_renderer_command(
+            &engine,
+            &sync,
+            &command,
+            &QConnectRendererState::default()
+        )
+        .await
+        .is_err());
         assert!(sync.lock().await.last_load_attempt.is_none());
         assert_eq!(engine.calls().resumes, 0);
         assert!(engine.calls().seeks.is_empty());
         engine.fail_load = false;
-        apply_renderer_command(&engine, &sync, &command, &QConnectRendererState::default()).await.unwrap();
+        apply_renderer_command(&engine, &sync, &command, &QConnectRendererState::default())
+            .await
+            .unwrap();
         assert_eq!(engine.calls().start_positions, vec![45]);
     }
 
@@ -975,9 +1080,20 @@ mod tests {
         let mut engine = MockEngine::new();
         engine.playback.track_id = 7;
         engine.queue_tracks = vec![mock_queue_track(7)];
-        let command = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED),
-            current_position_ms: Some(45_000), current_track: Some(qi(7, 0)), next_track: None };
-        apply_renderer_command(&engine, &sync(), &command, &QConnectRendererState::default()).await.unwrap();
+        let command = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PAUSED),
+            current_position_ms: Some(45_000),
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        apply_renderer_command(
+            &engine,
+            &sync(),
+            &command,
+            &QConnectRendererState::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(engine.calls().start_positions, vec![45]);
         assert_eq!(engine.calls().initial_playing, vec![false]);
         assert_eq!(engine.calls().resumes, 0);
@@ -990,20 +1106,40 @@ mod tests {
             let mut engine = MockEngine::new();
             engine.loaded_audio = true;
             engine.playback.track_id = 7;
-            engine.queue_tracks = vec![mock_queue_track(7), mock_queue_track(8), mock_queue_track(7)];
+            engine.queue_tracks = vec![
+                mock_queue_track(7),
+                mock_queue_track(8),
+                mock_queue_track(7),
+            ];
             engine.queue_index = Some(0);
             let sync = sync();
             sync.lock().await.last_remote_queue_state = Some(QConnectQueueState {
-                queue_items: vec![qi(7, 10), qi(8, 11), qi(7, 0)], ..Default::default() });
-            let target = RendererCommand::SetState { playing_state: None,
-                current_position_ms: None, current_track: Some(qi(7, 0)), next_track: None };
-            let pause = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED),
-                current_position_ms: Some(45_000), current_track: None, next_track: None };
-            let commands = if target_first { [target, pause] } else { [pause, target] };
+                queue_items: vec![qi(7, 10), qi(8, 11), qi(7, 0)],
+                ..Default::default()
+            });
+            let target = RendererCommand::SetState {
+                playing_state: None,
+                current_position_ms: None,
+                current_track: Some(qi(7, 0)),
+                next_track: None,
+            };
+            let pause = RendererCommand::SetState {
+                playing_state: Some(PLAYING_STATE_PAUSED),
+                current_position_ms: Some(45_000),
+                current_track: None,
+                next_track: None,
+            };
+            let commands = if target_first {
+                [target, pause]
+            } else {
+                [pause, target]
+            };
             let mut state = QConnectRendererState::default();
             for command in commands {
                 qconnect_core::apply_renderer_command(&mut state, &command, 1);
-                apply_renderer_command(&engine, &sync, &command, &state).await.unwrap();
+                apply_renderer_command(&engine, &sync, &command, &state)
+                    .await
+                    .unwrap();
             }
             assert_eq!(engine.calls().start_track_streams, vec![7]);
             assert_eq!(engine.calls().initial_playing, vec![false]);
@@ -1022,11 +1158,21 @@ mod tests {
         engine.playback.is_playing = true;
         let sync = sync();
         sync.lock().await.last_load_attempt = Some((7, Instant::now()));
-        let state = QConnectRendererState { current_position_ms: Some(0), current_track: Some(qi(7, 0)),
-            playing_state: Some(PLAYING_STATE_PAUSED), ..Default::default() };
-        let command = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED),
-            current_position_ms: None, current_track: None, next_track: None };
-        apply_renderer_command(&engine, &sync, &command, &state).await.unwrap();
+        let state = QConnectRendererState {
+            current_position_ms: Some(0),
+            current_track: Some(qi(7, 0)),
+            playing_state: Some(PLAYING_STATE_PAUSED),
+            ..Default::default()
+        };
+        let command = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PAUSED),
+            current_position_ms: None,
+            current_track: None,
+            next_track: None,
+        };
+        apply_renderer_command(&engine, &sync, &command, &state)
+            .await
+            .unwrap();
         assert_eq!(engine.calls().pauses, 1);
         assert!(engine.calls().seeks.is_empty());
         assert!(engine.calls().play_indexes.is_empty());
@@ -1038,21 +1184,36 @@ mod tests {
         let mut engine = MockEngine::new();
         engine.loaded_audio = true;
         engine.playback.track_id = 7;
-        engine.queue_tracks = vec![mock_queue_track(7), mock_queue_track(8), mock_queue_track(7)];
+        engine.queue_tracks = vec![
+            mock_queue_track(7),
+            mock_queue_track(8),
+            mock_queue_track(7),
+        ];
         engine.queue_index = Some(0);
         let sync = sync();
         sync.lock().await.last_remote_queue_state = Some(QConnectQueueState {
-            queue_items: vec![qi(7, 10), qi(8, 11), qi(7, 0)], ..Default::default() });
-        let command = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED),
-            current_position_ms: None, current_track: Some(qi(7, 0)), next_track: None };
-        apply_renderer_command(&engine, &sync, &command, &QConnectRendererState::default()).await.unwrap();
+            queue_items: vec![qi(7, 10), qi(8, 11), qi(7, 0)],
+            ..Default::default()
+        });
+        let command = RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PAUSED),
+            current_position_ms: None,
+            current_track: Some(qi(7, 0)),
+            next_track: None,
+        };
+        apply_renderer_command(&engine, &sync, &command, &QConnectRendererState::default())
+            .await
+            .unwrap();
         assert_eq!(engine.calls().play_indexes, vec![2]);
         assert_eq!(engine.calls().set_queues, 0);
     }
 
     // Only queue_items are materialized locally; autoplay suggestions stay in
     // the session. Local queue [7, 8] is the materialization of this session.
-    async fn autoplay_session(local: Vec<u64>, shuffle: bool) -> (MockEngine, Arc<Mutex<QconnectRemoteSyncState>>) {
+    async fn autoplay_session(
+        local: Vec<u64>,
+        shuffle: bool,
+    ) -> (MockEngine, Arc<Mutex<QconnectRemoteSyncState>>) {
         let mut engine = MockEngine::new();
         engine.loaded_audio = true;
         engine.playback.track_id = 7;
@@ -1060,20 +1221,35 @@ mod tests {
         engine.queue_index = Some(0);
         let sync = sync();
         sync.lock().await.last_remote_queue_state = Some(QConnectQueueState {
-            queue_items: vec![qi(7, 10), qi(8, 11)], autoplay_items: vec![qi(9, 20), qi(10, 21)],
-            shuffle_mode: shuffle, shuffle_order: shuffle.then(|| vec![1, 0]), ..Default::default() });
+            queue_items: vec![qi(7, 10), qi(8, 11)],
+            autoplay_items: vec![qi(9, 20), qi(10, 21)],
+            shuffle_mode: shuffle,
+            shuffle_order: shuffle.then(|| vec![1, 0]),
+            ..Default::default()
+        });
         (engine, sync)
     }
 
     fn play(track: QueueItem) -> RendererCommand {
-        RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PLAYING),
-            current_position_ms: Some(0), current_track: Some(track), next_track: None }
+        RendererCommand::SetState {
+            playing_state: Some(PLAYING_STATE_PLAYING),
+            current_position_ms: Some(0),
+            current_track: Some(track),
+            next_track: None,
+        }
     }
 
     #[tokio::test]
     async fn autoplay_session_queue_target_moves_occurrence_and_loads() {
         let (engine, sync) = autoplay_session(vec![7, 8], false).await;
-        apply_renderer_command(&engine, &sync, &play(qi(8, 11)), &QConnectRendererState::default()).await.unwrap();
+        apply_renderer_command(
+            &engine,
+            &sync,
+            &play(qi(8, 11)),
+            &QConnectRendererState::default(),
+        )
+        .await
+        .unwrap();
         assert_eq!(engine.calls().play_indexes, vec![1]);
         assert_eq!(engine.calls().start_track_streams, vec![8]);
         assert_eq!(engine.calls().set_queues, 0);
@@ -1083,7 +1259,14 @@ mod tests {
     async fn autoplay_suggestion_target_loads_by_id_without_touching_queue() {
         for shuffle in [false, true] {
             let (engine, sync) = autoplay_session(vec![7, 8], shuffle).await;
-            apply_renderer_command(&engine, &sync, &play(qi(9, 20)), &QConnectRendererState::default()).await.unwrap();
+            apply_renderer_command(
+                &engine,
+                &sync,
+                &play(qi(9, 20)),
+                &QConnectRendererState::default(),
+            )
+            .await
+            .unwrap();
             assert_eq!(engine.calls().start_track_streams, vec![9]);
             assert!(engine.calls().play_indexes.is_empty());
             assert!(engine.calls().set_queue_with_order.is_empty());
@@ -1095,7 +1278,14 @@ mod tests {
     async fn autoplay_session_still_rejects_unmaterialized_local_queue() {
         for target in [qi(8, 11), qi(9, 20)] {
             let (engine, sync) = autoplay_session(vec![7], false).await;
-            assert!(apply_renderer_command(&engine, &sync, &play(target), &QConnectRendererState::default()).await.is_err());
+            assert!(apply_renderer_command(
+                &engine,
+                &sync,
+                &play(target),
+                &QConnectRendererState::default()
+            )
+            .await
+            .is_err());
             assert!(engine.calls().start_track_streams.is_empty());
             assert!(engine.calls().play_indexes.is_empty());
         }
@@ -1438,7 +1628,8 @@ mod tests {
         };
 
         apply_renderer_command(&engine, &sync(), &cmd, &QConnectRendererState::default())
-            .await.expect("partial intent can wait without resolving a local id");
+            .await
+            .expect("partial intent can wait without resolving a local id");
 
         let calls = engine.calls();
         assert!(calls.start_track_streams.is_empty());

@@ -50,8 +50,11 @@ impl DiscoveryTab {
         }
     }
 
-    pub const ALL: [DiscoveryTab; 3] =
-        [DiscoveryTab::Home, DiscoveryTab::EditorPicks, DiscoveryTab::ForYou];
+    pub const ALL: [DiscoveryTab; 3] = [
+        DiscoveryTab::Home,
+        DiscoveryTab::EditorPicks,
+        DiscoveryTab::ForYou,
+    ];
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +132,7 @@ impl DiscoverySectionId {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         use DiscoverySectionId::*;
         Some(match s {
@@ -395,7 +399,10 @@ impl DiscoverPrefs {
 /// string `id` that (a) maps to a known section, (b) is in the fallback id set,
 /// and (c) has not already been seen (first-occurrence wins). `enabled` is
 /// coerced to a strict bool (missing / non-bool -> false).
-pub fn reconcile_list(persisted: Option<&Vec<Value>>, fallback: &[SectionPref]) -> Vec<SectionPref> {
+pub fn reconcile_list(
+    persisted: Option<&Vec<Value>>,
+    fallback: &[SectionPref],
+) -> Vec<SectionPref> {
     let Some(arr) = persisted else {
         return fallback.to_vec();
     };
@@ -408,14 +415,20 @@ pub fn reconcile_list(persisted: Option<&Vec<Value>>, fallback: &[SectionPref]) 
         let Some(obj) = entry.as_object() else {
             continue;
         };
-        let Some(id) = obj.get("id").and_then(|v| v.as_str()).and_then(DiscoverySectionId::from_str)
+        let Some(id) = obj
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(DiscoverySectionId::from_str)
         else {
             continue;
         };
         if !allowed.contains(&id) || seen.contains(&id) {
             continue;
         }
-        let enabled = obj.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false);
+        let enabled = obj
+            .get("enabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         seen.insert(id);
         out.push(SectionPref { id, enabled });
     }
@@ -463,8 +476,10 @@ impl DiscoverPrefsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open discover prefs database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| format!("Failed to enable WAL for discover prefs database: {}", e))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| format!("Failed to enable WAL for discover prefs database: {}", e))?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS discover_prefs (
@@ -639,11 +654,22 @@ mod tests {
         assert_eq!(
             ids(&d.home),
             vec![
-                NewReleases, PressAwards, QobuzPlaylists, RecentlyPlayedAlbums,
+                NewReleases,
+                PressAwards,
+                QobuzPlaylists,
+                RecentlyPlayedAlbums,
                 RecentlyPlayedPlaylists,
-                ContinueListening, IdealDiscography, MostStreamed, Pinned,
-                QobuzMixes, ReleaseWatch, EditorPicks, Qobuzissimes, TopArtists,
-                FavoriteAlbums, MostPlayedAlbums,
+                ContinueListening,
+                IdealDiscography,
+                MostStreamed,
+                Pinned,
+                QobuzMixes,
+                ReleaseWatch,
+                EditorPicks,
+                Qobuzissimes,
+                TopArtists,
+                FavoriteAlbums,
+                MostPlayedAlbums,
             ]
         );
         assert_eq!(d.enabled_count(DiscoveryTab::Home), 9);
@@ -652,7 +678,15 @@ mod tests {
         // editorPicks: 7 entries, all ON.
         assert_eq!(
             ids(&d.editor_picks),
-            vec![NewReleases, EditorPicks, Qobuzissimes, PressAwards, MostStreamed, IdealDiscography, QobuzPlaylists]
+            vec![
+                NewReleases,
+                EditorPicks,
+                Qobuzissimes,
+                PressAwards,
+                MostStreamed,
+                IdealDiscography,
+                QobuzPlaylists
+            ]
         );
         assert_eq!(d.enabled_count(DiscoveryTab::EditorPicks), 7);
         // forYou: 15 entries, qobuzMixes first, pinned second; the 13
@@ -685,14 +719,32 @@ mod tests {
             json!({ "id": "newReleases", "enabled": true }),
             json!({ "id": "newReleases", "enabled": false }), // dupe -> dropped
             json!({ "id": "radioStations", "enabled": true }), // not in home defaults -> dropped
-            json!({ "id": "pressAwards" }),                    // missing enabled -> false
+            json!({ "id": "pressAwards" }),                   // missing enabled -> false
         ];
         let out = reconcile_list(Some(&persisted), &fb);
         // Order: valid persisted first (mostStreamed, newReleases, pressAwards),
         // then the remaining home defaults in default order.
-        assert_eq!(out[0], SectionPref { id: MostStreamed, enabled: false });
-        assert_eq!(out[1], SectionPref { id: NewReleases, enabled: true });
-        assert_eq!(out[2], SectionPref { id: PressAwards, enabled: false });
+        assert_eq!(
+            out[0],
+            SectionPref {
+                id: MostStreamed,
+                enabled: false
+            }
+        );
+        assert_eq!(
+            out[1],
+            SectionPref {
+                id: NewReleases,
+                enabled: true
+            }
+        );
+        assert_eq!(
+            out[2],
+            SectionPref {
+                id: PressAwards,
+                enabled: false
+            }
+        );
         // No unknown / cross-tab id leaked in.
         assert!(!ids(&out).contains(&RadioStations));
         // Every home default id is present exactly once.
@@ -714,8 +766,20 @@ mod tests {
         ]);
         let m = DiscoverPrefs::migrate(&legacy);
         // Home reconciled from the array (qobuzPlaylists first, disabled).
-        assert_eq!(m.home[0], SectionPref { id: QobuzPlaylists, enabled: false });
-        assert_eq!(m.home[1], SectionPref { id: NewReleases, enabled: true });
+        assert_eq!(
+            m.home[0],
+            SectionPref {
+                id: QobuzPlaylists,
+                enabled: false
+            }
+        );
+        assert_eq!(
+            m.home[1],
+            SectionPref {
+                id: NewReleases,
+                enabled: true
+            }
+        );
         // The other two tabs are raw defaults.
         assert_eq!(m.editor_picks, default_prefs().editor_picks);
         assert_eq!(m.for_you, default_prefs().for_you);
@@ -729,7 +793,13 @@ mod tests {
             "forYou": [],
         });
         let m = DiscoverPrefs::migrate(&obj);
-        assert_eq!(m.home[0], SectionPref { id: NewReleases, enabled: false });
+        assert_eq!(
+            m.home[0],
+            SectionPref {
+                id: NewReleases,
+                enabled: false
+            }
+        );
         assert_eq!(m.home.len(), default_prefs().home.len()); // missing appended
         assert_eq!(m.editor_picks, default_prefs().editor_picks);
         assert_eq!(m.for_you, default_prefs().for_you); // empty array -> all defaults appended
@@ -756,8 +826,20 @@ mod tests {
         assert_eq!(d.home.last().unwrap().id, last);
         // Moving pressAwards (idx 1, enabled) up swaps with newReleases; enabled travels.
         d.move_section(DiscoveryTab::Home, PressAwards, -1);
-        assert_eq!(d.home[0], SectionPref { id: PressAwards, enabled: true });
-        assert_eq!(d.home[1], SectionPref { id: NewReleases, enabled: true });
+        assert_eq!(
+            d.home[0],
+            SectionPref {
+                id: PressAwards,
+                enabled: true
+            }
+        );
+        assert_eq!(
+            d.home[1],
+            SectionPref {
+                id: NewReleases,
+                enabled: true
+            }
+        );
         // Unknown id for the tab is a no-op (radioStations not in home).
         let before = d.home.clone();
         d.move_section(DiscoveryTab::Home, RadioStations, 1);

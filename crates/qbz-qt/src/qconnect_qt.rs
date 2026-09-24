@@ -1443,8 +1443,14 @@ impl QtQconnectService {
         self.authority.observe_owner_authority()
     }
 
-    pub(crate) async fn playback_memory_fence(&self) -> Result<
-        (tokio::sync::OwnedMutexGuard<()>, qconnect_app::OwnerActionFence), String,
+    pub(crate) async fn playback_memory_fence(
+        &self,
+    ) -> Result<
+        (
+            tokio::sync::OwnedMutexGuard<()>,
+            qconnect_app::OwnerActionFence,
+        ),
+        String,
     > {
         self.delegation_host.playback_memory_fence().await
     }
@@ -2055,8 +2061,12 @@ impl QtQconnectService {
         if let Some(capabilities) = info.capabilities.as_mut() {
             capabilities.max_audio_quality = Some(qconnect_max_audio_quality_wire());
         }
-        log::info!("[QConnect] Reporting output capabilities: volume_remote_control={:?}",
-            info.capabilities.as_ref().and_then(|caps| caps.volume_remote_control));
+        log::info!(
+            "[QConnect] Reporting output capabilities: volume_remote_control={:?}",
+            info.capabilities
+                .as_ref()
+                .and_then(|caps| caps.volume_remote_control)
+        );
         let queue = app.queue_state_snapshot().await;
         let report = RendererReport::new(
             RendererReportType::RndrSrvrDeviceInfoUpdated,
@@ -5174,10 +5184,16 @@ mod tests {
         for (from, slot, anchor) in [(0, 3, 13), (1, 3, 13), (2, 0, 10), (2, 1, 11), (0, 2, 12)] {
             let payload = super::build_reorder_payload(&projection, from, slot).unwrap();
             assert_eq!(payload["insert_after"], anchor);
-            assert_eq!(payload["queue_item_ids"], serde_json::json!([projection.upcoming_qids[from]]));
+            assert_eq!(
+                payload["queue_item_ids"],
+                serde_json::json!([projection.upcoming_qids[from]])
+            );
         }
         for (from, slot) in [(0, 0), (0, 1), (2, 3)] {
-            assert_eq!(super::build_reorder_payload(&projection, from, slot), Some(serde_json::json!({})));
+            assert_eq!(
+                super::build_reorder_payload(&projection, from, slot),
+                Some(serde_json::json!({}))
+            );
         }
         assert!(super::build_reorder_payload(&projection, 3, 3).is_none());
         assert!(super::build_reorder_payload(&projection, 0, 4).is_none());
@@ -5187,7 +5203,10 @@ mod tests {
     fn peer_volume_controls_follow_capability_and_wait_for_a_reported_level() {
         let mut session = peer_sync().session;
         session.renderers.clear();
-        assert!(peer_volume_locked(Some(20), &session), "wait for renderer metadata");
+        assert!(
+            peer_volume_locked(Some(20), &session),
+            "wait for renderer metadata"
+        );
         for capability in [None, Some(0), Some(1), Some(2)] {
             session.renderers = vec![serde_json::from_value(serde_json::json!({
                 "renderer_id": 2, "volume_remote_control": capability

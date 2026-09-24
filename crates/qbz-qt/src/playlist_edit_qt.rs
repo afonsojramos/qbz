@@ -104,8 +104,7 @@ struct DeleteAsk {
     is_local: bool,
 }
 
-static DELETE_ASK: LazyLock<Mutex<DeleteAsk>> =
-    LazyLock::new(|| Mutex::new(DeleteAsk::default()));
+static DELETE_ASK: LazyLock<Mutex<DeleteAsk>> = LazyLock::new(|| Mutex::new(DeleteAsk::default()));
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

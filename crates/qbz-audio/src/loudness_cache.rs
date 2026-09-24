@@ -165,7 +165,13 @@ impl LoudnessCache {
 
     /// Rank-guarded write: a lower-ranked source never overwrites a higher
     /// one; the same rank refreshes the row. Returns whether it wrote.
-    pub fn store(&self, track_id: u64, lufs: f32, peak: Option<f32>, source: LoudnessSource) -> bool {
+    pub fn store(
+        &self,
+        track_id: u64,
+        lufs: f32,
+        peak: Option<f32>,
+        source: LoudnessSource,
+    ) -> bool {
         let Some(conn) = self.lock() else {
             return false;
         };
@@ -256,7 +262,10 @@ mod tests {
             (Some(-12.0), Some(0.9), LoudnessSource::Ebur128Partial)
         );
         let (g, _) = cache.resolve_gain(7, -14.0, true).unwrap();
-        assert!((g - db_to_linear(-2.0)).abs() < 1e-4, "-14 target on a -12 track is -2 dB, got {g}");
+        assert!(
+            (g - db_to_linear(-2.0)).abs() < 1e-4,
+            "-14 target on a -12 track is -2 dB, got {g}"
+        );
         // Changing the target re-derives the gain from the same row.
         let (g, _) = cache.resolve_gain(7, -18.0, true).unwrap();
         assert!((g - db_to_linear(-6.0)).abs() < 1e-4);
@@ -285,7 +294,10 @@ mod tests {
             "quiet track, no peak: +6 dB cap"
         );
         let ceiling = db_to_linear(-1.0) / 0.5;
-        assert!((gain_for(-20.0, Some(0.5), -14.0, true) - ceiling).abs() < 1e-4, "-1 dBTP over the peak");
+        assert!(
+            (gain_for(-20.0, Some(0.5), -14.0, true) - ceiling).abs() < 1e-4,
+            "-1 dBTP over the peak"
+        );
         assert!(
             (gain_for(-20.0, Some(0.9), -14.0, true) - 1.0).abs() < 1e-4,
             "a peak already at -0.9 dBFS leaves no room to boost, but the guard never attenuates"

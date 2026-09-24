@@ -75,7 +75,7 @@ fn resolve_location(
         return Some(ArtistLocation {
             city: Some(ba.name.clone()),
             area_id: Some(ba.id.clone()),
-            country: country.map(|c| country_code_to_name(c)),
+            country: country.map(country_code_to_name),
             country_code: cc,
             display_name: ba.name.clone(),
             precision,
@@ -102,7 +102,7 @@ fn resolve_location(
         }
 
         // Non-country area (could be city without begin_area)
-        let country_name = country.map(|c| country_code_to_name(c));
+        let country_name = country.map(country_code_to_name);
         let display = if let Some(ref cn) = country_name {
             format!("{}, {}", a.name, cn)
         } else {
@@ -363,69 +363,6 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
     hash
 }
 
-#[cfg(test)]
-mod scene_key_tests {
-    use super::*;
-
-    fn seeds(genres: &[&str], tags: &[&str]) -> AffinitySeeds {
-        AffinitySeeds {
-            genres: genres.iter().map(|s| s.to_string()).collect(),
-            tags: tags.iter().map(|s| s.to_string()).collect(),
-            normalized_seeds: genres
-                .iter()
-                .chain(tags.iter())
-                .map(|s| s.to_string())
-                .collect(),
-        }
-    }
-
-    fn key(source_mbid: &str, page_size: usize, s: &AffinitySeeds) -> String {
-        build_scene_cache_key_v1(&SceneCacheKey {
-            source_mbid,
-            area_id: "area-1",
-            country: Some("United Kingdom"),
-            seeds: s,
-            page_size,
-            catalog_scope: None,
-        })
-    }
-
-    #[test]
-    fn page_size_is_part_of_the_key() {
-        // The whole reason R7 was re-decided: Slint asks for 30 rows and Qt
-        // asks for 100 against the same DB file.
-        let s = seeds(&["post-punk"], &[]);
-        assert_ne!(key("mbid-a", 30, &s), key("mbid-a", 100, &s));
-    }
-
-    #[test]
-    fn source_artist_is_part_of_the_key() {
-        // The source artist is excluded from their own scene, so two artists
-        // with identical area+seeds do NOT share a response.
-        let s = seeds(&["post-punk"], &[]);
-        assert_ne!(key("mbid-a", 100, &s), key("mbid-b", 100, &s));
-    }
-
-    #[test]
-    fn seed_sections_do_not_collide() {
-        // genres=[a] tags=[b] searches differently from genres=[a,b] tags=[].
-        assert_ne!(
-            key("mbid-a", 100, &seeds(&["post-punk"], &["new wave"])),
-            key("mbid-a", 100, &seeds(&["post-punk", "new wave"], &[])),
-        );
-    }
-
-    #[test]
-    fn seed_order_is_significant_but_duplicates_are_not() {
-        let s = seeds(&["post-punk", "new wave"], &[]);
-        assert_ne!(key("mbid-a", 100, &s), key("mbid-a", 100, &seeds(&["new wave", "post-punk"], &[])));
-        assert_eq!(
-            key("mbid-a", 100, &s),
-            key("mbid-a", 100, &seeds(&["post-punk", "new wave", "post-punk"], &[])),
-        );
-    }
-}
-
 /// Format a human-readable date from MB life_span
 pub fn format_life_span_date(life_span: &LifeSpan, _is_person: bool) -> Option<String> {
     let begin = life_span.begin.as_deref()?;
@@ -488,5 +425,75 @@ fn format_mb_date(date: &str) -> String {
             format!("{} {}", month, parts[0])
         }
         _ => date.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod scene_key_tests {
+    use super::*;
+
+    fn seeds(genres: &[&str], tags: &[&str]) -> AffinitySeeds {
+        AffinitySeeds {
+            genres: genres.iter().map(|s| s.to_string()).collect(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            normalized_seeds: genres
+                .iter()
+                .chain(tags.iter())
+                .map(|s| s.to_string())
+                .collect(),
+        }
+    }
+
+    fn key(source_mbid: &str, page_size: usize, s: &AffinitySeeds) -> String {
+        build_scene_cache_key_v1(&SceneCacheKey {
+            source_mbid,
+            area_id: "area-1",
+            country: Some("United Kingdom"),
+            seeds: s,
+            page_size,
+            catalog_scope: None,
+        })
+    }
+
+    #[test]
+    fn page_size_is_part_of_the_key() {
+        // The whole reason R7 was re-decided: Slint asks for 30 rows and Qt
+        // asks for 100 against the same DB file.
+        let s = seeds(&["post-punk"], &[]);
+        assert_ne!(key("mbid-a", 30, &s), key("mbid-a", 100, &s));
+    }
+
+    #[test]
+    fn source_artist_is_part_of_the_key() {
+        // The source artist is excluded from their own scene, so two artists
+        // with identical area+seeds do NOT share a response.
+        let s = seeds(&["post-punk"], &[]);
+        assert_ne!(key("mbid-a", 100, &s), key("mbid-b", 100, &s));
+    }
+
+    #[test]
+    fn seed_sections_do_not_collide() {
+        // genres=[a] tags=[b] searches differently from genres=[a,b] tags=[].
+        assert_ne!(
+            key("mbid-a", 100, &seeds(&["post-punk"], &["new wave"])),
+            key("mbid-a", 100, &seeds(&["post-punk", "new wave"], &[])),
+        );
+    }
+
+    #[test]
+    fn seed_order_is_significant_but_duplicates_are_not() {
+        let s = seeds(&["post-punk", "new wave"], &[]);
+        assert_ne!(
+            key("mbid-a", 100, &s),
+            key("mbid-a", 100, &seeds(&["new wave", "post-punk"], &[]))
+        );
+        assert_eq!(
+            key("mbid-a", 100, &s),
+            key(
+                "mbid-a",
+                100,
+                &seeds(&["post-punk", "new wave", "post-punk"], &[])
+            ),
+        );
     }
 }

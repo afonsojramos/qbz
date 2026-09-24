@@ -36,10 +36,10 @@ mod single_instance_win;
 // All singletons live in the SAME QML module (com.blitzfc.qbz); the
 // invokables stay one-line forwards into the domain controllers below.
 mod home_bridge;
+mod panel_resize;
 mod player_bridge;
 mod queue_bridge;
 mod session_bridge;
-mod panel_resize;
 mod shell_bridge;
 mod viz_bridge;
 // Immersive mode (2026-08-02 immersive-port contract, block B1): the
@@ -153,8 +153,8 @@ mod bridge;
 mod source_wiring;
 // Jellyfin / Subsonic: the per-user settings store plus the two gates the
 // Local Library union reads. The credential glue itself is in `source_wiring`.
-mod media_servers_qt;
 mod media_connection_qt;
+mod media_servers_qt;
 // Profile-scoped metadata overlays for Plex/Jellyfin/Subsonic. Physical files
 // keep using `.qbz.json`; this module is the read-through cache for servers
 // that have no local directory to put that document beside.
@@ -197,7 +197,6 @@ mod log_viewer_qt;
 // other two are plain controller modules and must NOT be.
 mod about_bridge;
 mod about_qt;
-mod updates_qt;
 mod library_bulk;
 mod library_db_qt;
 mod library_prefs;
@@ -209,11 +208,12 @@ mod local_catalog_qt;
 mod local_filter;
 mod local_library_qt;
 mod local_rows;
-mod local_state;
 mod local_service_qt;
+mod local_state;
 mod orbit_bridge;
 mod orbit_qt;
 mod recommendations_qt;
+mod updates_qt;
 mod whats_new_qt;
 // Watcher hints + periodic root reconciliation for the incremental scanner.
 mod local_scan_maintenance_qt;
@@ -290,13 +290,10 @@ mod disc_meta_qt;
 mod label_qt;
 mod local_media_info_qt;
 mod nav_qt;
-mod page_restore_qt;
-mod wallpaper_qt;
-#[cfg(target_os = "linux")]
-mod wallpaper_wayland_qt;
 mod now_playing;
 mod offline_fwd;
 mod output_labels;
+mod page_restore_qt;
 mod quality_qt;
 mod quality_state;
 mod rip_qt;
@@ -306,6 +303,9 @@ mod share_qt;
 mod store_qt;
 mod tag_editor_bridge;
 mod tag_editor_qt;
+mod wallpaper_qt;
+#[cfg(target_os = "linux")]
+mod wallpaper_wayland_qt;
 // Offline cache (downloads tier): state activation on login + the action
 // set. offline_fwd.rs is the offline MODE (connectivity); these two are the
 // user-managed download cache (see AGENTS.md's caching-model note).
@@ -1543,7 +1543,9 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                 }
                 let json = serde_json::to_string(&cards).unwrap_or_else(|_| "[]".into());
                 artist_bridge::ui(move |mut b| {
-                    if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) { return; }
+                    if !artist_qt::release_request_is_current(&artist_id, &release_type, &request) {
+                        return;
+                    }
                     b.as_mut().release_section_ready(
                         QString::from(release_type.as_str()),
                         QString::from(json.as_str()),
@@ -1551,7 +1553,7 @@ pub(crate) fn load_release_section(artist_id: String, release_type: String, offs
                     );
                 });
             }
-            Ok(None) => {},
+            Ok(None) => {}
             Err(e) => log::warn!("[qbz-qt] release page load failed: {e}"),
         }
     });
@@ -3892,7 +3894,8 @@ pub(crate) fn arm_hard_exit_watchdog(source: &'static str) {
         let player = runtime.core().player();
         player.begin_shutdown();
         playback_qt::cancel_owner_playback_tasks();
-        *OUTPUT_RELEASE_TASK.lock().unwrap() = Some(std::thread::spawn(move || player.release_device()));
+        *OUTPUT_RELEASE_TASK.lock().unwrap() =
+            Some(std::thread::spawn(move || player.release_device()));
     }
 }
 

@@ -298,7 +298,8 @@ pub async fn load(runtime: &Arc<AppRuntime<LoggingAdapter>>) {
                 out
             };
             SidebarPlaylist {
-                is_owner: crate::playlist_qt::current_user_id().is_some_and(|uid| uid == p.owner.id),
+                is_owner: crate::playlist_qt::current_user_id()
+                    .is_some_and(|uid| uid == p.owner.id),
                 id: p.id,
                 name: p.name,
                 tracks_count: p.tracks_count,
@@ -581,7 +582,7 @@ pub fn rebuild() -> Vec<SidebarEntry> {
         // When searching, force-expand so matches inside are visible.
         let is_exp = searching || expanded.contains(fid);
         entries.push(SidebarEntry {
-        is_owner: false,
+            is_owner: false,
             kind: "folder".into(),
             id: fid.clone(),
             name: fname.clone(),

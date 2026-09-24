@@ -132,8 +132,8 @@ impl Default for AudioSettings {
             alsa_plugin: Some(AlsaPlugin::Hw), // Default to hw (bit-perfect)
             alsa_hardware_volume: false,       // Disabled by default (maximum compatibility)
             alsa_hardware_volume_controls: HashMap::new(),
-            stream_first_track: true,          // On by default (opt-out)
-            stream_buffer_seconds: 2,          // 2 seconds initial buffer
+            stream_first_track: true, // On by default (opt-out)
+            stream_buffer_seconds: 2, // 2 seconds initial buffer
             playback_cache: Default::default(),
             streaming_only: false, // Disabled by default (cache tracks for instant replay)
             limit_quality_to_device: false, // Opt-in. Off since 1.1.9 (#45); wired to the read-only probe in #638 fix 3
@@ -209,7 +209,10 @@ impl AudioSettingsStore {
             "ALTER TABLE audio_settings ADD COLUMN stream_buffer_seconds INTEGER DEFAULT 2",
             [],
         );
-        let _ = conn.execute("ALTER TABLE audio_settings ADD COLUMN playback_cache TEXT NOT NULL DEFAULT '{}'", []);
+        let _ = conn.execute(
+            "ALTER TABLE audio_settings ADD COLUMN playback_cache TEXT NOT NULL DEFAULT '{}'",
+            [],
+        );
         let _ = conn.execute(
             "ALTER TABLE audio_settings ADD COLUMN streaming_only INTEGER DEFAULT 0",
             [],
@@ -601,10 +604,17 @@ impl AudioSettingsStore {
         Ok(())
     }
 
-    pub fn set_playback_cache(&self, policy: &qbz_models::playback_cache::PlaybackCacheSettings) -> Result<(), String> {
+    pub fn set_playback_cache(
+        &self,
+        policy: &qbz_models::playback_cache::PlaybackCacheSettings,
+    ) -> Result<(), String> {
         policy.validate()?;
         let json = serde_json::to_string(policy).map_err(|e| e.to_string())?;
-        self.conn.execute("UPDATE audio_settings SET playback_cache = ?1 WHERE id = 1", params![json])
+        self.conn
+            .execute(
+                "UPDATE audio_settings SET playback_cache = ?1 WHERE id = 1",
+                params![json],
+            )
             .map_err(|e| format!("Failed to save playback cache settings: {e}"))?;
         Ok(())
     }
@@ -989,13 +999,21 @@ mod tests {
     fn playback_cache_persists_validates_and_resets_without_losing_other_settings() {
         use qbz_models::playback_cache::PlaybackCacheSettings;
         let (dir, store) = fresh_store("playback-cache");
-        let policy = PlaybackCacheSettings { dynamic: true, min_mib: Some(400), max_mib: Some(1600), ..Default::default() };
+        let policy = PlaybackCacheSettings {
+            dynamic: true,
+            min_mib: Some(400),
+            max_mib: Some(1600),
+            ..Default::default()
+        };
         store.set_playback_cache(&policy).unwrap();
         store.set_gapless_enabled(true).unwrap();
         drop(store);
         let store = AudioSettingsStore::new_at(&dir).unwrap();
         assert_eq!(store.get_settings().unwrap().playback_cache, policy);
-        let invalid = PlaybackCacheSettings { max_mib: Some(100), ..policy.clone() };
+        let invalid = PlaybackCacheSettings {
+            max_mib: Some(100),
+            ..policy.clone()
+        };
         assert!(store.set_playback_cache(&invalid).is_err());
         assert_eq!(store.get_settings().unwrap().playback_cache, policy);
         store.set_quality_fallback_behavior("always_skip").unwrap();

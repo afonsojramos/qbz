@@ -31,6 +31,10 @@ impl SourceKind {
         }
     }
 
+    // Deliberately not the std::str::FromStr trait: this returns Option, not
+    // Result, and renaming/retrofitting the trait would touch every call
+    // site across the crate — out of scope for a lint sweep.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
             "local" => Some(Self::Local),

@@ -186,7 +186,8 @@ async fn an_empty_transaction_never_reports_a_successful_installation() {
     let (_bus, _server, closed, monitor) = fixture(1).await;
     let cancel = AtomicBool::new(false);
     let result = tokio::time::timeout(Duration::from_secs(5), monitor.install(&cancel, |_| {}))
-        .await.unwrap();
+        .await
+        .unwrap();
     assert!(result.unwrap_err().contains("no update to install"));
     assert!(closed.load(Ordering::Relaxed));
 }

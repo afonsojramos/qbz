@@ -30,6 +30,9 @@ impl QconnectPlaybackConflictPolicy {
         }
     }
 
+    // Not the std::str::FromStr shape's constraints; call sites are fine
+    // with this associated-fn name as-is.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
         match value {
             "ask_every_time" => Some(Self::AskEveryTime),

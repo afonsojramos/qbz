@@ -137,8 +137,11 @@ struct Shared {
     idle: Condvar,
     cancel: AtomicBool,
     #[cfg(test)]
-    observer: Mutex<Option<Box<dyn Fn(&ScanEvent) + Send + Sync>>>,
+    observer: Mutex<Option<ScanEventObserver>>,
 }
+
+#[cfg(test)]
+type ScanEventObserver = Box<dyn Fn(&ScanEvent) + Send + Sync>;
 
 /// Administration failures are distinct from an empty catalog or accepted job.
 #[derive(Debug, thiserror::Error)]
@@ -319,10 +322,7 @@ impl LibraryService {
             .get_folder_by_id(folder_id)?
             .ok_or_else(|| LibraryError::Other("registered folder missing".into()))?;
         if added {
-            let mut state = self.shared
-                .state
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
             state.snapshot.revision += 1;
             state.snapshot.content_revision += 1;
         }
@@ -444,7 +444,8 @@ fn run(shared: &Shared) {
                 &shared.cancel,
                 &|event| on_event(shared, event),
             );
-            content_changed = db.with_connection(crate::scan_changes::changed)
+            content_changed = db
+                .with_connection(crate::scan_changes::changed)
                 .map_err(|error| LibraryError::Database(error.to_string()))?;
             result
         });
@@ -560,9 +561,15 @@ mod tests {
         wav.extend_from_slice(&918_u32.to_le_bytes());
         wav.extend_from_slice(b"WAVEfmt ");
         wav.extend_from_slice(&16_u32.to_le_bytes());
-        for value in [1_u16, 1] { wav.extend_from_slice(&value.to_le_bytes()); }
-        for value in [44_100_u32, 88_200] { wav.extend_from_slice(&value.to_le_bytes()); }
-        for value in [2_u16, 16] { wav.extend_from_slice(&value.to_le_bytes()); }
+        for value in [1_u16, 1] {
+            wav.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [44_100_u32, 88_200] {
+            wav.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [2_u16, 16] {
+            wav.extend_from_slice(&value.to_le_bytes());
+        }
         wav.extend_from_slice(b"data");
         wav.extend_from_slice(&882_u32.to_le_bytes());
         wav.resize(926, 0);

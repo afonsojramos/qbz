@@ -35,7 +35,9 @@ pub enum IsoError {
     NotIso,
     #[error("the image declares a {0}-byte logical block; only 2048 is supported")]
     BlockSize(u16),
-    #[error("{0} is recorded in several extents or interleaved — refusing to read it as one range")]
+    #[error(
+        "{0} is recorded in several extents or interleaved — refusing to read it as one range"
+    )]
     MultiExtent(String),
     #[error("directory tree is deeper or larger than expected (possible loop)")]
     Malformed,
@@ -74,8 +76,7 @@ pub struct IsoImage {
 
 impl IsoImage {
     pub fn open(path: &Path) -> Result<Self, IsoError> {
-        let mut file =
-            File::open(path).map_err(|e| IsoError::Open(path.to_path_buf(), e))?;
+        let mut file = File::open(path).map_err(|e| IsoError::Open(path.to_path_buf(), e))?;
         let pvd = read_sector(&mut file, PVD_LSN)?;
 
         // Descriptor type 1 = primary, then the "CD001" standard identifier.
@@ -243,7 +244,11 @@ fn parse_record(rec: &[u8], _len: usize) -> Option<(Entry, bool)> {
     // The two self-records are a single 0x00 / 0x01 byte, not text.
     let special = id_len == 1 && (raw[0] == 0 || raw[0] == 1);
     let name = if special {
-        if raw[0] == 0 { ".".into() } else { "..".into() }
+        if raw[0] == 0 {
+            ".".into()
+        } else {
+            "..".into()
+        }
     } else {
         let s = String::from_utf8_lossy(raw).to_string();
         // ";1" is the version suffix ISO 9660 appends to every FILE name.

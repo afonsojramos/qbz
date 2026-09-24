@@ -315,11 +315,7 @@ impl SearchRanking {
     fn persist_blocking(&self) {
         // Take the same lock, so a flush at teardown cannot interleave with a
         // background writer that is still running.
-        let _guard = self
-            .writer
-            .lock
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = self.writer.lock.lock().unwrap_or_else(|e| e.into_inner());
         self.writer.generation.fetch_add(1, Ordering::SeqCst);
         write_doc(&self.path, &self.snapshot());
     }
@@ -400,7 +396,9 @@ impl SearchRanking {
         }
         self.touch(&key);
         let bucket = self.ranking.entry(key.clone()).or_default();
-        let slot = bucket.entry((kind.to_string(), id.to_string())).or_insert(0);
+        let slot = bucket
+            .entry((kind.to_string(), id.to_string()))
+            .or_insert(0);
         *slot = (*slot + action.weight()).min(MAX_SCORE);
         self.enforce_query_cap();
         self.persist();
@@ -443,7 +441,7 @@ impl SearchRanking {
         &self,
         query: &str,
         kind: &str,
-        items: &mut Vec<T>,
+        items: &mut [T],
         id_of: impl Fn(&T) -> String,
     ) {
         let key = normalize_query(query);

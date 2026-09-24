@@ -156,7 +156,10 @@ mod tests {
     fn ramp_polarity() {
         let dark = alpha_ramp(false);
         let light = alpha_ramp(true);
-        assert_eq!(dark[alpha_index(8).unwrap()], Rgba::rgba(255, 255, 255, 0x14));
+        assert_eq!(
+            dark[alpha_index(8).unwrap()],
+            Rgba::rgba(255, 255, 255, 0x14)
+        );
         assert_eq!(light[alpha_index(8).unwrap()], Rgba::rgba(0, 0, 0, 0x14));
     }
 

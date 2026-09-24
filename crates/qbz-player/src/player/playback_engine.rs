@@ -14,9 +14,9 @@ use qbz_audio::alsa_hardware_volume::{
 };
 #[cfg(target_os = "linux")]
 use qbz_audio::AlsaDirectStream;
-use qbz_audio::VisualizerTap;
 #[cfg(target_os = "linux")]
 use qbz_audio::JackStream;
+use qbz_audio::VisualizerTap;
 use rodio::{mixer::Mixer, Player as RodioPlayer, Source};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -114,8 +114,8 @@ pub enum PlaybackEngine {
     },
     /// Native JACK output (#263 Tier 3). Mirrors AlsaDirect (gapless source queue
     /// + a single long-lived feeder thread), but the feeder resamples each source
-    /// to the JACK graph rate and writes interleaved stereo f32 into the client's
-    /// lock-free ring buffer via `JackStream::write_f32`. NOT bit-perfect.
+    ///   to the JACK graph rate and writes interleaved stereo f32 into the client's
+    ///   lock-free ring buffer via `JackStream::write_f32`. NOT bit-perfect.
     #[cfg(target_os = "linux")]
     Jack {
         is_playing: Arc<AtomicBool>,
@@ -280,7 +280,13 @@ impl PlaybackEngine {
             let transition_c = source_transition.clone();
             thread::spawn(move || {
                 jack_feeder_thread(
-                    stream_c, playing_c, stop_c, pos_c, dur_c, queue_c, transition_c,
+                    stream_c,
+                    playing_c,
+                    stop_c,
+                    pos_c,
+                    dur_c,
+                    queue_c,
+                    transition_c,
                 );
             })
         };
@@ -425,10 +431,14 @@ impl PlaybackEngine {
 
     /// Install a first PCM source with its transport intent already set.
     pub fn append_with_state<S>(&mut self, source: S, playing: bool) -> Result<(), String>
-    where S: Source<Item = f32> + Send + 'static {
+    where
+        S: Source<Item = f32> + Send + 'static,
+    {
         match self {
             Self::Rodio { sink } => {
-                if !playing { sink.pause(); }
+                if !playing {
+                    sink.pause();
+                }
                 sink.append(source);
                 Ok(())
             }
@@ -492,9 +502,7 @@ impl PlaybackEngine {
                 Ok(())
             }
             #[cfg(target_os = "linux")]
-            Self::AlsaDop { .. } => {
-                Err("cannot append a PCM source to a DoP engine".to_string())
-            }
+            Self::AlsaDop { .. } => Err("cannot append a PCM source to a DoP engine".to_string()),
         }
     }
 
@@ -651,9 +659,7 @@ impl PlaybackEngine {
                         }
                     }
                 } else {
-                    log::debug!(
-                        "[{label}] Hardware volume control disabled (use DAC/amplifier)"
-                    );
+                    log::debug!("[{label}] Hardware volume control disabled (use DAC/amplifier)");
                 }
             }
             #[cfg(target_os = "linux")]
@@ -818,6 +824,7 @@ fn direct_pcm_feed_frames(sample_rate: u32) -> usize {
     frames as usize
 }
 
+#[allow(clippy::too_many_arguments)]
 fn direct_writer_thread<S: qbz_audio::backend::DirectSink + ?Sized>(
     stream: Arc<S>,
     is_playing: Arc<AtomicBool>,
@@ -945,12 +952,17 @@ fn direct_writer_thread<S: qbz_audio::backend::DirectSink + ?Sized>(
         // Write whatever we have to the direct sink (even partial chunks on source end)
         if !buffer_f32.is_empty() {
             let result = stream.write_f32_interruptible(&buffer_f32, &should_stop);
-            let accepted = match &result { Ok(frames) => *frames, Err(error) => error.frames_written };
+            let accepted = match &result {
+                Ok(frames) => *frames,
+                Err(error) => error.frames_written,
+            };
             total_frames += accepted as u64;
             position_frames.store(total_frames, Ordering::SeqCst);
             duration_frames.store(total_frames, Ordering::SeqCst);
             if let Err(error) = result {
-                if !error.canceled { log::error!("[{label}] Write failed: {}", error.message); }
+                if !error.canceled {
+                    log::error!("[{label}] Write failed: {}", error.message);
+                }
                 break 'thread;
             }
 
@@ -980,10 +992,7 @@ fn direct_writer_thread<S: qbz_audio::backend::DirectSink + ?Sized>(
         }
 
         if source_ended {
-            log::info!(
-                "[{label}] Source ended (total frames: {})",
-                total_frames
-            );
+            log::info!("[{label}] Source ended (total frames: {})", total_frames);
 
             // Try to get next source immediately (gapless transition)
             match source_queue.try_pop() {
@@ -1151,20 +1160,19 @@ fn dop_writer_thread(
     let mut current: Option<BoxedDopIter> = None;
     let mut had_source = false;
 
-    let write_silence = |packer: &mut qbz_dsd::DopPacker,
-                             silence_buf: &mut Vec<i32>,
-                             frames: usize| {
-        silence_buf.clear();
-        if native {
-            // Native DSD silence: 0x69 in every byte lane, no DoP markers.
-            silence_buf.resize(frames * channels as usize, qbz_dsd::NATIVE_DSD_SILENCE_U32);
-        } else {
-            packer.silence(frames, channels, silence_buf);
-        }
-        if let Err(e) = stream.write_dop_i32(silence_buf) {
-            log::warn!("[DoP Engine] Silence write failed: {}", e);
-        }
-    };
+    let write_silence =
+        |packer: &mut qbz_dsd::DopPacker, silence_buf: &mut Vec<i32>, frames: usize| {
+            silence_buf.clear();
+            if native {
+                // Native DSD silence: 0x69 in every byte lane, no DoP markers.
+                silence_buf.resize(frames * channels as usize, qbz_dsd::NATIVE_DSD_SILENCE_U32);
+            } else {
+                packer.silence(frames, channels, silence_buf);
+            }
+            if let Err(e) = stream.write_dop_i32(silence_buf) {
+                log::warn!("[DoP Engine] Silence write failed: {}", e);
+            }
+        };
 
     log::info!("[DoP Engine] Writer thread started (gapless-capable)");
     'thread: loop {
@@ -1260,23 +1268,39 @@ mod tests {
         fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
             self.0.send(samples.to_vec()).map_err(|e| e.to_string())
         }
-        fn drain(&self) -> Result<(), String> { Ok(()) }
-        fn stop(&self) -> Result<(), String> { Ok(()) }
-        fn sample_rate(&self) -> u32 { 192_000 }
-        fn channels(&self) -> u16 { 2 }
-        fn log_label(&self) -> &'static str { "test output" }
+        fn drain(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn stop(&self) -> Result<(), String> {
+            Ok(())
+        }
+        fn sample_rate(&self) -> u32 {
+            192_000
+        }
+        fn channels(&self) -> u16 {
+            2
+        }
+        fn log_label(&self) -> &'static str {
+            "test output"
+        }
     }
 
     #[test]
     fn paused_source_reaches_real_writer_only_after_resume() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut engine = PlaybackEngine::new_direct(Arc::new(RecordingSink(tx)), None, None, Arc::new(|_| {}));
+        let mut engine =
+            PlaybackEngine::new_direct(Arc::new(RecordingSink(tx)), None, None, Arc::new(|_| {}));
         let samples = vec![0.25f32; 3840];
         let source = rodio::buffer::SamplesBuffer::new(
             std::num::NonZeroU16::new(2).unwrap(),
-            std::num::NonZeroU32::new(192_000).unwrap(), samples.clone());
+            std::num::NonZeroU32::new(192_000).unwrap(),
+            samples.clone(),
+        );
         engine.append_with_state(source, false).unwrap();
-        assert!(rx.recv_timeout(Duration::from_millis(150)).is_err(), "paused installation wrote audio");
+        assert!(
+            rx.recv_timeout(Duration::from_millis(150)).is_err(),
+            "paused installation wrote audio"
+        );
         engine.play();
         let written = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         engine.stop();
@@ -1287,30 +1311,57 @@ mod tests {
     fn stop_cancels_a_stalled_writer_and_counts_only_accepted_frames() {
         struct StalledSink(std::sync::mpsc::Sender<()>);
         impl DirectSink for StalledSink {
-            fn write_f32(&self, _: &[f32]) -> Result<(), String> { unreachable!() }
-            fn write_f32_interruptible(&self, _: &[f32], cancel: &AtomicBool)
-                -> Result<usize, qbz_audio::backend::DirectWriteError> {
+            fn write_f32(&self, _: &[f32]) -> Result<(), String> {
+                unreachable!()
+            }
+            fn write_f32_interruptible(
+                &self,
+                _: &[f32],
+                cancel: &AtomicBool,
+            ) -> Result<usize, qbz_audio::backend::DirectWriteError> {
                 self.0.send(()).unwrap();
                 while !cancel.load(Ordering::Acquire) {
                     std::thread::sleep(Duration::from_millis(1));
                 }
                 Err(qbz_audio::backend::DirectWriteError {
-                    frames_written: 2, canceled: true, message: "stopped".into(),
+                    frames_written: 2,
+                    canceled: true,
+                    message: "stopped".into(),
                 })
             }
-            fn drain(&self) -> Result<(), String> { panic!("failed write must not drain") }
-            fn stop(&self) -> Result<(), String> { Ok(()) }
-            fn sample_rate(&self) -> u32 { 192_000 }
-            fn channels(&self) -> u16 { 2 }
-            fn log_label(&self) -> &'static str { "stalled test output" }
+            fn drain(&self) -> Result<(), String> {
+                panic!("failed write must not drain")
+            }
+            fn stop(&self) -> Result<(), String> {
+                Ok(())
+            }
+            fn sample_rate(&self) -> u32 {
+                192_000
+            }
+            fn channels(&self) -> u16 {
+                2
+            }
+            fn log_label(&self) -> &'static str {
+                "stalled test output"
+            }
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let mut engine = PlaybackEngine::new_direct(Arc::new(StalledSink(tx)), None, None, Arc::new(|_| {}));
-        let PlaybackEngine::Direct { position_frames, .. } = &engine else { unreachable!() };
+        let mut engine =
+            PlaybackEngine::new_direct(Arc::new(StalledSink(tx)), None, None, Arc::new(|_| {}));
+        let PlaybackEngine::Direct {
+            position_frames, ..
+        } = &engine
+        else {
+            unreachable!()
+        };
         let position = position_frames.clone();
-        engine.append(rodio::buffer::SamplesBuffer::new(
-            std::num::NonZeroU16::new(2).unwrap(),
-            std::num::NonZeroU32::new(192_000).unwrap(), vec![0.25f32; 3840])).unwrap();
+        engine
+            .append(rodio::buffer::SamplesBuffer::new(
+                std::num::NonZeroU16::new(2).unwrap(),
+                std::num::NonZeroU32::new(192_000).unwrap(),
+                vec![0.25f32; 3840],
+            ))
+            .unwrap();
         rx.recv_timeout(Duration::from_secs(2)).unwrap();
         let start = std::time::Instant::now();
         engine.stop();

@@ -36,7 +36,11 @@ use rusqlite::{params, Connection};
 static DB: OnceLock<Mutex<Option<Connection>>> = OnceLock::new();
 
 fn db_path() -> Option<PathBuf> {
-    Some(dirs::data_dir()?.join("qbz").join("playlist_play_history.db"))
+    Some(
+        dirs::data_dir()?
+            .join("qbz")
+            .join("playlist_play_history.db"),
+    )
 }
 
 /// Create the tables + index on a fresh connection (shared by the lazy opener
@@ -82,9 +86,8 @@ fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     // Up to four MEMBER covers as a JSON array, for the card's mosaic arm —
     // most playlists have no graphic of their own, which is exactly why the
     // detail page falls back to a collage.
-    let _ = conn.execute_batch(
-        "ALTER TABLE playlist_meta ADD COLUMN covers TEXT NOT NULL DEFAULT '[]';",
-    );
+    let _ = conn
+        .execute_batch("ALTER TABLE playlist_meta ADD COLUMN covers TEXT NOT NULL DEFAULT '[]';");
     // The playlist HAS a single graphic of its own (or a custom cover), which
     // the card contain-fits instead of building a mosaic.
     let _ = conn.execute_batch(
@@ -283,8 +286,7 @@ fn query_on(conn: &Connection, order: &str, limit: Option<u32>) -> Vec<PlaylistP
                     artwork_url: row.get(4)?,
                     track_count: row.get::<_, i64>(5)? as u32,
                     source: row.get(6)?,
-                    covers: serde_json::from_str(&row.get::<_, String>(7)?)
-                        .unwrap_or_default(),
+                    covers: serde_json::from_str(&row.get::<_, String>(7)?).unwrap_or_default(),
                     own_image: row.get::<_, i64>(8)? != 0,
                     plays: row.get::<_, i64>(9)? as u32,
                 })
@@ -328,7 +330,10 @@ pub fn prune_playlists(ids: &[String]) -> usize {
                 params![id],
             );
             gone += conn
-                .execute("DELETE FROM playlist_meta WHERE playlist_id = ?", params![id])
+                .execute(
+                    "DELETE FROM playlist_meta WHERE playlist_id = ?",
+                    params![id],
+                )
                 .unwrap_or(0);
         }
         Some(gone)
@@ -460,7 +465,10 @@ mod tests {
         upsert_meta_on(&c, &meta("B", "Playlist B"), 100);
         record_event_on(&c, "A", 100);
         record_event_on(&c, "B", 100);
-        let _ = c.execute("DELETE FROM playlist_play_events WHERE playlist_id = 'A'", []);
+        let _ = c.execute(
+            "DELETE FROM playlist_play_events WHERE playlist_id = 'A'",
+            [],
+        );
         let _ = c.execute("DELETE FROM playlist_meta WHERE playlist_id = 'A'", []);
         let left = query_on(&c, "p.last_at DESC", None);
         assert_eq!(left.len(), 1);

@@ -321,8 +321,7 @@ impl TrackReader {
             (track.start_lsn - owner.start_lsn) as u64 * crate::CDDA_SECTOR_BYTES as u64;
 
         let path = track_file(dev, owner.number).ok_or(CdError::NoDisc)?;
-        let mut file =
-            std::fs::File::open(&path).map_err(|e| CdError::Open(path.clone(), e))?;
+        let mut file = std::fs::File::open(&path).map_err(|e| CdError::Open(path.clone(), e))?;
         let extent = aiff_audio_extent(&mut file).map_err(|e| CdError::Open(path.clone(), e))?;
 
         // The TOC's sector count is the LENGTH, and the SSND payload is only a
@@ -352,8 +351,7 @@ impl TrackReader {
         if self.at >= self.end {
             return Ok(0);
         }
-        let want = (crate::cdda::MAX_FRAMES_PER_READ as u64
-            * crate::CDDA_SECTOR_BYTES as u64)
+        let want = (crate::cdda::MAX_FRAMES_PER_READ as u64 * crate::CDDA_SECTOR_BYTES as u64)
             .min(self.end - self.at) as usize;
         out.resize(want, 0);
         self.file
@@ -426,7 +424,9 @@ mod tests {
         std::fs::write(dir.join("1 Fear Inoculum.aiff"), b"x").unwrap();
         std::fs::write(dir.join("2 Audio Track.aiff"), b"x").unwrap();
         std::fs::write(dir.join("3 Invincible.txt"), b"x").unwrap();
-        assert!(track_file(&dir, 1).unwrap().ends_with("1 Fear Inoculum.aiff"));
+        assert!(track_file(&dir, 1)
+            .unwrap()
+            .ends_with("1 Fear Inoculum.aiff"));
         assert!(track_file(&dir, 2).unwrap().ends_with("2 Audio Track.aiff"));
         assert!(track_file(&dir, 3).is_none(), "a .txt is not a track");
         assert!(track_file(&dir, 9).is_none());
@@ -441,7 +441,10 @@ mod tests {
         for (n, start, sectors) in tracks {
             let mut d = plist::Dictionary::new();
             d.insert("Point".into(), plist::Value::from(*n as u64));
-            d.insert("Start Block".into(), plist::Value::from((*start + LEAD_IN) as u64));
+            d.insert(
+                "Start Block".into(),
+                plist::Value::from((*start + LEAD_IN) as u64),
+            );
             d.insert("Data".into(), plist::Value::from(false));
             plist_tracks.push(plist::Value::Dictionary(d));
 

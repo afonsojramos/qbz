@@ -176,7 +176,6 @@ impl MusicBrainzClient {
             ));
         }
 
-
         let base = self.base_url().await;
         let url = format!("{}/recording?query=isrc:{}&fmt=json", base, isrc);
 
@@ -195,7 +194,6 @@ impl MusicBrainzClient {
                 "MusicBrainz integration is disabled".into(),
             ));
         }
-
 
         // Exact quoted field expression, URL-encoded exactly once (#768:
         // `artist:Swim Deep` let "Deep" leak into the global query and ranked
@@ -223,7 +221,7 @@ impl MusicBrainzClient {
                 let confidence = if recording
                     .isrcs
                     .as_ref()
-                    .map_or(false, |isrcs| isrcs.contains(&isrc.to_string()))
+                    .is_some_and(|isrcs| isrcs.contains(&isrc.to_string()))
                 {
                     MatchConfidence::Exact
                 } else {
@@ -263,7 +261,11 @@ impl MusicBrainzClient {
         let response = self
             .search_artist(name, identity::NAME_SEARCH_LIMIT)
             .await?;
-        Ok(response.artists.iter().map(identity::ArtistCandidate::from).collect())
+        Ok(response
+            .artists
+            .iter()
+            .map(identity::ArtistCandidate::from)
+            .collect())
     }
 
     /// Resolve an artist NAME to a MusicBrainz id under the containment rule
@@ -345,7 +347,7 @@ impl MusicBrainzClient {
             .into_iter()
             .filter(|tag| tag.count.unwrap_or(0) > 0)
             .collect();
-        tags.sort_by(|a, b| b.count.unwrap_or(0).cmp(&a.count.unwrap_or(0)));
+        tags.sort_by_key(|a| std::cmp::Reverse(a.count.unwrap_or(0)));
         Ok(tags
             .into_iter()
             .map(|tag| tag.name.to_lowercase())
@@ -355,7 +357,10 @@ impl MusicBrainzClient {
     /// MBID -> ISRCs bridge. Looks up a recording's ISRCs (the strong key for Qobuz matching).
     /// GET {base}/recording/{recording_mbid}?inc=isrcs&fmt=json
     /// Returns the ISRC list, or an EMPTY vec on any non-success/parse failure (a missing ISRC is normal, not an error).
-    pub async fn get_recording_isrcs(&self, recording_mbid: &str) -> IntegrationResult<Vec<String>> {
+    pub async fn get_recording_isrcs(
+        &self,
+        recording_mbid: &str,
+    ) -> IntegrationResult<Vec<String>> {
         self.check_enabled().await?;
         let base = self.base_url().await;
         let url = format!("{}/recording/{}?inc=isrcs&fmt=json", base, recording_mbid);
@@ -380,7 +385,7 @@ impl MusicBrainzClient {
         self.check_enabled().await?;
 
         let base = self.base_url().await;
-        let limit = limit.min(100).max(1);
+        let limit = limit.clamp(1, 100);
         let query = format!("tag:\"{}\"", Self::escape_query(tag));
         let url = format!(
             "{}/artist?query={}&fmt=json&limit={}",
@@ -405,7 +410,7 @@ impl MusicBrainzClient {
         self.check_enabled().await?;
 
         let base = self.base_url().await;
-        let limit = limit.min(100).max(1);
+        let limit = limit.clamp(1, 100);
         let search_area = country.unwrap_or(area_name);
         let query = format!(
             "tag:\"{}\" AND area:\"{}\"",
@@ -475,7 +480,7 @@ impl MusicBrainzClient {
             )
         };
 
-        let limit = limit.min(25).max(1);
+        let limit = limit.clamp(1, 25);
         let url = format!(
             "{}/release?query={}&fmt=json&limit={}",
             base,
@@ -514,7 +519,7 @@ impl MusicBrainzClient {
         self.check_enabled().await?;
 
         let base = self.base_url().await;
-        let limit = limit.min(100).max(1);
+        let limit = limit.clamp(1, 100);
         let url = format!(
             "{}/artist?area={}&fmt=json&limit={}&offset={}&inc=tags",
             base, area_id, limit, offset
@@ -680,17 +685,14 @@ impl MusicBrainzClient {
             }
 
             // Find "part of" parent
-            let parent = detail
-                .relations
-                .as_ref()
-                .and_then(|rels| {
-                    rels.iter()
-                        .find(|rel| {
-                            rel.relation_type == "part of"
-                                && rel.direction.as_deref() == Some("backward")
-                        })
-                        .and_then(|rel| rel.area.as_ref())
-                });
+            let parent = detail.relations.as_ref().and_then(|rels| {
+                rels.iter()
+                    .find(|rel| {
+                        rel.relation_type == "part of"
+                            && rel.direction.as_deref() == Some("backward")
+                    })
+                    .and_then(|rel| rel.area.as_ref())
+            });
 
             match parent {
                 Some(p) => {

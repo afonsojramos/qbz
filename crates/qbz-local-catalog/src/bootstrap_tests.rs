@@ -112,7 +112,7 @@ fn preflight_enforces_margin_before_creating_a_sidecar() {
     let probe = probe(&source_path, &key, "v1", 10_000);
     let layout = BootstrapLayout::new(&data_dir);
 
-    let error = match layout.prepare(&[probe.clone()], Some(0)) {
+    let error = match layout.prepare(std::slice::from_ref(&probe), Some(0)) {
         Ok(_) => panic!("zero free bytes must fail preflight"),
         Err(error) => error,
     };
@@ -160,7 +160,7 @@ fn building_file_is_never_active_and_previous_generation_survives() {
     let key = source(SourceKind::Local, "library");
     let first_probe = probe(&temp.path().join("library.db"), &key, "v1", 2);
     let (mut first, _) = layout
-        .prepare(&[first_probe.clone()], Some(u64::MAX))
+        .prepare(std::slice::from_ref(&first_probe), Some(u64::MAX))
         .unwrap();
     apply_range(&mut first, &key, "v1", 0, 2, 2);
     let manifest = first.activate(&[first_probe]).unwrap();
@@ -168,7 +168,7 @@ fn building_file_is_never_active_and_previous_generation_survives() {
 
     let next_probe = probe(&temp.path().join("library.db"), &key, "v2", 3);
     let (mut second, _) = layout
-        .prepare(&[next_probe.clone()], Some(u64::MAX))
+        .prepare(std::slice::from_ref(&next_probe), Some(u64::MAX))
         .unwrap();
     apply_range(&mut second, &key, "v2", 0, 1, 3);
     assert!(second.building_path().is_file());
@@ -193,7 +193,7 @@ fn activation_prunes_generations_older_than_the_rollback_generation() {
         let snapshot = format!("v{generation}");
         let current_probe = probe(&temp.path().join("library.db"), &key, &snapshot, generation);
         let (mut session, _) = layout
-            .prepare(&[current_probe.clone()], Some(u64::MAX))
+            .prepare(std::slice::from_ref(&current_probe), Some(u64::MAX))
             .unwrap();
         apply_range(&mut session, &key, &snapshot, 0, generation, generation);
         session.activate(&[current_probe]).unwrap();
@@ -236,11 +236,15 @@ fn interrupted_bootstrap_resumes_at_ten_fifty_and_ninety_nine_percent() {
         let layout = BootstrapLayout::new(temp.path());
         let key = source(SourceKind::Plex, "server-a");
         let probe = probe(&temp.path().join("plex_cache.db"), &key, "stable", TOTAL);
-        let (mut interrupted, _) = layout.prepare(&[probe.clone()], Some(u64::MAX)).unwrap();
+        let (mut interrupted, _) = layout
+            .prepare(std::slice::from_ref(&probe), Some(u64::MAX))
+            .unwrap();
         apply_range(&mut interrupted, &key, "stable", 0, stopped, TOTAL);
         drop(interrupted);
 
-        let (mut resumed, _) = layout.prepare(&[probe.clone()], Some(u64::MAX)).unwrap();
+        let (mut resumed, _) = layout
+            .prepare(std::slice::from_ref(&probe), Some(u64::MAX))
+            .unwrap();
         let checkpoint = resumed.checkpoint(&key).unwrap().unwrap();
         assert_eq!(checkpoint.checkpoint_rows, stopped);
         assert_eq!(checkpoint.checkpoint_cursor, stopped.to_string());
@@ -300,7 +304,9 @@ fn corrupt_building_is_rebuilt_but_unrelated_files_are_preserved() {
     fs::write(layout.building_path(1), b"not sqlite").unwrap();
     let key = source(SourceKind::Local, "library");
     let probe = probe(&source_path, &key, "v1", 0);
-    let (mut session, _) = layout.prepare(&[probe.clone()], Some(u64::MAX)).unwrap();
+    let (mut session, _) = layout
+        .prepare(std::slice::from_ref(&probe), Some(u64::MAX))
+        .unwrap();
     session
         .apply_batch(&BootstrapBatch {
             source: key,
@@ -321,7 +327,9 @@ fn corrupt_active_catalog_falls_back_without_promoting_a_building_file() {
     let layout = BootstrapLayout::new(temp.path());
     let key = source(SourceKind::Local, "library");
     let probe = probe(&temp.path().join("library.db"), &key, "v1", 1);
-    let (mut session, _) = layout.prepare(&[probe.clone()], Some(u64::MAX)).unwrap();
+    let (mut session, _) = layout
+        .prepare(std::slice::from_ref(&probe), Some(u64::MAX))
+        .unwrap();
     apply_range(&mut session, &key, "v1", 0, 1, 1);
     session.activate(&[probe]).unwrap();
     fs::write(layout.generation_path(1), b"corrupt derived data").unwrap();
@@ -738,8 +746,7 @@ fn disabled_source_is_not_opened_and_is_pruned_from_an_existing_catalog() {
         remote_database: user.join("remote_cache.db"),
         enabled_sources: SourceKind::ALL.into_iter().collect(),
     };
-    bootstrap_legacy_caches_at_with_progress(&locations, &AtomicBool::new(false), |_| {})
-        .unwrap();
+    bootstrap_legacy_caches_at_with_progress(&locations, &AtomicBool::new(false), |_| {}).unwrap();
 
     locations.enabled_sources.remove(&SourceKind::Plex);
     let discovered = crate::discover_legacy_sources_at(&locations).unwrap();

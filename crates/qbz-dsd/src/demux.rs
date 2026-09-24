@@ -102,8 +102,8 @@ pub fn open_dsd(path: &Path) -> Result<Box<dyn DsdDemuxer>, DsdError> {
     if qbz_disc::SacdRef::is_sacd_path(&as_str) {
         let r = qbz_disc::SacdRef::parse(&as_str)
             .ok_or_else(|| DsdError::Corrupt(format!("malformed sacd reference: {as_str}")))?;
-        let area = qbz_disc::sacd::read_area(&r.image)
-            .map_err(|e| DsdError::Corrupt(e.to_string()))?;
+        let area =
+            qbz_disc::sacd::read_area(&r.image).map_err(|e| DsdError::Corrupt(e.to_string()))?;
         let track = area
             .tracks
             .iter()
@@ -251,7 +251,9 @@ impl DsfReader {
             }
         };
         if block_size == 0 || block_size > (1 << 20) {
-            return Err(DsdError::Corrupt(format!("bad DSF block size {block_size}")));
+            return Err(DsdError::Corrupt(format!(
+                "bad DSF block size {block_size}"
+            )));
         }
 
         // "data" chunk header; sample data starts right after.
@@ -306,6 +308,10 @@ impl DsdDemuxer for DsfReader {
         Ok(())
     }
 
+    // `ch` sequences file reads in channel order (one block per channel,
+    // read_exact side effects included) as much as it indexes `out[ch]` —
+    // not a plain fill-from-iterator pattern.
+    #[allow(clippy::needless_range_loop)]
     fn read_planar(
         &mut self,
         out: &mut [Vec<u8>],

@@ -65,9 +65,10 @@ impl ArtSize {
 pub const PLEX_THUMB_PX: u32 = 256;
 
 /// What a source says its art IS.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ArtRef {
     /// Nothing to show.
+    #[default]
     None,
     /// ALREADY on the local filesystem — a raw path, no `file://`, never
     /// fetched. Local Library covers, `qbz-library` thumbnails and
@@ -86,12 +87,6 @@ pub enum ArtRef {
     /// is logged for what it is — `ArtUrl::PlexUnconfigured`'s reason for
     /// existing (artwork_qt.rs:139-141).
     Unavailable(&'static str),
-}
-
-impl Default for ArtRef {
-    fn default() -> Self {
-        ArtRef::None
-    }
 }
 
 impl ArtRef {

@@ -1301,7 +1301,10 @@ pub(crate) fn trim_shared_now() {
     tokio::task::spawn_blocking(|| {
         if let Some(freed) = evict_shared(shared_budget_bytes()) {
             if freed > 0 {
-                log::info!("[qbz-qt][perf] image cache trimmed {freed} B (budget {} B)", shared_budget_bytes());
+                log::info!(
+                    "[qbz-qt][perf] image cache trimmed {freed} B (budget {} B)",
+                    shared_budget_bytes()
+                );
             }
         }
         TRIM_IN_FLIGHT.store(false, Ordering::SeqCst);

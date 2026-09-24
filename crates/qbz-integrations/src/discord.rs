@@ -258,8 +258,14 @@ mod backoff_tests {
         assert!(connect_allowed(now, None));
         let deadline = now + CONNECT_RETRY_AFTER;
         assert!(!connect_allowed(now, Some(deadline)));
-        assert!(!connect_allowed(now + CONNECT_RETRY_AFTER / 2, Some(deadline)));
+        assert!(!connect_allowed(
+            now + CONNECT_RETRY_AFTER / 2,
+            Some(deadline)
+        ));
         assert!(connect_allowed(deadline, Some(deadline)));
-        assert!(connect_allowed(deadline + Duration::from_secs(1), Some(deadline)));
+        assert!(connect_allowed(
+            deadline + Duration::from_secs(1),
+            Some(deadline)
+        ));
     }
 }

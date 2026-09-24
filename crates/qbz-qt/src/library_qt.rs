@@ -156,7 +156,11 @@ pub struct FeedItem {
     pub label_id: String,
     #[serde(default, rename = "updatedAt", skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<i64>,
-    #[serde(default, rename = "trackCount", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "trackCount",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub track_count: Option<u32>,
     pub year: String,
     #[serde(
@@ -640,7 +644,10 @@ fn map_track(track: Track) -> FeedItem {
         .map(|label| label.name.clone())
         .unwrap_or_default();
     let release_sort_key = qbz_text_utils::dates::release_sort_key(
-        track.album.as_ref().and_then(|a| a.release_date_original.as_deref()),
+        track
+            .album
+            .as_ref()
+            .and_then(|a| a.release_date_original.as_deref()),
     );
     FeedItem {
         kind: "track".into(),
@@ -1669,8 +1676,16 @@ fn map_purchased_album(a: qbz_models::PurchaseAlbum) -> FeedItem {
             a.release_date_original.as_deref(),
         ),
         added_at: a.purchased_at.unwrap_or(0),
-        label: a.label.as_ref().map(|label| label.name.clone()).unwrap_or_default(),
-        label_id: a.label.as_ref().map(|label| label.id.to_string()).unwrap_or_default(),
+        label: a
+            .label
+            .as_ref()
+            .map(|label| label.name.clone())
+            .unwrap_or_default(),
+        label_id: a
+            .label
+            .as_ref()
+            .map(|label| label.id.to_string())
+            .unwrap_or_default(),
         duration_secs: a.duration.unwrap_or(0),
         track_count: a.tracks_count,
         genre: a.genre.as_ref().map(|g| g.name.clone()).unwrap_or_default(),
@@ -1738,10 +1753,18 @@ async fn fetch_purchases(
                 artist_id: t.performer.id.to_string(),
                 duration: mmss(t.duration),
                 duration_secs: t.duration,
-                label: t.album.as_ref().and_then(|a| a.label.as_ref())
-                    .map(|label| label.name.clone()).unwrap_or_default(),
-                genre: t.album.as_ref().and_then(|a| a.genre.as_ref())
-                    .map(|genre| genre.name.clone()).unwrap_or_default(),
+                label: t
+                    .album
+                    .as_ref()
+                    .and_then(|a| a.label.as_ref())
+                    .map(|label| label.name.clone())
+                    .unwrap_or_default(),
+                genre: t
+                    .album
+                    .as_ref()
+                    .and_then(|a| a.genre.as_ref())
+                    .map(|genre| genre.name.clone())
+                    .unwrap_or_default(),
                 release_sort_key: qbz_text_utils::dates::release_sort_key(
                     t.album
                         .as_ref()
@@ -2785,7 +2808,8 @@ mod tests {
         let album = serde_json::from_value(serde_json::json!({
             "id": "a", "title": "A", "release_date_original": "1980-04-01",
             "duration": 2500, "tracks_count": 11, "label": {"id": 1, "name": "Label"}
-        })).unwrap();
+        }))
+        .unwrap();
         let row = map_purchased_album(album);
         assert_eq!(row.release_sort_key, 19800401);
         assert_eq!(row.duration_secs, 2500);
@@ -2799,14 +2823,16 @@ mod tests {
             "id": 42, "duration": 234,
             "album": {"id": "a", "title": "A", "release_date_original": "1980-04-01",
                 "release_date_stream": "2015-06-01", "label": {"id": 1, "name": "Label"}}
-        })).unwrap();
+        }))
+        .unwrap();
         let row = map_track(track);
         assert_eq!(row.release_sort_key, 19800401);
         assert_eq!(row.label, "Label");
         assert_eq!(row.duration_secs, 234);
         let track: Track = serde_json::from_value(serde_json::json!({
             "id": 43, "album": {"release_date_stream": "2015-06-01"}
-        })).unwrap();
+        }))
+        .unwrap();
         assert_eq!(map_track(track).release_sort_key, 0);
     }
 
@@ -2815,7 +2841,8 @@ mod tests {
         let playlist: Playlist = serde_json::from_value(serde_json::json!({
             "id": 42, "name": "List", "tracks_count": 0, "duration": 0,
             "updated_at": 1700000000
-        })).unwrap();
+        }))
+        .unwrap();
         let row = serde_json::to_value(map_playlist_row(&playlist, false)).unwrap();
         assert_eq!(row["trackCount"], 0);
         assert_eq!(row["updatedAt"], 1700000000);
@@ -2908,15 +2935,29 @@ mod tests {
         assert_eq!(album.favorited_at, Some(1_757_700_000));
         let mut dated = map_album(album, 0);
         dated.added_at = 1_757_700_000;
-        assert_eq!(serde_json::to_value(&dated).unwrap()["addedAt"], 1_757_700_000);
+        assert_eq!(
+            serde_json::to_value(&dated).unwrap()["addedAt"],
+            1_757_700_000
+        );
         let mut older = dated.clone();
         older.added_at = 1_700_000_000;
         let mut undated = dated.clone();
         undated.added_at = 0;
         undated.added_rank = 0.0;
-        assert_eq!(recency_order(&dated, &older), std::cmp::Ordering::Less, "newest first");
-        assert_eq!(recency_order(&undated, &older), std::cmp::Ordering::Greater, "undated last");
-        assert!(serde_json::to_value(&undated).unwrap().get("addedAt").is_none());
+        assert_eq!(
+            recency_order(&dated, &older),
+            std::cmp::Ordering::Less,
+            "newest first"
+        );
+        assert_eq!(
+            recency_order(&undated, &older),
+            std::cmp::Ordering::Greater,
+            "undated last"
+        );
+        assert!(serde_json::to_value(&undated)
+            .unwrap()
+            .get("addedAt")
+            .is_none());
     }
 
     #[test]

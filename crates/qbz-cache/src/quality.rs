@@ -36,7 +36,9 @@ impl CacheQuality {
     }
 
     pub fn satisfies(self, requested: Quality) -> bool {
-        if self.requested < requested || (requested != Quality::Mp3 && self.resolved == Quality::Mp3) {
+        if self.requested < requested
+            || (requested != Quality::Mp3 && self.resolved == Quality::Mp3)
+        {
             return false;
         }
         match self.successful_request {
@@ -56,8 +58,11 @@ mod tests {
     fn successful_request_reuses_available_cd_and_96khz_masters() {
         for response_format in [6, 7, 27] {
             let acquired = CacheQuality::from_acquisition(
-                Quality::UltraHiRes, Quality::UltraHiRes, response_format,
-            ).unwrap();
+                Quality::UltraHiRes,
+                Quality::UltraHiRes,
+                response_format,
+            )
+            .unwrap();
             for target in Quality::fallback_order() {
                 assert!(acquired.satisfies(*target));
             }
@@ -67,32 +72,34 @@ mod tests {
     #[test]
     fn successful_request_preserves_explicit_fallback_and_lossy_limits() {
         for actual in Quality::fallback_order() {
-            let acquired = CacheQuality::from_acquisition(
-                Quality::UltraHiRes, *actual, actual.id(),
-            ).unwrap();
+            let acquired =
+                CacheQuality::from_acquisition(Quality::UltraHiRes, *actual, actual.id()).unwrap();
             for target in Quality::fallback_order() {
                 assert_eq!(acquired.satisfies(*target), actual >= target);
             }
         }
         // Even an unexpected lossy response to a lossless request must not
         // qualify as the best lossless master.
-        let lossy = CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 5).unwrap();
+        let lossy =
+            CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 5).unwrap();
         assert!(!lossy.satisfies(Quality::Lossless));
         assert!(lossy.satisfies(Quality::Mp3));
         assert!(CacheQuality::from_acquisition(Quality::HiRes, Quality::UltraHiRes, 7).is_none());
-        assert!(CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 999).is_none());
+        assert!(
+            CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, 999).is_none()
+        );
     }
 
     #[test]
     fn successful_request_missing_or_inconsistent_remains_conservative() {
-        let old: CacheQuality = serde_json::from_str(
-            r#"{"requested":"UltraHiRes","resolved":"HiRes"}"#,
-        ).unwrap();
+        let old: CacheQuality =
+            serde_json::from_str(r#"{"requested":"UltraHiRes","resolved":"HiRes"}"#).unwrap();
         assert!(!old.satisfies(Quality::UltraHiRes));
         assert!(old.satisfies(Quality::HiRes));
         let inconsistent: CacheQuality = serde_json::from_str(
             r#"{"requested":"HiRes","resolved":"HiRes","successful_request":"UltraHiRes"}"#,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!inconsistent.satisfies(Quality::HiRes));
     }
 

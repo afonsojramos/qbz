@@ -416,7 +416,10 @@ mod tests {
             username: "admin".into(),
             ..Default::default()
         };
-        assert!(!sub.is_configured(MediaServerKind::Subsonic), "no password yet");
+        assert!(
+            !sub.is_configured(MediaServerKind::Subsonic),
+            "no password yet"
+        );
         sub.password = "pw".into();
         assert!(sub.is_configured(MediaServerKind::Subsonic));
         // ...and a Jellyfin-style token does NOT make it configured.
@@ -477,7 +480,10 @@ mod tests {
         s.disconnect(MediaServerKind::Subsonic).unwrap();
         let got = s.get(MediaServerKind::Subsonic).unwrap();
         assert!(!got.enabled);
-        assert!(got.password.is_empty(), "the password survived a disconnect");
+        assert!(
+            got.password.is_empty(),
+            "the password survived a disconnect"
+        );
         assert_eq!(got.last_sync_tracks, 0);
         // Kept on purpose.
         assert_eq!(got.base_url, "http://nd:4533");

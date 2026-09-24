@@ -77,8 +77,7 @@ pub fn init_for_user(base_dir: &std::path::Path) {
     crate::media_connection_qt::cancel_all();
     invalidate_cache();
     STATE.init_at(base_dir);
-    *BOUND.lock().unwrap_or_else(|error| error.into_inner()) =
-        UserDataPaths::load_last_user_id();
+    *BOUND.lock().unwrap_or_else(|error| error.into_inner()) = UserDataPaths::load_last_user_id();
     // Mint the two stable identifiers ONCE, now, rather than at first use.
     // Both are load-bearing and both are easy to get wrong lazily: a Jellyfin
     // DeviceId minted per connection attempt revokes the previous token, and a

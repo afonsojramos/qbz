@@ -322,10 +322,8 @@ fn reset_inner(query: LastQuery, force: bool) -> bool {
     }
     crate::spawn(async move {
         let result =
-            tokio::task::spawn_blocking(move || {
-                open_query(generation, query, descriptor, columns)
-            })
-            .await;
+            tokio::task::spawn_blocking(move || open_query(generation, query, descriptor, columns))
+                .await;
         match result {
             Ok(Ok(opened)) => activate_query(opened),
             Ok(Err(reason)) => fallback(generation, reason),

@@ -30,14 +30,8 @@
 pub mod alsa_backend;
 pub mod alsa_direct;
 #[cfg(target_os = "linux")]
-mod pcm_write;
-pub mod alsa_hardware_volume;
-pub mod wasapi_direct;
-/// Endpoint capabilities: the exclusive-mode rate sweep and the hotplug watch.
-#[cfg(windows)]
-pub mod wasapi_backend;
-#[cfg(target_os = "linux")]
 pub mod alsa_error_handler;
+pub mod alsa_hardware_volume;
 pub mod analysis;
 pub mod analyzer_tap;
 pub mod backend;
@@ -58,6 +52,8 @@ pub mod loudness_scan;
 pub mod network_throttle;
 pub mod output_sinks;
 #[cfg(target_os = "linux")]
+mod pcm_write;
+#[cfg(target_os = "linux")]
 pub mod pipewire_backend;
 #[cfg(target_os = "linux")]
 pub mod pulse_backend;
@@ -65,6 +61,10 @@ pub mod seek_waveform;
 pub mod settings;
 pub mod stream_health;
 pub mod visualizer;
+/// Endpoint capabilities: the exclusive-mode rate sweep and the hotplug watch.
+#[cfg(windows)]
+pub mod wasapi_backend;
+pub mod wasapi_direct;
 
 // Re-export commonly used types
 #[cfg(target_os = "linux")]
@@ -73,7 +73,6 @@ pub use alsa_backend::{
     resolve_stable_to_current_hw,
 };
 pub use alsa_direct::AlsaDirectStream;
-pub use wasapi_direct::{Rung, LADDER};
 pub use analysis::SpectralAnalyzer;
 pub use analyzer_tap::{AnalyzerMessage, AnalyzerTap, AnalyzerWaveformTrack};
 pub use backend::{
@@ -94,7 +93,9 @@ pub use health::{
 pub use jack_backend::JackStream;
 pub use loudness::{calculate_gain_factor, db_to_linear, extract_replaygain, ReplayGainData};
 pub use loudness_analyzer::LoudnessAnalyzer;
-pub use loudness_cache::{gain_for, lufs_from_replaygain, LoudnessCache, LoudnessSource, StoredLoudness};
+pub use loudness_cache::{
+    gain_for, lufs_from_replaygain, LoudnessCache, LoudnessSource, StoredLoudness,
+};
 pub use loudness_scan::{measure as measure_loudness, TrackLoudness};
 pub use output_sinks::{list_output_sinks, OutputSinkInfo};
 pub use seek_waveform::{
@@ -103,6 +104,7 @@ pub use seek_waveform::{
 };
 pub use settings::AudioSettings;
 pub use visualizer::{RingBuffer, TappedSource, VisualizerTap};
+pub use wasapi_direct::{Rung, LADDER};
 
 /// Stub: returns the ID unchanged on non-Linux (no ALSA normalization needed).
 #[cfg(not(target_os = "linux"))]

@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 /// This grace period is an additional compliance guard, not the main defense.
 pub const GRACE_PERIOD_SECS: i64 = 30 * 24 * 60 * 60;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SubscriptionState {
     pub invalid_since: Option<i64>,
@@ -28,18 +28,6 @@ pub struct SubscriptionState {
     pub last_valid_at: Option<i64>,
     pub last_checked_at: Option<i64>,
     pub downloads_purged_at: Option<i64>,
-}
-
-impl Default for SubscriptionState {
-    fn default() -> Self {
-        Self {
-            invalid_since: None,
-            last_invalid_at: None,
-            last_valid_at: None,
-            last_checked_at: None,
-            downloads_purged_at: None,
-        }
-    }
 }
 
 pub struct SubscriptionStateStore {
@@ -55,13 +43,15 @@ impl SubscriptionStateStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open subscription state database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| {
-                format!(
-                    "Failed to enable WAL for subscription state database: {}",
-                    e
-                )
-            })?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| {
+            format!(
+                "Failed to enable WAL for subscription state database: {}",
+                e
+            )
+        })?;
 
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS subscription_state (

@@ -366,9 +366,7 @@ impl EphemeralLibraryState {
             probed.len()
         );
         let t_rest = std::time::Instant::now();
-        for (audio_file, (canonical_audio, extracted)) in
-            scan.audio_files.iter().zip(probed.into_iter())
-        {
+        for (audio_file, (canonical_audio, extracted)) in scan.audio_files.iter().zip(probed) {
             // Skip audio files that were already exploded into tracks via
             // a CUE sheet — listing them again as a single row would
             // duplicate the album and confuse playback (the CUE-derived

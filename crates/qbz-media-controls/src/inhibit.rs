@@ -173,14 +173,23 @@ mod tests {
     fn policy_denial_is_never_retried() {
         let at = Instant::now();
         assert!(!should_attempt(Some((Denial::Policy, at)), at));
-        assert!(!should_attempt(Some((Denial::Policy, at)), at + RETRY_BACKOFF * 10));
+        assert!(!should_attempt(
+            Some((Denial::Policy, at)),
+            at + RETRY_BACKOFF * 10
+        ));
     }
 
     #[test]
     fn transient_failure_waits_out_the_backoff() {
         let at = Instant::now();
         assert!(!should_attempt(Some((Denial::Transient, at)), at));
-        assert!(!should_attempt(Some((Denial::Transient, at)), at + RETRY_BACKOFF / 2));
-        assert!(should_attempt(Some((Denial::Transient, at)), at + RETRY_BACKOFF));
+        assert!(!should_attempt(
+            Some((Denial::Transient, at)),
+            at + RETRY_BACKOFF / 2
+        ));
+        assert!(should_attempt(
+            Some((Denial::Transient, at)),
+            at + RETRY_BACKOFF
+        ));
     }
 }

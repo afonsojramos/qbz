@@ -80,7 +80,8 @@ pub async fn resolve_music_link(
             provider,
             url: source_url,
         } => {
-            resolve_via_odesli_and_search(songlink, &source_url, Some(&provider), true, bridge).await
+            resolve_via_odesli_and_search(songlink, &source_url, Some(&provider), true, bridge)
+                .await
         }
 
         MusicResource::Album {

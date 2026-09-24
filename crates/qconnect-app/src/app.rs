@@ -775,15 +775,32 @@ where
         let _execution = self.renderer_commands.lock().await;
         let deferred = {
             let mut state = self.state.lock().await;
-            let ready = state.deferred_renderer_command.as_ref().is_some_and(|(_, command)| {
-                let track = parse_renderer_track(&command.payload, "current_track");
-                let version = command.payload.get("queue_version")
-                    .and_then(|value| serde_json::from_value::<QueueVersion>(value.clone()).ok());
-                version.is_none_or(|version| version.major == state.queue.version.major)
-                    && track.is_none_or(|track| state.queue.queue_items.iter().chain(state.queue.autoplay_items.iter())
-                        .any(|item| item.queue_item_id == track.queue_item_id && item.track_id == track.track_id))
-            });
-            if ready { state.deferred_renderer_command.take() } else { None }
+            let ready = state
+                .deferred_renderer_command
+                .as_ref()
+                .is_some_and(|(_, command)| {
+                    let track = parse_renderer_track(&command.payload, "current_track");
+                    let version = command.payload.get("queue_version").and_then(|value| {
+                        serde_json::from_value::<QueueVersion>(value.clone()).ok()
+                    });
+                    version.is_none_or(|version| version.major == state.queue.version.major)
+                        && track.is_none_or(|track| {
+                            state
+                                .queue
+                                .queue_items
+                                .iter()
+                                .chain(state.queue.autoplay_items.iter())
+                                .any(|item| {
+                                    item.queue_item_id == track.queue_item_id
+                                        && item.track_id == track.track_id
+                                })
+                        })
+                });
+            if ready {
+                state.deferred_renderer_command.take()
+            } else {
+                None
+            }
         };
         if let Some((generation, command)) = deferred {
             if self.sync.lock().await.renderer_generation == generation {
@@ -809,8 +826,10 @@ where
             return Ok(());
         };
 
-        if matches!(renderer_command, RendererCommand::SetVolume { .. } | RendererCommand::MuteVolume { .. })
-            && !self.sink.allows_remote_volume()
+        if matches!(
+            renderer_command,
+            RendererCommand::SetVolume { .. } | RendererCommand::MuteVolume { .. }
+        ) && !self.sink.allows_remote_volume()
         {
             log::debug!("[QConnect] Ignoring remote volume command: local output volume is locked");
             return Ok(());
@@ -844,8 +863,17 @@ where
                 state.renderer.playing_state = None;
                 state.deferred_renderer_command = None;
             }
-            if let RendererCommand::SetState { current_track, playing_state, .. } = &renderer_command {
-                if let Some(value) = command.payload.get("queue_version").filter(|v| !v.is_null()) {
+            if let RendererCommand::SetState {
+                current_track,
+                playing_state,
+                ..
+            } = &renderer_command
+            {
+                if let Some(value) = command
+                    .payload
+                    .get("queue_version")
+                    .filter(|v| !v.is_null())
+                {
                     let Ok(version) = serde_json::from_value::<QueueVersion>(value.clone()) else {
                         return Err(QconnectAppError::RendererExecution);
                     };
@@ -854,17 +882,33 @@ where
                     needs_queue = version.major != state.queue.version.major;
                 }
                 if let Some(track) = current_track {
-                    needs_queue |= !state.queue.queue_items.iter().chain(state.queue.autoplay_items.iter())
-                        .any(|item| item.queue_item_id == track.queue_item_id && item.track_id == track.track_id);
+                    needs_queue |= !state
+                        .queue
+                        .queue_items
+                        .iter()
+                        .chain(state.queue.autoplay_items.iter())
+                        .any(|item| {
+                            item.queue_item_id == track.queue_item_id
+                                && item.track_id == track.track_id
+                        });
                 }
                 if needs_queue {
                     // One newest intent only. A later pause/stop supersedes it;
                     // resync never resurrects a previously requested play.
                     if current_track.is_none() {
-                        if let Some((pending_generation, pending)) = state.deferred_renderer_command.as_mut() {
+                        if let Some((pending_generation, pending)) =
+                            state.deferred_renderer_command.as_mut()
+                        {
                             if *pending_generation == generation {
-                                for field in ["playing_state", "current_position", "next_track", "queue_version"] {
-                                    if let Some(value) = command.payload.get(field).filter(|v| !v.is_null()) {
+                                for field in [
+                                    "playing_state",
+                                    "current_position",
+                                    "next_track",
+                                    "queue_version",
+                                ] {
+                                    if let Some(value) =
+                                        command.payload.get(field).filter(|v| !v.is_null())
+                                    {
                                         pending.payload[field] = value.clone();
                                     }
                                 }
@@ -877,36 +921,64 @@ where
                     }
                 } else if current_track.is_some() || *playing_state == Some(PLAYING_STATE_STOPPED) {
                     state.deferred_renderer_command = None;
-                } else if let Some((pending_generation, pending)) = state.deferred_renderer_command.as_mut() {
+                } else if let Some((pending_generation, pending)) =
+                    state.deferred_renderer_command.as_mut()
+                {
                     if *pending_generation == generation {
                         for field in ["playing_state", "current_position", "next_track"] {
-                            if let Some(value) = command.payload.get(field).filter(|v| !v.is_null()) {
+                            if let Some(value) = command.payload.get(field).filter(|v| !v.is_null())
+                            {
                                 pending.payload[field] = value.clone();
                             }
                         }
                         // A seek for a destination still awaiting its queue
                         // must not seek the preceding audible source.
-                        needs_queue = playing_state.is_none() && command.payload.get("current_position").is_some_and(|v| !v.is_null());
+                        needs_queue = playing_state.is_none()
+                            && command
+                                .payload
+                                .get("current_position")
+                                .is_some_and(|v| !v.is_null());
                     }
                 }
             }
         }
         if needs_queue {
-            if matches!(renderer_command, RendererCommand::SetState { playing_state: Some(PLAYING_STATE_STOPPED), .. }) {
+            if matches!(
+                renderer_command,
+                RendererCommand::SetState {
+                    playing_state: Some(PLAYING_STATE_STOPPED),
+                    ..
+                }
+            ) {
                 // STOP is independent of queue availability; do not let a
                 // missing destination hold audible playback open.
-                return Box::pin(self.apply_renderer_server_command_serialized(RendererServerCommand {
-                    command_type: RendererCommandType::SrvrRndrSetState,
-                    payload: serde_json::json!({"playing_state": PLAYING_STATE_STOPPED}),
-                })).await;
+                return Box::pin(self.apply_renderer_server_command_serialized(
+                    RendererServerCommand {
+                        command_type: RendererCommandType::SrvrRndrSetState,
+                        payload: serde_json::json!({"playing_state": PLAYING_STATE_STOPPED}),
+                    },
+                ))
+                .await;
             }
-            if matches!(renderer_command, RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED), .. }) {
-                let pause = RendererCommand::SetState { playing_state: Some(PLAYING_STATE_PAUSED),
-                    current_position_ms: None, current_track: None, next_track: None };
+            if matches!(
+                renderer_command,
+                RendererCommand::SetState {
+                    playing_state: Some(PLAYING_STATE_PAUSED),
+                    ..
+                }
+            ) {
+                let pause = RendererCommand::SetState {
+                    playing_state: Some(PLAYING_STATE_PAUSED),
+                    current_position_ms: None,
+                    current_track: None,
+                    next_track: None,
+                };
                 // Pause the existing source now, then prepare the deferred
                 // target once its queue arrives. No success report for that
                 // unresolved target is published here.
-                self.sink.execute_renderer_command(&pause, &QConnectRendererState::default()).await
+                self.sink
+                    .execute_renderer_command(&pause, &QConnectRendererState::default())
+                    .await
                     .map_err(|_| QconnectAppError::RendererExecution)?;
             }
             self.trigger_queue_state_resync().await;
@@ -962,7 +1034,9 @@ where
         };
 
         if !is_echo {
-            self.sink.execute_renderer_command(&renderer_command, &snapshot).await
+            self.sink
+                .execute_renderer_command(&renderer_command, &snapshot)
+                .await
                 .map_err(|_| QconnectAppError::RendererExecution)?;
         }
         if self.sync.lock().await.renderer_generation != generation {
@@ -971,8 +1045,12 @@ where
         // Publish only after execution is accepted. An engine failure cannot
         // become a successful renderer snapshot/report through an event sink.
         self.state.lock().await.renderer = snapshot.clone();
-        self.sink.on_event(QconnectAppEvent::RendererUpdated(snapshot.clone())).await;
-        if is_echo { return Ok(()); }
+        self.sink
+            .on_event(QconnectAppEvent::RendererUpdated(snapshot.clone()))
+            .await;
+        if is_echo {
+            return Ok(());
+        }
 
         self.send_renderer_reports(&renderer_command, &snapshot, queue_version)
             .await?;
@@ -1086,12 +1164,13 @@ where
                         queue_version_ref.minor
                     );
                     let observation = self.sink.playback_event();
-                    let buffer_state = observation.as_ref()
+                    let buffer_state = observation
+                        .as_ref()
                         .filter(|event| {
-                            renderer
-                                .current_track
-                                .as_ref()
-                                .is_some_and(|track| track.track_id == event.buffer_track_id || track.track_id == event.track_id)
+                            renderer.current_track.as_ref().is_some_and(|track| {
+                                track.track_id == event.buffer_track_id
+                                    || track.track_id == event.track_id
+                            })
                         })
                         .map(|event| event.buffer_state)
                         .unwrap_or_else(|| {
@@ -1122,11 +1201,30 @@ where
                         RendererPlaybackSnapshot {
                             playing_state: renderer.playing_state.unwrap_or(PLAYING_STATE_UNKNOWN),
                             buffer_state,
-                            position_ms: if matches!(command, RendererCommand::SetState { current_position_ms: None, .. }) {
-                                observation.as_ref().filter(|event| renderer.current_track.as_ref()
-                                    .is_some_and(|track| track.track_id == event.track_id))
-                                    .map(|event| event.position.saturating_mul(1000).min(i64::MAX as u64) as i64)
-                            } else { renderer.current_position_ms.map(|value| value.min(i64::MAX as u64) as i64) },
+                            position_ms: if matches!(
+                                command,
+                                RendererCommand::SetState {
+                                    current_position_ms: None,
+                                    ..
+                                }
+                            ) {
+                                observation
+                                    .as_ref()
+                                    .filter(|event| {
+                                        renderer
+                                            .current_track
+                                            .as_ref()
+                                            .is_some_and(|track| track.track_id == event.track_id)
+                                    })
+                                    .map(|event| {
+                                        event.position.saturating_mul(1000).min(i64::MAX as u64)
+                                            as i64
+                                    })
+                            } else {
+                                renderer
+                                    .current_position_ms
+                                    .map(|value| value.min(i64::MAX as u64) as i64)
+                            },
                             duration_ms: None,
                             current_queue_item_id,
                             next_queue_item_id,
@@ -1937,7 +2035,8 @@ where
         }
 
         if (previous_session.is_some() && previous_session != state.session.session_uuid)
-            || (previous_active != state.session.active_renderer_id && is_peer_renderer_active(&state.session))
+            || (previous_active != state.session.active_renderer_id
+                && is_peer_renderer_active(&state.session))
         {
             state.renderer_generation = state.renderer_generation.wrapping_add(1);
             state.last_load_attempt = None;
@@ -2741,6 +2840,10 @@ where
                                         let sync = self.sync.lock().await;
                                         sync.session.local_renderer_id
                                     };
+                                    // A nested `if let` here needs the whole large body
+                                    // re-indented for no behavior change — not worth the
+                                    // diff noise during a lint sweep.
+                                    #[allow(clippy::unnecessary_unwrap)]
                                     if authoritative_queue_state_received && local_id.is_some() {
                                         let local_id = local_id.expect("checked local renderer id");
                                         if let Err(error) =
@@ -2874,6 +2977,7 @@ where
                             pending_local_takeover_is_explicit = false;
                             self.clear_local_playback_authority_fences().await;
                         } else if authoritative_queue_state_received && local_id.is_some() {
+                            #[allow(clippy::unnecessary_unwrap)]
                             let local_id = local_id.expect("checked local renderer id");
                             let explicit = pending_local_takeover_is_explicit;
                             log::info!(
@@ -2912,6 +3016,7 @@ where
                             state.session.local_renderer_id
                         };
                         if authoritative_queue_state_received && local_id.is_some() {
+                            #[allow(clippy::unnecessary_unwrap)]
                             let local_id = local_id.expect("checked local renderer id");
                             pending_remote_queue_takeover = false;
                             if let Err(error) = self.send_set_active_renderer(local_id).await {
@@ -3050,10 +3155,19 @@ mod tests {
         fn playback_event(&self) -> Option<qbz_player::player::PlaybackEvent> {
             self.observed.lock().unwrap().clone()
         }
-        async fn execute_renderer_command(&self, command: &qconnect_core::RendererCommand,
-            state: &qconnect_core::QConnectRendererState) -> Result<(), String> {
-            if self.fail_execution.load(Ordering::SeqCst) { return Err("injected engine rejection".into()); }
-            self.on_event(QconnectAppEvent::RendererCommandApplied { command: command.clone(), state: state.clone() }).await;
+        async fn execute_renderer_command(
+            &self,
+            command: &qconnect_core::RendererCommand,
+            state: &qconnect_core::QConnectRendererState,
+        ) -> Result<(), String> {
+            if self.fail_execution.load(Ordering::SeqCst) {
+                return Err("injected engine rejection".into());
+            }
+            self.on_event(QconnectAppEvent::RendererCommandApplied {
+                command: command.clone(),
+                state: state.clone(),
+            })
+            .await;
             Ok(())
         }
         async fn on_event(&self, event: QconnectAppEvent) {
@@ -3513,7 +3627,9 @@ mod tests {
         let snapshot = app.queue_state_snapshot().await;
         let handle = app.sync_handle();
         let mut state = handle.lock().await;
-        assert!(!crate::should_materialize_remote_queue(&mut state, &snapshot));
+        assert!(!crate::should_materialize_remote_queue(
+            &mut state, &snapshot
+        ));
         assert!(state.pending_local_queue_takeover.is_none());
         assert!(state.local_playback_state_assertion_pending);
     }
@@ -3973,7 +4089,9 @@ mod tests {
         #[tokio::test]
         async fn renderer_volume_capabilities_survive_wire_add_and_update() {
             use prost::Message;
-            use qconnect_protocol::{decode_queue_server_events, QConnectMessage, QConnectMessages};
+            use qconnect_protocol::{
+                decode_queue_server_events, QConnectMessage, QConnectMessages,
+            };
             let (app, _sink, transport, _events_rx) = build_connected_app().await;
             app.trigger_queue_state_resync().await;
             let query_uuid = app
@@ -4716,8 +4834,10 @@ mod tests {
 
     #[test]
     fn queue_hashes_diverge_is_inert_without_local_algorithm() {
-        let mut queue = QConnectQueueState::default();
-        queue.last_server_queue_hash = Some(vec![9, 9, 9]);
+        let queue = QConnectQueueState {
+            last_server_queue_hash: Some(vec![9, 9, 9]),
+            ..Default::default()
+        };
         assert!(
             !queue_hashes_diverge(&queue),
             "divergence detection must stay inert until the local hash algorithm is known"
@@ -5248,7 +5368,9 @@ mod tests {
             ..Default::default()
         });
         app.state.lock().await.queue.queue_items = vec![qconnect_core::QueueItem {
-            track_context_uuid: "queue-edit".into(), track_id: 386331742, queue_item_id: 0,
+            track_context_uuid: "queue-edit".into(),
+            track_id: 386331742,
+            queue_item_id: 0,
         }];
         app.apply_renderer_server_command(RendererServerCommand {
             command_type: RendererCommandType::SrvrRndrSetState,
@@ -5282,14 +5404,33 @@ mod tests {
         let events = sink.snapshot().await.len();
         sink.volume_locked.store(true, Ordering::SeqCst);
         for (command_type, payload) in [
-            (RendererCommandType::SrvrRndrSetVolume, json!({"volume": 20})),
-            (RendererCommandType::SrvrRndrSetVolume, json!({"volume_delta": -5})),
-            (RendererCommandType::SrvrRndrSetVolume, json!({"volume_delta": 5})),
-            (RendererCommandType::SrvrRndrMuteVolume, json!({"value": true})),
-            (RendererCommandType::SrvrRndrMuteVolume, json!({"value": false})),
+            (
+                RendererCommandType::SrvrRndrSetVolume,
+                json!({"volume": 20}),
+            ),
+            (
+                RendererCommandType::SrvrRndrSetVolume,
+                json!({"volume_delta": -5}),
+            ),
+            (
+                RendererCommandType::SrvrRndrSetVolume,
+                json!({"volume_delta": 5}),
+            ),
+            (
+                RendererCommandType::SrvrRndrMuteVolume,
+                json!({"value": true}),
+            ),
+            (
+                RendererCommandType::SrvrRndrMuteVolume,
+                json!({"value": false}),
+            ),
         ] {
-            app.apply_renderer_server_command(RendererServerCommand { command_type, payload })
-                .await.expect("unsupported volume is ignored without a renderer error");
+            app.apply_renderer_server_command(RendererServerCommand {
+                command_type,
+                payload,
+            })
+            .await
+            .expect("unsupported volume is ignored without a renderer error");
             assert_eq!(app.renderer_state_snapshot().await, before);
             assert_eq!(transport.sent_messages().await.len(), sent);
             assert_eq!(sink.snapshot().await.len(), events);
@@ -5299,7 +5440,9 @@ mod tests {
         app.apply_renderer_server_command(RendererServerCommand {
             command_type: RendererCommandType::SrvrRndrSetVolume,
             payload: json!({"volume": 42}),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(app.renderer_state_snapshot().await.volume, Some(42));
         assert_eq!(transport.sent_messages().await.len(), sent + 1);
         assert!(sink.snapshot().await.len() > events);
@@ -5310,7 +5453,9 @@ mod tests {
         let (app, sink, transport, _events_rx) = build_connected_app().await;
 
         app.state.lock().await.queue.queue_items = vec![qconnect_core::QueueItem {
-            track_context_uuid: "ctx-remote".into(), track_id: 777001, queue_item_id: 991,
+            track_context_uuid: "ctx-remote".into(),
+            track_id: 777001,
+            queue_item_id: 991,
         }];
         app.apply_renderer_server_command(RendererServerCommand {
             command_type: RendererCommandType::SrvrRndrSetState,
@@ -5400,10 +5545,13 @@ mod tests {
         let before = app.renderer_state_snapshot().await;
         let sent = transport.sent_messages().await.len();
         let events = sink.snapshot().await.len();
-        assert!(app.apply_renderer_server_command(RendererServerCommand {
-            command_type: RendererCommandType::SrvrRndrSetState,
-            payload: json!({"playing_state": 3}),
-        }).await.is_err());
+        assert!(app
+            .apply_renderer_server_command(RendererServerCommand {
+                command_type: RendererCommandType::SrvrRndrSetState,
+                payload: json!({"playing_state": 3}),
+            })
+            .await
+            .is_err());
         assert_eq!(app.renderer_state_snapshot().await, before);
         assert_eq!(transport.sent_messages().await.len(), sent);
         assert_eq!(sink.snapshot().await.len(), events);
@@ -5411,7 +5559,9 @@ mod tests {
         app.apply_renderer_server_command(RendererServerCommand {
             command_type: RendererCommandType::SrvrRndrSetState,
             payload: json!({"playing_state": 3}),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(app.renderer_state_snapshot().await.playing_state, Some(3));
     }
 
@@ -5425,16 +5575,26 @@ mod tests {
             payload: json!({"playing_state": 2, "current_position": 0,
                 "queue_version": {"major": 4, "minor": 9},
                 "current_track": {"track_id": 10, "queue_item_id": 0}}),
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(app.renderer_state_snapshot().await, before);
-        assert!(sink.snapshot().await.iter().all(|event| !matches!(event,
-            QconnectAppEvent::RendererUpdated(_) | QconnectAppEvent::RendererCommandApplied { .. })));
-        assert!(transport.sent_messages().await.iter().all(|message|
-            message.message_type != "MESSAGE_TYPE_RNDR_SRVR_STATE_UPDATED"));
+        assert!(sink.snapshot().await.iter().all(|event| !matches!(
+            event,
+            QconnectAppEvent::RendererUpdated(_) | QconnectAppEvent::RendererCommandApplied { .. }
+        )));
+        assert!(transport
+            .sent_messages()
+            .await
+            .iter()
+            .all(|message| message.message_type != "MESSAGE_TYPE_RNDR_SRVR_STATE_UPDATED"));
         assert!(app.state.lock().await.deferred_renderer_command.is_some());
         app.apply_renderer_server_command(RendererServerCommand {
-            command_type: RendererCommandType::SrvrRndrSetState, payload: json!({"playing_state": 1, "queue_version": {"major": 4, "minor": 9}}),
-        }).await.unwrap();
+            command_type: RendererCommandType::SrvrRndrSetState,
+            payload: json!({"playing_state": 1, "queue_version": {"major": 4, "minor": 9}}),
+        })
+        .await
+        .unwrap();
         assert!(app.state.lock().await.deferred_renderer_command.is_none());
     }
 
@@ -5442,15 +5602,24 @@ mod tests {
     async fn handoff_deferred_handoff_replays_the_latest_pause_and_position_after_resync() {
         let (app, sink, _transport, _events_rx) = build_connected_app().await;
         let command = |payload| RendererServerCommand {
-            command_type: RendererCommandType::SrvrRndrSetState, payload,
+            command_type: RendererCommandType::SrvrRndrSetState,
+            payload,
         };
         app.apply_renderer_server_command(command(json!({
             "playing_state": 2, "current_position": 0,
             "queue_version": {"major": 9, "minor": 0},
             "current_track": {"track_id": 10, "queue_item_id": 0}
-        }))).await.unwrap();
-        app.apply_renderer_server_command(command(json!({"playing_state": 3, "queue_version": {"major": 9, "minor": 0}}))).await.unwrap();
-        app.apply_renderer_server_command(command(json!({"current_position": 45_000}))).await.unwrap();
+        })))
+        .await
+        .unwrap();
+        app.apply_renderer_server_command(command(
+            json!({"playing_state": 3, "queue_version": {"major": 9, "minor": 0}}),
+        ))
+        .await
+        .unwrap();
+        app.apply_renderer_server_command(command(json!({"current_position": 45_000})))
+            .await
+            .unwrap();
         let before = sink.snapshot().await.len();
         app.apply_server_event(QueueServerEvent {
             event_type: QueueEventType::SrvrCtrlQueueState,
@@ -5463,9 +5632,16 @@ mod tests {
         assert_eq!(renderer.current_position_ms, Some(45_000));
         assert_eq!(renderer.current_track.unwrap().queue_item_id, 0);
         assert!(app.state.lock().await.deferred_renderer_command.is_none());
-        assert!(sink.snapshot().await[before..].iter().any(|event| matches!(event,
+        assert!(sink.snapshot().await[before..].iter().any(|event| matches!(
+            event,
             QconnectAppEvent::RendererCommandApplied {
-                command: qconnect_core::RendererCommand::SetState { playing_state: Some(3), .. }, .. })));
+                command: qconnect_core::RendererCommand::SetState {
+                    playing_state: Some(3),
+                    ..
+                },
+                ..
+            }
+        )));
     }
 
     #[tokio::test]

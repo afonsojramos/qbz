@@ -428,9 +428,8 @@ pub(crate) fn teardown() {
     publish_create();
     // Clear the sidebar tree too, or the next account inherits these rows.
     crate::shell_bridge::ui(move |mut b| {
-        b.as_mut().set_myqbz_tree_json(QString::from(
-            "{\"mixtapes\":[],\"collections\":[]}",
-        ));
+        b.as_mut()
+            .set_myqbz_tree_json(QString::from("{\"mixtapes\":[],\"collections\":[]}"));
     });
 }
 

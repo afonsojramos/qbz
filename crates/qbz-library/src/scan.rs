@@ -371,15 +371,13 @@ fn decorate_tracks(tracks: &mut [LocalTrack], artwork_cache: &Path, caches: &mut
             })
         });
         let collection_art_key = format!("collection:{collection_key}");
-        let collection = caches
-            .artwork
-            .get_or_insert_with(collection_art_key, || {
-                MetadataExtractor::find_folder_artwork(&audio_path, Some(album_hint)).and_then(
-                    |folder_art| {
-                        MetadataExtractor::cache_artwork_file(Path::new(&folder_art), artwork_cache)
-                    },
-                )
-            });
+        let collection = caches.artwork.get_or_insert_with(collection_art_key, || {
+            MetadataExtractor::find_folder_artwork(&audio_path, Some(album_hint)).and_then(
+                |folder_art| {
+                    MetadataExtractor::cache_artwork_file(Path::new(&folder_art), artwork_cache)
+                },
+            )
+        });
         let artwork = embedded.or(disc_file).or(collection);
         track.artwork_path = artwork;
     }
@@ -708,6 +706,7 @@ fn remove_obsolete_cue_tracks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn commit_batch(
     db: &LibraryDatabase,
     folder: &LibraryFolder,
@@ -1683,17 +1682,18 @@ mod tests {
                 self.cancel.store(true, Ordering::Release);
             }
             let make_track = |path: &Path, title: String, cue: Option<(&CueSheet, f64)>| {
-                let mut track = LocalTrack::default();
-                track.file_path = path.to_string_lossy().into_owned();
-                track.title = title;
-                track.artist = "Fixture Artist".to_string();
-                track.album = "Fixture Album".to_string();
-                track.album_group_key =
-                    path.parent().unwrap_or(path).to_string_lossy().into_owned();
-                track.album_group_title = "Fixture Album".to_string();
-                track.file_size_bytes = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
-                track.last_modified = now_secs();
-                track.indexed_at = now_secs();
+                let mut track = LocalTrack {
+                    file_path: path.to_string_lossy().into_owned(),
+                    title,
+                    artist: "Fixture Artist".to_string(),
+                    album: "Fixture Album".to_string(),
+                    album_group_key: path.parent().unwrap_or(path).to_string_lossy().into_owned(),
+                    album_group_title: "Fixture Album".to_string(),
+                    file_size_bytes: fs::metadata(path).map(|meta| meta.len()).unwrap_or(0),
+                    last_modified: now_secs(),
+                    indexed_at: now_secs(),
+                    ..Default::default()
+                };
                 if let Some((sheet, start)) = cue {
                     track.cue_file_path = Some(sheet.file_path.clone());
                     track.cue_start_secs = Some(start);

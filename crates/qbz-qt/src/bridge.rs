@@ -312,7 +312,9 @@ impl qbz_bridge::QbzBridge {
     /// and it rides to page_restore_qt so "Where you left off" reopens
     /// Settings on the same section.
     pub fn settings_set_section(mut self: Pin<&mut Self>, index: i32) {
-        if index == 11 && !crate::orbit_qt::enabled() { return; }
+        if index == 11 && !crate::orbit_qt::enabled() {
+            return;
+        }
         crate::page_restore_qt::note_args("settings", serde_json::json!({ "section": index }));
         self.as_mut().set_settings_section(index);
     }

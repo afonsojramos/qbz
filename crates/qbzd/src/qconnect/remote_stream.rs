@@ -63,6 +63,7 @@ pub struct RemoteStreamInfo {
 /// start audio once the initial buffer fills; the body download runs in a
 /// spawned task. Errors here mean the caller should fall back to a full
 /// download (the probe or the sink open failed).
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_remote_track_into_player(
     player: &Player,
     track_id: u64,

@@ -33,8 +33,8 @@ impl ThemeCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeId {
     // --- Core ---
-    Dark,   // P1 — :root
-    Oled,   // P1 — DEFAULT theme
+    Dark, // P1 — :root
+    Oled, // P1 — DEFAULT theme
     Light,
     System, // P1 — meta (OS-following; resolved in the frontend)
     // --- Dark (branded / community) ---
@@ -228,9 +228,8 @@ impl ThemeId {
         match self {
             Dark | Oled | Light | System => ThemeCategory::Core,
             Warm | Nord | Dracula | TokyoNight | CatppuccinMocha | CatppuccinFrappe
-            | CatppuccinMacchiato | BreezeDark | AdwaitaDark
-            | Aurora | Ikari | Ayanami | Iscariot | Stratego | Rumi | Zoey | Mira | Frost
-            | Langley => ThemeCategory::Dark,
+            | CatppuccinMacchiato | BreezeDark | AdwaitaDark | Aurora | Ikari | Ayanami
+            | Iscariot | Stratego | Rumi | Zoey | Mira | Frost | Langley => ThemeCategory::Dark,
             // Catppuccin Latte is the LIGHT flavor — groups with the light themes.
             Alucard | CatppuccinLatte | RosePineDawn | BreezeLight | AdwaitaLight | DuotoneSnow
             | SnowStorm | Kurosaki => ThemeCategory::Light,
@@ -253,7 +252,12 @@ mod tests {
     #[test]
     fn slug_roundtrip_all() {
         for &id in ALL {
-            assert_eq!(ThemeId::from_slug(id.slug()), Some(id), "slug {} failed", id.slug());
+            assert_eq!(
+                ThemeId::from_slug(id.slug()),
+                Some(id),
+                "slug {} failed",
+                id.slug()
+            );
         }
     }
 
@@ -279,7 +283,12 @@ mod tests {
 
     #[test]
     fn p1_themes_implemented() {
-        for id in [ThemeId::Dark, ThemeId::Oled, ThemeId::TokyoNight, ThemeId::System] {
+        for id in [
+            ThemeId::Dark,
+            ThemeId::Oled,
+            ThemeId::TokyoNight,
+            ThemeId::System,
+        ] {
             assert!(id.is_implemented(), "{:?} should be P1-implemented", id);
         }
     }

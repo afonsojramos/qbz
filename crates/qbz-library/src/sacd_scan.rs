@@ -558,7 +558,7 @@ mod tests {
         toc[4096..4104].copy_from_slice(b"SACDTRL2");
         toc[5126] = 4;
         let mut file = std::fs::File::create(&image_path).unwrap();
-        for sector in logical.chunks_exact(2048) {
+        for sector in logical.as_chunks::<2048>().0 {
             file.write_all(&[0xa5; 12]).unwrap();
             file.write_all(sector).unwrap();
             file.write_all(&[0x5a; 4]).unwrap();

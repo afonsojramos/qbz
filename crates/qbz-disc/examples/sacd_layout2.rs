@@ -70,7 +70,7 @@ fn describe(chan: &[u8]) -> (f64, f64) {
 fn split_block(payload: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut l = Vec::new();
     let mut r = Vec::new();
-    for f in payload.chunks_exact(FRAME) {
+    for f in payload.as_chunks::<FRAME>().0 {
         l.extend_from_slice(&f[..HALF]);
         r.extend_from_slice(&f[HALF..]);
     }
@@ -80,7 +80,7 @@ fn split_block(payload: &[u8]) -> (Vec<u8>, Vec<u8>) {
 fn split_interleaved(payload: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut l = Vec::new();
     let mut r = Vec::new();
-    for pair in payload.chunks_exact(2) {
+    for pair in payload.as_chunks::<2>().0 {
         l.push(pair[0]);
         r.push(pair[1]);
     }

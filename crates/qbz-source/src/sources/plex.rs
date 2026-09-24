@@ -149,7 +149,9 @@ impl PlexSource {
     /// the hash and `GET /library/metadata/<hash>` misses).
     fn resolve_cache_row_id(masked: u64) -> Option<String> {
         let candidate = masked.to_string();
-        if let Ok(rows) = qbz_plex::plex_cache_get_cached_tracks_by_keys(&[candidate.clone()]) {
+        if let Ok(rows) =
+            qbz_plex::plex_cache_get_cached_tracks_by_keys(std::slice::from_ref(&candidate))
+        {
             if rows
                 .iter()
                 .any(|t| t.id & (PLEX_TRACK_ID_FLOOR - 1) == masked)

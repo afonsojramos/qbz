@@ -94,14 +94,8 @@ impl DlnaConnection {
         // into auto-advancing the FIRST cast track. Best-effort: a renderer with
         // nothing loaded may reject Stop, which is fine.
         if let Some(av) = av_transport_service.as_ref() {
-            let _ = Self::run_action(
-                av,
-                &device_url,
-                "Stop",
-                "<InstanceID>0</InstanceID>",
-                5,
-            )
-            .await;
+            let _ =
+                Self::run_action(av, &device_url, "Stop", "<InstanceID>0</InstanceID>", 5).await;
         }
 
         Ok(Self {
@@ -621,7 +615,7 @@ impl DlnaConnection {
             .transport_query_failures
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             + 1;
-        if n == 1 || n % 60 == 0 {
+        if n == 1 || n.is_multiple_of(60) {
             log::warn!(
                 "DLNA: GetTransportInfo failed ({n} in a row, position still answers): {reason}"
             );

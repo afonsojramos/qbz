@@ -182,7 +182,7 @@ async fn fetch_playlist_from_embed(
         let uri = track.get("uri").and_then(|v| v.as_str()).unwrap_or("");
         let provider_id = uri
             .split(':')
-            .last()
+            .next_back()
             .filter(|v| !v.is_empty())
             .map(|v| v.to_string());
         let provider_url = provider_id

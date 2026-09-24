@@ -189,11 +189,13 @@ impl QobuzSource {
     }
 
     fn numeric_id(item: &MediaRef) -> Result<u64, SourceError> {
-        item.id().parse::<u64>().map_err(|_| SourceError::BadIdShape {
-            by: SourceId::QOBUZ,
-            id: item.id().to_string(),
-            why: "qobuz track / playlist / artist ids are numeric",
-        })
+        item.id()
+            .parse::<u64>()
+            .map_err(|_| SourceError::BadIdShape {
+                by: SourceId::QOBUZ,
+                id: item.id().to_string(),
+                why: "qobuz track / playlist / artist ids are numeric",
+            })
     }
 }
 
@@ -331,10 +333,7 @@ impl Source for QobuzSource {
                     .get_track(Self::numeric_id(item)?)
                     .await
                     .map_err(|e| Self::backend(e.to_string()))?;
-                let art = t
-                    .album
-                    .as_ref()
-                    .and_then(|a| a.image.best().cloned());
+                let art = t.album.as_ref().and_then(|a| a.image.best().cloned());
                 let m = ItemMeta {
                     title: t.title.clone(),
                     subtitle: t
@@ -597,7 +596,10 @@ mod tests {
             "https://static.qobuz.com/images/covers/23/25/0060254702523_50.jpg"
         );
         // A url with no size token passes through unchanged.
-        assert_eq!(QobuzSource::small_url("https://x/cover.png", 50), "https://x/cover.png");
+        assert_eq!(
+            QobuzSource::small_url("https://x/cover.png", 50),
+            "https://x/cover.png"
+        );
         assert_eq!(QobuzSource::small_url("", 50), "");
     }
 
