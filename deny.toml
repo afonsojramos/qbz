@@ -1,0 +1,57 @@
+# cargo-deny config (.github/workflows/quality.yml's `licenses` job) — see
+# https://embarkstudios.github.io/cargo-deny/checks/licenses/cfg.html
+#
+# This project ships compiled .deb/.rpm/AppImage/Flatpak/Snap packages, so
+# an unreviewed transitive dependency license is a real redistribution
+# risk, not just an internal-use nicety. `cargo audit` (the `security` job)
+# only covers known vulnerabilities, not licenses.
+#
+# The allow-list below is every license actually present in crates/Cargo.lock
+# at the time this was written (verified via `cargo metadata` over every
+# package's `license` field) — permissive licenses, plus MPL-2.0 (file-level
+# copyleft, compatible with this workspace's own MIT license), the Unicode
+# data licenses (ICU4X/unicode-ident crates pull these in transitively),
+# CC0-1.0/MIT-0/Unlicense (public-domain-equivalent), and WTFPL (the
+# `terminfo` crate, pulled in transitively via the ratatui/crossterm
+# terminal stack for qbzd's setup TUI). LGPL-2.1-or-later appears once, as
+# one arm of an OR expression already satisfied by MIT/Apache-2.0, so it's
+# not in this list on purpose — cargo-deny only needs one arm allowed.
+#
+# qbz's own crates are MIT (crates/Cargo.toml's [workspace.package]); the
+# Apache-2.0/LGPL-3.0 texts under licenses/ belong to vendored third-party
+# SOURCE (not registry crates cargo-deny sees here) — see debian/copyright.
+#
+# Unicode-DFS-2016 and WTFPL (terminfo, pulled in on some crossterm feature
+# combinations) were in an earlier pass of this list but `cargo deny check`
+# reports neither as actually reachable from this workspace's resolved
+# graph — trimmed rather than kept speculatively; re-add if a future
+# dependency bump needs them (the check fails loudly either way).
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MIT-0",
+    "CDLA-Permissive-2.0",
+    "MPL-2.0",
+    "Zlib",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[graph]
+all-features = true
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "allow"

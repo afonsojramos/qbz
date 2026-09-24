@@ -138,3 +138,13 @@ rupnp = { path = "../third-party/rupnp" }
 # workflows' env (CARGO_PROFILE_RELEASE_*) — they are CI-memory tuning, not
 # a property of the package.
 strip = "symbols"
+
+[profile.ci]
+# Used by quality.yml's coverage job (cargo-llvm-cov). Line-level source
+# coverage mapping needs debug info, so `debug` stays on; `opt-level = 0`
+# keeps compile times down and avoids inlining that would blur which
+# source line a covered region maps to.
+inherits = "dev"
+opt-level = 0
+debug = true
+incremental = true

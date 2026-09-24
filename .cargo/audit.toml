@@ -1,0 +1,25 @@
+# cargo-audit config (.github/workflows/quality.yml's `security` job).
+#
+# Lives at `.cargo/audit.toml` — cargo-audit's actual config discovery path
+# (mirroring cargo's own `.cargo/config.toml`, tracked alongside it at the
+# repo root), *not* a bare root-level `audit.toml`, which cargo-audit
+# silently never reads.
+#
+# Advisories are ignored here only when they have no upgrade path that
+# doesn't touch the protected audio backend (see CONTRIBUTING.md: "Do not
+# modify protected audio-backend behavior unless explicitly requested by
+# the maintainer") — never to silence a warning that a safe, drop-in bump
+# could fix outright (rustls's own RUSTSEC-2026-0285 was fixed that way,
+# 2026-09-22, not added here).
+[advisories]
+ignore = [
+    # ringbuf 0.4.8: double free / use-after-free in Consumer::skip and
+    # Consumer::clear when an element's Drop panics. Direct dependency of
+    # qbz-audio (crates/qbz-audio/Cargo.toml: `ringbuf = "0.4"`), used in
+    # the real-time audio buffer path. The fix (>=0.5.2) is a SemVer-major
+    # bump for this 0.x crate — needs the maintainer's own review of the
+    # 0.4 -> 0.5 API diff and real playback testing before landing, not
+    # something to change unilaterally. Revisit 2026-10-22 (1 month) or
+    # sooner if the maintainer picks it up.
+    "RUSTSEC-2026-0293",
+]
