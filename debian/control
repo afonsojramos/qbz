@@ -21,6 +21,7 @@ Build-Depends:
   libxkbcommon-dev,
   libwayland-dev,
   qt6-base-dev,
+  qt6-base-private-dev,
   qt6-declarative-dev,
   qt6-svg-dev
 Standards-Version: 4.6.1
