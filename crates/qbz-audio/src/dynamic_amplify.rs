@@ -197,9 +197,21 @@ mod tests {
         atomic.store(0.25f32.to_bits(), Ordering::Relaxed);
         let ramp = (1000 * RAMP_MS) / 1000; // 400 samples at 1 kHz mono
         let out: Vec<f32> = (0..ramp as usize).map(|_| amp.next().unwrap()).collect();
-        assert!(out[0] < 0.5 && out[0] > 0.25, "first sample already moving: {}", out[0]);
-        assert!((out[199] - 0.375).abs() < 0.01, "halfway through the ramp: {}", out[199]);
-        assert_eq!(out[ramp as usize - 1], 0.25, "snaps to the target at the end");
+        assert!(
+            out[0] < 0.5 && out[0] > 0.25,
+            "first sample already moving: {}",
+            out[0]
+        );
+        assert!(
+            (out[199] - 0.375).abs() < 0.01,
+            "halfway through the ramp: {}",
+            out[199]
+        );
+        assert_eq!(
+            out[ramp as usize - 1],
+            0.25,
+            "snaps to the target at the end"
+        );
         assert_eq!(amp.next(), Some(0.25));
     }
 }

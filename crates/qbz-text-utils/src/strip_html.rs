@@ -56,7 +56,8 @@ fn match_break_or_paragraph(s: &str) -> Option<(&'static str, usize)> {
         return Some(("\n\n", 3));
     }
     // <br>, <br/>, <br />, etc.
-    if bytes.len() >= 3 && (bytes[0] == b'b' || bytes[0] == b'B')
+    if bytes.len() >= 3
+        && (bytes[0] == b'b' || bytes[0] == b'B')
         && (bytes[1] == b'r' || bytes[1] == b'R')
     {
         let mut j = 2usize;
@@ -255,10 +256,7 @@ fn match_entity(s: &str) -> Option<(char, usize)> {
         return None;
     }
     let name = &s[..name_len];
-    let decoded = NAMED
-        .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, ch)| *ch)?;
+    let decoded = NAMED.iter().find(|(n, _)| *n == name).map(|(_, ch)| *ch)?;
     if bytes.get(name_len) == Some(&b';') {
         return Some((decoded, name_len + 1));
     }
@@ -288,7 +286,9 @@ fn match_numeric(s: &str) -> Option<(char, usize)> {
     let mut value: u32 = 0;
     let mut i = digits_start;
     while i < bytes.len() {
-        let Some(d) = (bytes[i] as char).to_digit(radix) else { break };
+        let Some(d) = (bytes[i] as char).to_digit(radix) else {
+            break;
+        };
         value = value.checked_mul(radix)?.checked_add(d)?;
         if value > 0x10FFFF {
             return None;
@@ -366,7 +366,10 @@ mod tests {
     #[test]
     fn decodes_common_entities() {
         let html = "Rock &amp; Roll &mdash; &ldquo;the rest&rdquo;.";
-        assert_eq!(strip_html(html), "Rock & Roll \u{2014} \u{201C}the rest\u{201D}.");
+        assert_eq!(
+            strip_html(html),
+            "Rock & Roll \u{2014} \u{201C}the rest\u{201D}."
+        );
     }
 
     #[test]
@@ -428,7 +431,10 @@ mod tests {
     fn no_false_positives_on_plain_ampersands() {
         // Names not in the table never decode without a semicolon.
         assert_eq!(decode_html_entities("AC&DC"), "AC&DC");
-        assert_eq!(decode_html_entities("R&B and Rhythm&Blues"), "R&B and Rhythm&Blues");
+        assert_eq!(
+            decode_html_entities("R&B and Rhythm&Blues"),
+            "R&B and Rhythm&Blues"
+        );
         // Allowlisted prefix but no word boundary → untouched.
         assert_eq!(decode_html_entities("&copyright2020"), "&copyright2020");
         assert_eq!(decode_html_entities("&amplifier"), "&amplifier");
@@ -452,7 +458,10 @@ mod tests {
     #[test]
     fn decodes_windows_1252_quirk_range() {
         assert_eq!(decode_html_entities("It&#146;s here"), "It\u{2019}s here");
-        assert_eq!(decode_html_entities("&#147;quoted&#148;"), "\u{201C}quoted\u{201D}");
+        assert_eq!(
+            decode_html_entities("&#147;quoted&#148;"),
+            "\u{201C}quoted\u{201D}"
+        );
     }
 
     #[test]

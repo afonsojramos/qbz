@@ -307,20 +307,16 @@ mod tests {
 
     #[test]
     fn chatty_and_bulky_events_are_not_forwarded() {
-        assert!(
-            hook_env(&CoreEvent::PositionUpdated {
-                position_secs: 1,
-                duration_secs: 2
-            })
-            .is_none()
-        );
+        assert!(hook_env(&CoreEvent::PositionUpdated {
+            position_secs: 1,
+            duration_secs: 2
+        })
+        .is_none());
         assert!(hook_env(&CoreEvent::ShuffleChanged { enabled: true }).is_none());
-        assert!(
-            hook_env(&CoreEvent::LoadingStarted {
-                operation: "x".into()
-            })
-            .is_none()
-        );
+        assert!(hook_env(&CoreEvent::LoadingStarted {
+            operation: "x".into()
+        })
+        .is_none());
     }
 
     #[test]

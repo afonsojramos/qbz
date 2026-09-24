@@ -24,7 +24,9 @@ pub enum SourceError {
     /// producer-side gaps (`HomeCard` has no `source` field — survey IC-7; the
     /// eight QML sites that hardcode `"source": "qobuz"` — survey §2.6) into
     /// visible failures instead of silently mis-rendered rows.
-    #[error("ambiguous id {id:?} ({kind:?}): candidates {candidates:?}; caller must supply a source")]
+    #[error(
+        "ambiguous id {id:?} ({kind:?}): candidates {candidates:?}; caller must supply a source"
+    )]
     Ambiguous {
         id: String,
         kind: Option<ItemKind>,

@@ -203,7 +203,10 @@ mod windows {
     fn set_string(key: HKEY, name: Option<&str>, value: &str) -> Result<(), String> {
         let data = wide(value);
         let name_w = name.map(wide);
-        let name_ptr = name_w.as_ref().map(|v| v.as_ptr()).unwrap_or(std::ptr::null());
+        let name_ptr = name_w
+            .as_ref()
+            .map(|v| v.as_ptr())
+            .unwrap_or(std::ptr::null());
         // SAFETY: `data` outlives the call; byte length includes the terminator.
         let rc = unsafe {
             RegSetValueExW(
@@ -373,7 +376,12 @@ mod macos {
         let mut buf = vec![0 as c_char; 512];
         // SAFETY: `buf` is `size` bytes long.
         let ok = unsafe {
-            CFStringGetCString(s, buf.as_mut_ptr(), buf.len() as CFIndex, K_CF_STRING_ENCODING_UTF8)
+            CFStringGetCString(
+                s,
+                buf.as_mut_ptr(),
+                buf.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+            )
         };
         if ok == 0 {
             return None;
@@ -392,7 +400,9 @@ mod macos {
         // SAFETY: both CFStrings are live for the call.
         let status = unsafe { LSSetDefaultHandlerForURLScheme(scheme.0, bundle.0) };
         if status != 0 {
-            return Err(format!("LSSetDefaultHandlerForURLScheme({bundle_id}) = {status}"));
+            return Err(format!(
+                "LSSetDefaultHandlerForURLScheme({bundle_id}) = {status}"
+            ));
         }
         Ok(())
     }

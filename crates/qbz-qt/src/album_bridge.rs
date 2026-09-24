@@ -65,7 +65,12 @@ pub mod qbz_album_bridge {
         /// `open_album` with the title/artist the caller knows, so a release
         /// the catalog no longer has can still be named on its page.
         #[qinvokable]
-        fn open_album_from(self: Pin<&mut QbzAlbum>, album_id: QString, title: QString, artist: QString);
+        fn open_album_from(
+            self: Pin<&mut QbzAlbum>,
+            album_id: QString,
+            title: QString,
+            artist: QString,
+        );
         /// "Buy on Qobuz": the store page in the browser when the release is
         /// sold, a toast otherwise (store_qt).
         #[qinvokable]

@@ -58,7 +58,9 @@ async fn validate_artist_pool(
     cands: Vec<ArtistCandidate>,
 ) -> Vec<ArtistReco> {
     let resolved: Vec<Option<ArtistReco>> = stream::iter(
-        cands.into_iter().map(|cand| async move { validate_artist(catalog, cache, &cand).await }),
+        cands
+            .into_iter()
+            .map(|cand| async move { validate_artist(catalog, cache, &cand).await }),
     )
     .buffered(VALIDATE_CONCURRENCY)
     .collect()
@@ -77,7 +79,9 @@ async fn validate_album_pool(
     cands: Vec<AlbumCandidate>,
 ) -> Vec<AlbumReco> {
     let resolved: Vec<Option<AlbumReco>> = stream::iter(
-        cands.into_iter().map(|cand| async move { validate_album(catalog, cache, &cand).await }),
+        cands
+            .into_iter()
+            .map(|cand| async move { validate_album(catalog, cache, &cand).await }),
     )
     .buffered(VALIDATE_CONCURRENCY)
     .collect()
@@ -123,7 +127,8 @@ pub async fn gather_history(inputs: &RecoInputs<'_>) -> ExtHistory {
         let (tops, recents, albums) = tokio::join!(
             lf.client.get_top_artists(&lf.username, "overall", 300),
             lf.client.get_recent_tracks(&lf.username, 200, 1),
-            lf.client.get_user_top_albums(&lf.username, "overall", 300, 1),
+            lf.client
+                .get_user_top_albums(&lf.username, "overall", 300, 1),
         );
         for a in tops.unwrap_or_default() {
             artist_names.insert(normalize(&a.name));
@@ -138,7 +143,11 @@ pub async fn gather_history(inputs: &RecoInputs<'_>) -> ExtHistory {
         }
     }
     if let Some(lb) = &inputs.listenbrainz {
-        let listens = lb.client.get_recent_listens(&lb.username, 1000).await.unwrap_or_default();
+        let listens = lb
+            .client
+            .get_recent_listens(&lb.username, 1000)
+            .await
+            .unwrap_or_default();
         for l in listens {
             artist_names.insert(normalize(&l.artist_name));
             track_keys.insert(track_key(&l.artist_name, &l.track_name));
@@ -198,16 +207,13 @@ async fn similar_artist_row(
     let seeds_norm: HashSet<String> = seeds.iter().map(|s| normalize(s)).collect();
 
     let sim_results: Vec<(String, Vec<qbz_integrations::lastfm::LastFmSimilarArtist>)> =
-        stream::iter(seeds.into_iter().map(|seed| {
-            let lf = lf;
-            async move {
-                let sims = lf
-                    .client
-                    .get_similar_artists(&seed, SIMILAR_PER_SEED)
-                    .await
-                    .unwrap_or_default();
-                (seed, sims)
-            }
+        stream::iter(seeds.into_iter().map(|seed| async move {
+            let sims = lf
+                .client
+                .get_similar_artists(&seed, SIMILAR_PER_SEED)
+                .await
+                .unwrap_or_default();
+            (seed, sims)
         }))
         .buffered(4)
         .collect()
@@ -340,12 +346,13 @@ pub async fn build_rec_albums(inputs: &RecoInputs<'_>, history: &ExtHistory) -> 
         .collect();
 
     let per_artist: Vec<(String, Vec<qbz_integrations::lastfm::LastFmAlbum>)> =
-        stream::iter(artists.into_iter().map(|name| {
-            let lf = lf;
-            async move {
-                let albums = lf.client.get_artist_top_albums(&name, 6).await.unwrap_or_default();
-                (name, albums)
-            }
+        stream::iter(artists.into_iter().map(|name| async move {
+            let albums = lf
+                .client
+                .get_artist_top_albums(&name, 6)
+                .await
+                .unwrap_or_default();
+            (name, albums)
         }))
         .buffered(4)
         .collect()
@@ -407,12 +414,13 @@ pub async fn build_similar_albums_seeded(
         .unwrap_or_default();
 
     let per_artist: Vec<(String, Vec<qbz_integrations::lastfm::LastFmAlbum>)> =
-        stream::iter(sims.into_iter().map(|s| {
-            let lf = lf;
-            async move {
-                let albums = lf.client.get_artist_top_albums(&s.name, 6).await.unwrap_or_default();
-                (s.name, albums)
-            }
+        stream::iter(sims.into_iter().map(|s| async move {
+            let albums = lf
+                .client
+                .get_artist_top_albums(&s.name, 6)
+                .await
+                .unwrap_or_default();
+            (s.name, albums)
         }))
         .buffered(4)
         .collect()
@@ -453,7 +461,11 @@ pub async fn build_fresh_releases(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
     let Some(lb) = &inputs.listenbrainz else {
         return Vec::new();
     };
-    let releases = lb.client.get_fresh_releases(&lb.username, 30).await.unwrap_or_default();
+    let releases = lb
+        .client
+        .get_fresh_releases(&lb.username, 30)
+        .await
+        .unwrap_or_default();
     let candidates: Vec<AlbumCandidate> = releases
         .into_iter()
         .filter(|r| {
@@ -491,7 +503,11 @@ pub async fn build_fresh_releases(inputs: &RecoInputs<'_>) -> Vec<AlbumReco> {
 /// row shows something instead of disappearing.
 fn cached_weekly_fallback(cache: Cache<'_>, source_patch: &str) -> Vec<TrackReco> {
     cache
-        .and_then(|c| c.lock().ok().and_then(|g| g.get_latest_weekly_for_patch(source_patch)))
+        .and_then(|c| {
+            c.lock()
+                .ok()
+                .and_then(|g| g.get_latest_weekly_for_patch(source_patch))
+        })
         .and_then(|json| serde_json::from_str::<Vec<TrackReco>>(&json).ok())
         .unwrap_or_default()
 }
@@ -660,7 +676,11 @@ pub async fn build_editorial(inputs: &RecoInputs<'_>) -> (Vec<AlbumReco>, Vec<Ar
     let mut top_albums: Vec<AlbumReco> = Vec::new();
     for album in most_streamed.iter().chain(new_releases.iter()) {
         if !album.id.is_empty() && seen_albums.insert(album.id.clone()) {
-            top_albums.push(build_album_reco(album, String::new(), RecoSource::Editorial));
+            top_albums.push(build_album_reco(
+                album,
+                String::new(),
+                RecoSource::Editorial,
+            ));
         }
     }
     top_albums.truncate(20);
@@ -699,7 +719,6 @@ pub async fn build_editorial(inputs: &RecoInputs<'_>) -> (Vec<AlbumReco>, Vec<Ar
 
     (top_albums, top_artists)
 }
-
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 

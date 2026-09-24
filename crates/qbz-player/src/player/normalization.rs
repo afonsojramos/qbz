@@ -40,7 +40,12 @@ pub(crate) fn plan_start_gain(
         .lock()
         .ok()
         .filter(|s| s.normalization_enabled)
-        .map(|s| (s.normalization_target_lufs, s.normalization_prevent_clipping));
+        .map(|s| {
+            (
+                s.normalization_target_lufs,
+                s.normalization_prevent_clipping,
+            )
+        });
     let Some((target_lufs, prevent_clipping)) = norm else {
         return StartGainPlan {
             normalization: None,
@@ -55,7 +60,10 @@ pub(crate) fn plan_start_gain(
         "Normalization: track {} starts at gain {:.4} ({})",
         track_id,
         start.gain,
-        start.source.map(|s| s.as_str()).unwrap_or("unknown, measuring")
+        start
+            .source
+            .map(|s| s.as_str())
+            .unwrap_or("unknown, measuring")
     );
     StartGainPlan {
         normalization: Some(start.gain),
@@ -149,17 +157,26 @@ mod tests {
         let cache = LoudnessCache::in_memory().unwrap();
         let off = Mutex::new(AudioSettings::default());
         let plan = plan_start_gain(&off, &cache, 7, None);
-        assert!(plan.normalization.is_none() && plan.gain_atomic.is_none() && plan.target_lufs.is_none());
+        assert!(
+            plan.normalization.is_none()
+                && plan.gain_atomic.is_none()
+                && plan.target_lufs.is_none()
+        );
 
-        let mut on = AudioSettings::default();
-        on.normalization_enabled = true;
-        on.normalization_target_lufs = -14.0;
+        let on = qbz_audio::AudioSettings {
+            normalization_enabled: true,
+            normalization_target_lufs: -14.0,
+            ..Default::default()
+        };
         let on = Mutex::new(on);
         cache.store(7, -12.0, Some(0.9), LoudnessSource::Ebur128Full);
         let plan = plan_start_gain(&on, &cache, 7, None);
         assert!(plan.known_gain && plan.prevent_clipping && plan.target_lufs == Some(-14.0));
         let g = plan.normalization.unwrap();
         assert!((g - qbz_audio::db_to_linear(-2.0)).abs() < 1e-4);
-        assert_eq!(f32::from_bits(plan.gain_atomic.unwrap().load(Ordering::Relaxed)), g);
+        assert_eq!(
+            f32::from_bits(plan.gain_atomic.unwrap().load(Ordering::Relaxed)),
+            g
+        );
     }
 }

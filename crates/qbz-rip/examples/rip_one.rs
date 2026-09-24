@@ -5,7 +5,10 @@ fn main() {
     let want: u32 = a.next().expect("track number").parse().unwrap();
     let dest = std::path::PathBuf::from(a.next().expect("destination"));
 
-    let dev = qbz_disc::list_devices().into_iter().next().expect("a drive");
+    let dev = qbz_disc::list_devices()
+        .into_iter()
+        .next()
+        .expect("a drive");
     let toc = qbz_disc::read_toc(&dev).expect("toc");
     let starts: Vec<u32> = toc.audio_tracks().map(|t| t.start_lsn).collect();
     let id = qbz_disc::discid::disc_id(&starts, toc.leadout_lsn).expect("disc id");
@@ -15,7 +18,12 @@ fn main() {
         .audio_tracks()
         .find(|t| t.number as u32 == want)
         .expect("that track");
-    println!("track {} — {} sectors, {}s", t.number, t.sectors, t.duration_secs());
+    println!(
+        "track {} — {} sectors, {}s",
+        t.number,
+        t.sectors,
+        t.duration_secs()
+    );
 
     let plan = qbz_rip::RipPlan {
         destination: dest,

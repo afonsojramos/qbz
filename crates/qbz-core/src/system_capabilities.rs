@@ -151,9 +151,7 @@ pub fn pressure_from_figures(mem_available_kb: u64, mem_total_kb: u64) -> Memory
 /// mean "what a new allocation can expect without swapping".
 #[cfg(windows)]
 fn global_memory_status_kb() -> Option<(u64, u64)> {
-    use windows_sys::Win32::System::SystemInformation::{
-        GlobalMemoryStatusEx, MEMORYSTATUSEX,
-    };
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 
     let mut status = MEMORYSTATUSEX {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
@@ -188,7 +186,10 @@ pub fn read_memory_pressure() -> Option<MemoryPressure> {
         let content = std::fs::read_to_string("/proc/meminfo").ok()?;
         let mem_available_kb = parse_meminfo_available_kb(&content)?;
         let profile = memory_profile();
-        Some(pressure_from_figures(mem_available_kb, profile.mem_total_kb))
+        Some(pressure_from_figures(
+            mem_available_kb,
+            profile.mem_total_kb,
+        ))
     }
 }
 

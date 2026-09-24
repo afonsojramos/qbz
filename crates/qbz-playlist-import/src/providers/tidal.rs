@@ -307,7 +307,7 @@ async fn fetch_tracks_by_ids(
                     .get("attributes")
                     .and_then(|v| v.get("duration"))
                     .and_then(|v| v.as_str())
-                    .and_then(|v| parse_duration_ms(v));
+                    .and_then(parse_duration_ms);
 
                 let artist = item
                     .get("relationships")

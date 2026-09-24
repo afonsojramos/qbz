@@ -470,7 +470,9 @@ mod tests {
         let back: QobuzWsync = serde_json::from_str(&json).unwrap();
         assert_eq!(back, wsync);
         assert_eq!(
-            back.translation.as_ref().and_then(|t| t.lang().map(str::to_owned)),
+            back.translation
+                .as_ref()
+                .and_then(|t| t.lang().map(str::to_owned)),
             Some("es".to_string())
         );
 

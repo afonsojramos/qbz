@@ -297,7 +297,10 @@ pub fn default_qconnect_device_info_with_name(
     device_info_with_volume_policy(custom_name, crate::settings_qt::allows_remote_volume())
 }
 
-fn device_info_with_volume_policy(custom_name: Option<&str>, allows_volume: bool) -> QconnectDeviceInfoPayload {
+fn device_info_with_volume_policy(
+    custom_name: Option<&str>,
+    allows_volume: bool,
+) -> QconnectDeviceInfoPayload {
     QconnectDeviceInfoPayload {
         device_uuid: Some(resolve_qconnect_device_uuid()),
         friendly_name: Some(resolve_qconnect_friendly_name(custom_name)),
@@ -321,7 +324,10 @@ fn device_info_with_volume_policy(custom_name: Option<&str>, allows_volume: bool
 #[cfg(test)]
 mod volume_tests {
     use super::*;
-    use qbz_audio::{backend::{AlsaPlugin, AudioBackendType}, settings::AudioSettings};
+    use qbz_audio::{
+        backend::{AlsaPlugin, AudioBackendType},
+        settings::AudioSettings,
+    };
 
     #[test]
     fn peer_volume_advertisement_follows_the_local_output_route() {
@@ -336,8 +342,14 @@ mod volume_tests {
     }
 
     fn assert_advertisement(audio: &AudioSettings, expected: i32) {
-        let info = device_info_with_volume_policy(Some("test-renderer"), !crate::output_labels::volume_locked(audio));
-        assert_eq!(info.capabilities.unwrap().volume_remote_control, Some(expected));
+        let info = device_info_with_volume_policy(
+            Some("test-renderer"),
+            !crate::output_labels::volume_locked(audio),
+        );
+        assert_eq!(
+            info.capabilities.unwrap().volume_remote_control,
+            Some(expected)
+        );
     }
 
     #[test]
@@ -346,7 +358,11 @@ mod volume_tests {
         let mut audio = AudioSettings::default();
         audio.backend_type = Some(AudioBackendType::Alsa);
         audio.exclusive_mode = true;
-        for route in ["front:CARD=ZH3,DEV=0", "hw:CARD=ZH3,DEV=0", "plughw:CARD=ZH3,DEV=0"] {
+        for route in [
+            "front:CARD=ZH3,DEV=0",
+            "hw:CARD=ZH3,DEV=0",
+            "plughw:CARD=ZH3,DEV=0",
+        ] {
             audio.output_device = Some(route.into());
             for plugin in [AlsaPlugin::Hw, AlsaPlugin::PlugHw] {
                 audio.alsa_plugin = Some(plugin);

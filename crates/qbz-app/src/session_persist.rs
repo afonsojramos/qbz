@@ -33,7 +33,6 @@
 //! Nothing here touches the protected audio path beyond threading an existing
 //! `start_position_secs` argument.
 
-
 /// Host-set crash-chain level (see the callers' probe). 1 = clean previous boot.
 static CRASH_CHAIN: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(1);
 
@@ -50,7 +49,6 @@ pub fn set_crash_chain_level(level: u8) {
 fn crash_chain_level() -> u8 {
     CRASH_CHAIN.load(std::sync::atomic::Ordering::Relaxed)
 }
-
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

@@ -228,8 +228,12 @@ impl AnalyzerState {
     /// Reset the EBU R128 window (e.g. after a seek). A seek restarts the
     /// window, never the gain: `known_gain` and `live_gain_applied` stay.
     fn reset_analyzer(&mut self) {
-        self.ebur128 = EbuR128::new(self.channels as u32, self.sample_rate, Mode::I | Mode::TRUE_PEAK)
-            .expect("Failed to create EbuR128 instance");
+        self.ebur128 = EbuR128::new(
+            self.channels as u32,
+            self.sample_rate,
+            Mode::I | Mode::TRUE_PEAK,
+        )
+        .expect("Failed to create EbuR128 instance");
         self.samples_fed = 0;
         self.samples_at_last_measure = 0;
         self.first_measure_done = false;
@@ -355,7 +359,13 @@ mod tests {
         v
     }
 
-    fn feed_seconds(state: &mut AnalyzerState, cache: &LoudnessCache, rate: u32, secs: u32, t0: &mut u64) {
+    fn feed_seconds(
+        state: &mut AnalyzerState,
+        cache: &LoudnessCache,
+        rate: u32,
+        secs: u32,
+        t0: &mut u64,
+    ) {
         let mut left = (rate * secs) as usize;
         while left > 0 {
             let n = left.min(2048);
@@ -372,10 +382,17 @@ mod tests {
         s.gain_atomic = Some(atomic.clone());
         let mut t = 0u64;
         feed_seconds(&mut s, &cache, 48_000, 9, &mut t);
-        assert_eq!(f32::from_bits(atomic.load(Ordering::Relaxed)), 1.0, "nothing before 10 s");
+        assert_eq!(
+            f32::from_bits(atomic.load(Ordering::Relaxed)),
+            1.0,
+            "nothing before 10 s"
+        );
         feed_seconds(&mut s, &cache, 48_000, 2, &mut t);
         let first = f32::from_bits(atomic.load(Ordering::Relaxed));
-        assert!(first > 1.0 && first < 2.0, "a -20 LUFS sine at -14 target is boosted: {first}");
+        assert!(
+            first > 1.0 && first < 2.0,
+            "a -20 LUFS sine at -14 target is boosted: {first}"
+        );
         assert!(cache.lookup(7).is_none(), "an 11 s window is not cached");
         feed_seconds(&mut s, &cache, 48_000, 20, &mut t);
         assert_eq!(
@@ -383,7 +400,10 @@ mod tests {
             first,
             "refinements never touch the live gain"
         );
-        assert_eq!(cache.lookup(7).unwrap().source, LoudnessSource::Ebur128Partial);
+        assert_eq!(
+            cache.lookup(7).unwrap().source,
+            LoudnessSource::Ebur128Partial
+        );
         feed_seconds(&mut s, &cache, 48_000, 8, &mut t);
         assert_eq!(
             cache.lookup(7).unwrap().source,

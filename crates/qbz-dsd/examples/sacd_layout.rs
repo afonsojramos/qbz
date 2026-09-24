@@ -9,8 +9,12 @@ fn main() {
 
     let area = qbz_disc::sacd::read_area(&iso).expect("area");
     let track = area.tracks.iter().find(|t| t.number == tno).expect("track");
-    println!("track {}: {} ({:.1}s)", track.number,
-             track.title.as_deref().unwrap_or("—"), track.duration_secs);
+    println!(
+        "track {}: {} ({:.1}s)",
+        track.number,
+        track.title.as_deref().unwrap_or("—"),
+        track.duration_secs
+    );
 
     for (name, layout) in [
         ("A_block", qbz_dsd::ChannelLayout::BlockPerChannel),
@@ -38,8 +42,10 @@ fn main() {
         // moves slowly between samples; scrambled bits do not.
         let d: f32 = pcm.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
         let e: f32 = pcm.iter().map(|s| s * s).sum();
-        println!("{name:16} {frames} frames  peak {peak:.4}  rms {rms:.5}  roughness {:.4}",
-                 if e > 0.0 { d / e } else { 0.0 });
+        println!(
+            "{name:16} {frames} frames  peak {peak:.4}  rms {rms:.5}  roughness {:.4}",
+            if e > 0.0 { d / e } else { 0.0 }
+        );
 
         let path = outdir.join(format!("sacd_{name}.wav"));
         let mut out = qbz_dsd::wav_header(frames, ch, rate);

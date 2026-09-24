@@ -33,6 +33,9 @@ use qbz_library::{LibraryDatabase, LibraryError};
 /// what a burst leaves warm.
 const POOL: usize = 4;
 
+/// The injected unbound-window fallback — see [`DbPool`]'s `fallback` field.
+type DbPathFallback = Box<dyn Fn() -> Option<PathBuf> + Send + Sync>;
+
 /// The per-user `library.db` handle set.
 pub(crate) struct DbPool {
     /// The bound user's `library.db`. `None` = never bound this session (see
@@ -62,7 +65,7 @@ pub(crate) struct DbPool {
     /// The fallback exists so a HALF-APPLIED stage 1 degrades to today's
     /// behaviour instead of to "no local library". It is removed once every
     /// entry point provably runs after `bind_user`.
-    fallback: Mutex<Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>>,
+    fallback: Mutex<Option<DbPathFallback>>,
     /// One `warn!` per process for the unbound window, not one per call.
     warned_unbound: AtomicBool,
 }
@@ -197,7 +200,10 @@ impl DbPool {
         match LibraryDatabase::open(&path) {
             Ok(db) => Some((generation, db)),
             Err(e) => {
-                log::warn!("[qbz-source] library.db open failed ({}): {e}", path.display());
+                log::warn!(
+                    "[qbz-source] library.db open failed ({}): {e}",
+                    path.display()
+                );
                 None
             }
         }

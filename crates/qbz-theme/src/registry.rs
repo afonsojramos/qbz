@@ -256,21 +256,21 @@ fn dark() -> ThemeColors {
     let warning = Rgba::rgb(0xfb, 0xbf, 0x24); // --warning
     let success = Rgba::rgb(0x3f, 0xae, 0x6a); // NEW (project green)
     ThemeColors {
-        surface_main: Rgba::rgb(0x0f, 0x0f, 0x0f),     // --bg-primary
-        surface_card: Rgba::rgb(0x1a, 0x1a, 0x1a),     // --bg-secondary
+        surface_main: Rgba::rgb(0x0f, 0x0f, 0x0f), // --bg-primary
+        surface_card: Rgba::rgb(0x1a, 0x1a, 0x1a), // --bg-secondary
         surface_elevated: Rgba::rgb(0x2a, 0x2a, 0x2a), // --bg-tertiary
         surface_hover: LEGACY_SURFACE_HOVER,
         bg_hover: Rgba::rgb(0x1f, 0x1f, 0x1f), // --bg-hover
 
-        text_primary: Rgba::rgb(0xff, 0xff, 0xff),   // --text-primary
+        text_primary: Rgba::rgb(0xff, 0xff, 0xff), // --text-primary
         text_secondary: Rgba::rgb(0xcc, 0xcc, 0xcc), // --text-secondary
-        text_muted: Rgba::rgb(0x88, 0x88, 0x88),     // --text-muted
-        text_disabled: Rgba::rgb(0x55, 0x55, 0x55),  // --text-disabled
+        text_muted: Rgba::rgb(0x88, 0x88, 0x88),   // --text-muted
+        text_disabled: Rgba::rgb(0x55, 0x55, 0x55), // --text-disabled
 
-        accent: Rgba::rgb(0x42, 0x85, 0xf4),         // --accent-primary
-        accent_hover: Rgba::rgb(0x5a, 0x9b, 0xf4),   // --accent-hover
+        accent: Rgba::rgb(0x42, 0x85, 0xf4), // --accent-primary
+        accent_hover: Rgba::rgb(0x5a, 0x9b, 0xf4), // --accent-hover
         accent_pressed: Rgba::rgb(0x32, 0x75, 0xe4), // --accent-active
-        accent_text: Rgba::rgb(0xff, 0xff, 0xff),    // --btn-primary-text
+        accent_text: Rgba::rgb(0xff, 0xff, 0xff), // --btn-primary-text
 
         danger,
         danger_bg: with_alpha(danger, 0.1),
@@ -305,11 +305,11 @@ fn dark() -> ThemeColors {
 /// inherit the rest from `dark()`.
 fn oled() -> ThemeColors {
     ThemeColors {
-        surface_main: Rgba::rgb(0x00, 0x00, 0x00),     // --bg-primary
-        surface_card: Rgba::rgb(0x0a, 0x0a, 0x0a),     // --bg-secondary
+        surface_main: Rgba::rgb(0x00, 0x00, 0x00), // --bg-primary
+        surface_card: Rgba::rgb(0x0a, 0x0a, 0x0a), // --bg-secondary
         surface_elevated: Rgba::rgb(0x1a, 0x1a, 0x1a), // --bg-tertiary
-        bg_hover: Rgba::rgb(0x11, 0x11, 0x11),         // --bg-hover (oled)
-        border_strong: Rgba::rgb(0x2a, 0x2a, 0x2a),    // --border-strong (oled)
+        bg_hover: Rgba::rgb(0x11, 0x11, 0x11),     // --bg-hover (oled)
+        border_strong: Rgba::rgb(0x2a, 0x2a, 0x2a), // --border-strong (oled)
         ..dark()
     }
 }
@@ -321,21 +321,21 @@ fn tokyo_night() -> ThemeColors {
     let warning = Rgba::rgb(0xe0, 0xaf, 0x68); // --warning
     let success = Rgba::rgb(0x3f, 0xae, 0x6a);
     ThemeColors {
-        surface_main: Rgba::rgb(0x1a, 0x1b, 0x26),     // --bg-primary
-        surface_card: Rgba::rgb(0x16, 0x16, 0x1e),     // --bg-secondary
+        surface_main: Rgba::rgb(0x1a, 0x1b, 0x26), // --bg-primary
+        surface_card: Rgba::rgb(0x16, 0x16, 0x1e), // --bg-secondary
         surface_elevated: Rgba::rgb(0x1c, 0x1d, 0x29), // --bg-tertiary
         surface_hover: LEGACY_SURFACE_HOVER,
         bg_hover: Rgba::rgb(0x20, 0x23, 0x30), // --bg-hover
 
-        text_primary: Rgba::rgb(0xa9, 0xb1, 0xd6),   // --text-primary
+        text_primary: Rgba::rgb(0xa9, 0xb1, 0xd6), // --text-primary
         text_secondary: Rgba::rgb(0x78, 0x7c, 0x99), // --text-secondary
-        text_muted: Rgba::rgb(0x54, 0x5c, 0x7e),     // --text-muted
-        text_disabled: Rgba::rgb(0x3d, 0x42, 0x5e),  // --text-disabled
+        text_muted: Rgba::rgb(0x54, 0x5c, 0x7e),   // --text-muted
+        text_disabled: Rgba::rgb(0x3d, 0x42, 0x5e), // --text-disabled
 
-        accent: Rgba::rgb(0x7a, 0xa2, 0xf7),         // --accent-primary
-        accent_hover: Rgba::rgb(0x7d, 0xcf, 0xff),   // --accent-hover
+        accent: Rgba::rgb(0x7a, 0xa2, 0xf7), // --accent-primary
+        accent_hover: Rgba::rgb(0x7d, 0xcf, 0xff), // --accent-hover
         accent_pressed: Rgba::rgb(0xbb, 0x9a, 0xf7), // --accent-active
-        accent_text: Rgba::rgb(0x1a, 0x1b, 0x26),    // --btn-primary-text
+        accent_text: Rgba::rgb(0x1a, 0x1b, 0x26), // --btn-primary-text
 
         danger,
         danger_bg: with_alpha(danger, 0.1),
@@ -466,7 +466,6 @@ fn dracula() -> ThemeColors {
         tint_hover: 0.25,
         border_subtle: Rgba::rgb(0x34, 0x37, 0x46),
         border_strong: Rgba::rgb(0x44, 0x47, 0x5a),
-        ..Default::default()
     };
     s.build(bg_is_light(s.bg_primary))
 }
@@ -1117,17 +1116,17 @@ fn wcag_dark() -> ThemeColors {
         accent_text: Rgba::rgb(0x06, 0x09, 0x0f), // dark text on light-blue
 
         danger,
-        danger_bg: Rgba::rgb(0x2d, 0x14, 0x16),     // opaque dark-red tint
+        danger_bg: Rgba::rgb(0x2d, 0x14, 0x16), // opaque dark-red tint
         danger_border: Rgba::rgb(0xa8, 0x56, 0x56), // see adjacency constraint
         danger_hover: Rgba::rgb(0xff, 0xb3, 0xb3),
 
         warning,
-        warning_bg: Rgba::rgb(0x2d, 0x24, 0x10),     // opaque dark-amber tint
+        warning_bg: Rgba::rgb(0x2d, 0x24, 0x10), // opaque dark-amber tint
         warning_border: Rgba::rgb(0x9c, 0x74, 0x30),
         warning_hover: Rgba::rgb(0xff, 0xd9, 0x8a),
 
         success,
-        success_bg: Rgba::rgb(0x11, 0x24, 0x1a),     // opaque dark-green tint
+        success_bg: Rgba::rgb(0x11, 0x24, 0x1a), // opaque dark-green tint
         success_border: Rgba::rgb(0x3f, 0x7d, 0x56),
         success_hover: Rgba::rgb(0x9a, 0xed, 0xb6),
 
@@ -1153,7 +1152,7 @@ fn high_contrast() -> ThemeColors {
     let success = Rgba::rgb(0x62, 0xff, 0xb0);
     let accent = Rgba::rgb(0x62, 0xd4, 0xff);
     ThemeColors {
-        surface_main: Rgba::rgb(0x0a, 0x0a, 0x0a),     // lifted off pure black
+        surface_main: Rgba::rgb(0x0a, 0x0a, 0x0a), // lifted off pure black
         surface_card: Rgba::rgb(0x14, 0x14, 0x14),
         surface_elevated: Rgba::rgb(0x1f, 0x1f, 0x1f),
         surface_hover: Rgba::rgba(255, 255, 255, 0x10),
@@ -1164,31 +1163,31 @@ fn high_contrast() -> ThemeColors {
         text_muted: Rgba::rgb(0xe0, 0xe0, 0xe0),     // near-primary, NOT gray
         text_disabled: Rgba::rgb(0x8c, 0x8c, 0x8c),  // the only reserved gray
 
-        accent,                                      // reciprocal cyan
+        accent, // reciprocal cyan
         accent_hover: Rgba::rgb(0x8c, 0xe3, 0xff),
         accent_pressed: Rgba::rgb(0xae, 0xed, 0xff),
-        accent_text: Rgba::rgb(0x00, 0x00, 0x00),    // reads on cyan fill
+        accent_text: Rgba::rgb(0x00, 0x00, 0x00), // reads on cyan fill
 
         danger,
-        danger_bg: Rgba::rgb(0x2a, 0x00, 0x00),      // opaque; always bordered
-        danger_border: danger,                       // = danger hue
+        danger_bg: Rgba::rgb(0x2a, 0x00, 0x00), // opaque; always bordered
+        danger_border: danger,                  // = danger hue
         danger_hover: Rgba::rgb(0xff, 0xb3, 0xb3),
 
         warning,
-        warning_bg: Rgba::rgb(0x2a, 0x1d, 0x00),     // opaque; always bordered
-        warning_border: warning,                     // = warning hue
+        warning_bg: Rgba::rgb(0x2a, 0x1d, 0x00), // opaque; always bordered
+        warning_border: warning,                 // = warning hue
         warning_hover: Rgba::rgb(0xff, 0xc9, 0x4d),
 
         success,
-        success_bg: Rgba::rgb(0x00, 0x26, 0x1a),     // opaque; always bordered
-        success_border: success,                     // = success hue
+        success_bg: Rgba::rgb(0x00, 0x26, 0x1a), // opaque; always bordered
+        success_border: success,                 // = success hue
         success_hover: Rgba::rgb(0x8a, 0xff, 0xc8),
 
         border_subtle: Rgba::rgb(0x7a, 0x7a, 0x7a), // still clearly visible (4.61:1)
         border_muted: Rgba::rgba(255, 255, 255, 0x38),
         border_strong: Rgba::rgb(0xff, 0xff, 0xff), // = text color
 
-        focus_ring: Rgba::rgb(0xff, 0xee, 0x32),    // bright yellow's correct home
+        focus_ring: Rgba::rgb(0xff, 0xee, 0x32), // bright yellow's correct home
 
         favorite: danger,
         card_shadow: LEGACY_CARD_SHADOW,
@@ -1202,7 +1201,7 @@ fn high_contrast() -> ThemeColors {
 fn high_contrast_light() -> ThemeColors {
     let danger = Rgba::rgb(0xa3, 0x00, 0x00);
     let warning = Rgba::rgb(0x5e, 0x4b, 0x00); // CORRECTED from #735c00
-    // derived success: deep green ≥ HC bar (8.47:1 on white).
+                                               // derived success: deep green ≥ HC bar (8.47:1 on white).
     let success = Rgba::rgb(0x00, 0x5a, 0x1c);
     let accent = Rgba::rgb(0x00, 0x00, 0xcc);
     ThemeColors {
@@ -1217,24 +1216,24 @@ fn high_contrast_light() -> ThemeColors {
         text_muted: Rgba::rgb(0x33, 0x33, 0x33),     // near-primary, NOT gray
         text_disabled: Rgba::rgb(0x59, 0x59, 0x59),  // reserved gray (7.00:1 AAA)
 
-        accent,                                      // reciprocal deep blue
+        accent, // reciprocal deep blue
         accent_hover: Rgba::rgb(0x00, 0x00, 0xa3),
         accent_pressed: Rgba::rgb(0x00, 0x00, 0x80),
-        accent_text: Rgba::rgb(0xff, 0xff, 0xff),    // reads on blue fill
+        accent_text: Rgba::rgb(0xff, 0xff, 0xff), // reads on blue fill
 
         danger,
-        danger_bg: Rgba::rgb(0xff, 0xe5, 0xe5),      // opaque; always bordered
-        danger_border: danger,                       // = danger hue
+        danger_bg: Rgba::rgb(0xff, 0xe5, 0xe5), // opaque; always bordered
+        danger_border: danger,                  // = danger hue
         danger_hover: Rgba::rgb(0x7a, 0x00, 0x00),
 
         warning,
-        warning_bg: Rgba::rgb(0xff, 0xf4, 0xd6),     // opaque; always bordered
-        warning_border: warning,                     // = corrected warning hue
+        warning_bg: Rgba::rgb(0xff, 0xf4, 0xd6), // opaque; always bordered
+        warning_border: warning,                 // = corrected warning hue
         warning_hover: Rgba::rgb(0x5c, 0x49, 0x00),
 
         success,
-        success_bg: Rgba::rgb(0xdc, 0xf2, 0xe2),     // opaque; always bordered
-        success_border: success,                     // = success hue
+        success_bg: Rgba::rgb(0xdc, 0xf2, 0xe2), // opaque; always bordered
+        success_border: success,                 // = success hue
         success_hover: Rgba::rgb(0x00, 0x44, 0x17),
 
         border_subtle: Rgba::rgb(0x66, 0x66, 0x66), // clearly visible (5.74:1)
@@ -1260,7 +1259,7 @@ fn colorblind() -> ThemeColors {
     let success = Rgba::rgb(0x00, 0x9e, 0x73); // Okabe-Ito bluish green
     let accent = Rgba::rgb(0x62, 0xa5, 0xe4);
     ThemeColors {
-        surface_main: Rgba::rgb(0x1a, 0x1a, 0x2e),     // retained dark navy
+        surface_main: Rgba::rgb(0x1a, 0x1a, 0x2e), // retained dark navy
         surface_card: Rgba::rgb(0x22, 0x22, 0x3a),
         surface_elevated: Rgba::rgb(0x2c, 0x2c, 0x46),
         surface_hover: Rgba::rgba(255, 255, 255, 0x10),
@@ -1268,26 +1267,26 @@ fn colorblind() -> ThemeColors {
 
         text_primary: Rgba::rgb(0xff, 0xff, 0xff),
         text_secondary: Rgba::rgb(0xdc, 0xdc, 0xe0),
-        text_muted: Rgba::rgb(0xaa, 0xaa, 0xb8),    // lightened -> AA on bg-tertiary
+        text_muted: Rgba::rgb(0xaa, 0xaa, 0xb8), // lightened -> AA on bg-tertiary
         text_disabled: Rgba::rgb(0x6f, 0x6f, 0x86), // exempt, perceptible
 
-        accent,                                     // lightened Okabe-Ito blue
+        accent, // lightened Okabe-Ito blue
         accent_hover: Rgba::rgb(0x7e, 0xb4, 0xe8),
         accent_pressed: Rgba::rgb(0x8b, 0xbc, 0xec),
-        accent_text: Rgba::rgb(0x0a, 0x0a, 0x14),   // near-black on light-blue
+        accent_text: Rgba::rgb(0x0a, 0x0a, 0x14), // near-black on light-blue
 
         danger,                                     // lightened reddish-purple
         danger_bg: Rgba::rgb(0x3a, 0x1a, 0x2e),     // solid tint
         danger_border: Rgba::rgb(0x8a, 0x4a, 0x70), // solid tint
         danger_hover: Rgba::rgb(0xe0, 0xa3, 0xc5),
 
-        warning,                                    // Okabe-Ito amber
-        warning_bg: Rgba::rgb(0x3a, 0x2e, 0x00),    // solid tint
+        warning,                                 // Okabe-Ito amber
+        warning_bg: Rgba::rgb(0x3a, 0x2e, 0x00), // solid tint
         warning_border: Rgba::rgb(0x8a, 0x6e, 0x00),
         warning_hover: Rgba::rgb(0xf0, 0xb6, 0x30),
 
-        success,                                    // AA on primary/secondary
-        success_bg: Rgba::rgb(0x0a, 0x33, 0x29),    // solid tint
+        success,                                 // AA on primary/secondary
+        success_bg: Rgba::rgb(0x0a, 0x33, 0x29), // solid tint
         success_border: Rgba::rgb(0x1f, 0x6b, 0x54),
         success_hover: Rgba::rgb(0x33, 0xc3, 0x97), // body-size success on bg-tertiary
 
@@ -1295,7 +1294,7 @@ fn colorblind() -> ThemeColors {
         border_muted: Rgba::rgba(255, 255, 255, 0x38),
         border_strong: Rgba::rgb(0x6e, 0x6e, 0x88), // control boundary (3.45:1)
 
-        focus_ring: Rgba::rgb(0x8b, 0xbc, 0xec),    // high-tone blue (8.53:1)
+        focus_ring: Rgba::rgb(0x8b, 0xbc, 0xec), // high-tone blue (8.53:1)
 
         favorite: danger,
         card_shadow: LEGACY_CARD_SHADOW,
@@ -1349,7 +1348,12 @@ mod tests {
 
     #[test]
     fn p1_rows_are_fully_populated() {
-        for id in [ThemeId::Dark, ThemeId::Oled, ThemeId::TokyoNight, ThemeId::System] {
+        for id in [
+            ThemeId::Dark,
+            ThemeId::Oled,
+            ThemeId::TokyoNight,
+            ThemeId::System,
+        ] {
             let c = palette(id);
             assert_eq!(c.alpha.len(), ALPHA_COUNT);
             assert_ne!(c.surface_main, Rgba::rgba(0, 0, 0, 0));
@@ -1431,7 +1435,10 @@ mod tests {
         // light theme -> black alpha base
         assert_eq!(c.alpha_pct(8), Rgba::rgba(0, 0, 0, 0x14));
         // light hover tint is 0.15 (faithful to app.css)
-        assert_eq!(c.danger_hover, with_alpha(Rgba::rgb(0xdc, 0x26, 0x26), 0.15));
+        assert_eq!(
+            c.danger_hover,
+            with_alpha(Rgba::rgb(0xdc, 0x26, 0x26), 0.15)
+        );
     }
 
     #[test]
@@ -1490,8 +1497,16 @@ mod tests {
             ThemeId::Kurosaki,
         ] {
             let c = palette(id);
-            assert_eq!(c.alpha_pct(8), Rgba::rgba(0, 0, 0, 0x14), "{id:?} should be black-base");
-            assert_eq!(c.surface_hover, Rgba::rgba(0, 0, 0, 0x10), "{id:?} hover base");
+            assert_eq!(
+                c.alpha_pct(8),
+                Rgba::rgba(0, 0, 0, 0x14),
+                "{id:?} should be black-base"
+            );
+            assert_eq!(
+                c.surface_hover,
+                Rgba::rgba(0, 0, 0, 0x10),
+                "{id:?} hover base"
+            );
         }
     }
 
@@ -1516,7 +1531,11 @@ mod tests {
             ThemeId::Langley,
         ] {
             let c = palette(id);
-            assert_eq!(c.alpha_pct(8), Rgba::rgba(255, 255, 255, 0x14), "{id:?} should be white-base");
+            assert_eq!(
+                c.alpha_pct(8),
+                Rgba::rgba(255, 255, 255, 0x14),
+                "{id:?} should be white-base"
+            );
         }
     }
 
@@ -1530,7 +1549,10 @@ mod tests {
             ThemeId::Kurosaki,
         ] {
             let c = palette(id);
-            assert_eq!(c.focus_ring, c.accent, "{id:?} focus_ring should equal accent");
+            assert_eq!(
+                c.focus_ring, c.accent,
+                "{id:?} focus_ring should equal accent"
+            );
             assert_eq!(c.favorite, c.danger, "{id:?} favorite should equal danger");
         }
     }
@@ -1606,7 +1628,7 @@ mod a11y_contrast_tests {
         // text-muted is APCA-content by design but still clears AAA ratio (10.32:1)
         assert!(contrast_ratio(c.text_muted, c.surface_main) >= AAA_BODY);
         assert!(contrast_ratio(c.accent, c.surface_main) >= AAA_BODY); // 10.39:1
-        // danger/warning/success text on their OPAQUE tint bg >= AAA
+                                                                       // danger/warning/success text on their OPAQUE tint bg >= AAA
         assert!(contrast_ratio(c.danger, c.danger_bg) >= AAA_BODY); // 8.63:1
         assert!(contrast_ratio(c.warning, c.surface_main) >= AAA_BODY); // 12.53:1
         assert!(contrast_ratio(c.success, c.success_bg) >= AAA_BODY);
@@ -1637,10 +1659,10 @@ mod a11y_contrast_tests {
             wd_tp
         );
         assert!(hc_tp >= 19.0); // Part B: 19.80:1
-        // reciprocal cyan: accent as text AND as a fill under btn-text
+                                // reciprocal cyan: accent as text AND as a fill under btn-text
         assert!(contrast_ratio(hc.accent, hc.surface_main) >= AAA_BODY); // 11.67:1
         assert!(contrast_ratio(hc.accent_text, hc.accent) >= AAA_BODY); // 12.38:1
-        // interactive non-text tokens >= 3:1
+                                                                        // interactive non-text tokens >= 3:1
         assert!(contrast_ratio(hc.border_strong, hc.surface_main) >= NON_TEXT);
         assert!(contrast_ratio(hc.focus_ring, hc.surface_main) >= NON_TEXT); // 13.76:1
         assert!(contrast_ratio(hc.border_subtle, hc.surface_main) >= NON_TEXT); // 4.61:1
@@ -1659,7 +1681,7 @@ mod a11y_contrast_tests {
             wl_tp
         );
         assert!(hc_tp >= 20.0); // Part B: 21.00:1
-        // reciprocal deep blue: accent as text AND btn-text under accent fill
+                                // reciprocal deep blue: accent as text AND btn-text under accent fill
         assert!(contrast_ratio(hc.accent, hc.surface_main) >= AAA_BODY); // 11.22:1
         assert!(contrast_ratio(hc.accent_text, hc.accent) >= AAA_BODY);
         // corrected warning #5e4b00 must clear AAA on white (8.46:1)
@@ -1747,16 +1769,25 @@ mod a11y_contrast_tests {
         assert!(contrast_ratio(c.text_muted, c.surface_elevated) >= AA_NORMAL);
         // accent/danger/warning double as text in ~300 places: AA on all tiers
         for bg in [c.surface_main, c.surface_card, c.surface_elevated] {
-            assert!(contrast_ratio(c.accent, bg) >= AA_NORMAL, "accent on {bg:?}");
-            assert!(contrast_ratio(c.danger, bg) >= AA_NORMAL, "danger on {bg:?}");
-            assert!(contrast_ratio(c.warning, bg) >= AA_NORMAL, "warning on {bg:?}");
+            assert!(
+                contrast_ratio(c.accent, bg) >= AA_NORMAL,
+                "accent on {bg:?}"
+            );
+            assert!(
+                contrast_ratio(c.danger, bg) >= AA_NORMAL,
+                "danger on {bg:?}"
+            );
+            assert!(
+                contrast_ratio(c.warning, bg) >= AA_NORMAL,
+                "warning on {bg:?}"
+            );
         }
         // success: AA-normal on primary/secondary (Part B/C.6); body text on the
         // lightest tier routes to success-hover (must clear AA-normal there).
         assert!(contrast_ratio(c.success, c.surface_main) >= AA_NORMAL); // 4.99:1
         assert!(contrast_ratio(c.success, c.surface_card) >= AA_NORMAL); // 4.52:1
         assert!(contrast_ratio(c.success_hover, c.surface_elevated) >= AA_NORMAL); // 6.04:1
-        // focus-ring high-tone blue >= 3:1 non-text (Part B 8.53:1)
+                                                                                   // focus-ring high-tone blue >= 3:1 non-text (Part B 8.53:1)
         assert!(contrast_ratio(c.focus_ring, c.surface_main) >= NON_TEXT);
     }
 
@@ -1782,7 +1813,10 @@ mod a11y_contrast_tests {
         );
         // accent vs warning likewise (blue vs amber, the easy axis).
         let aw = delta_e(a_sim, w_sim);
-        assert!(aw >= 15.0, "colorblind accent vs warning under deutan ΔE {aw:.2}");
+        assert!(
+            aw >= 15.0,
+            "colorblind accent vs warning under deutan ΔE {aw:.2}"
+        );
         // sanity: the unsimulated hues are obviously distinct too.
         assert!(delta_e(c.danger, c.warning) >= 20.0);
     }
@@ -1796,8 +1830,15 @@ mod a11y_contrast_tests {
         for &id in ALL {
             let c = palette(id);
             // alpha ramp complete + every tier carries opacity
-            assert_eq!(c.alpha.len(), crate::colors::ALPHA_COUNT, "{id:?} alpha len");
-            assert!(c.alpha.iter().all(|a| a.a > 0), "{id:?} alpha has zero tier");
+            assert_eq!(
+                c.alpha.len(),
+                crate::colors::ALPHA_COUNT,
+                "{id:?} alpha len"
+            );
+            assert!(
+                c.alpha.iter().all(|a| a.a > 0),
+                "{id:?} alpha has zero tier"
+            );
             // every status surface/border/hover composites to something visible
             for x in [
                 c.danger_bg,

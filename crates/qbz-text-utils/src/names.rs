@@ -13,7 +13,13 @@ pub fn is_placeholder_name(name: &str) -> bool {
     let folded: String = name
         .trim()
         .chars()
-        .map(|c| if c == '-' || c == '_' { ' ' } else { c.to_ascii_lowercase() })
+        .map(|c| {
+            if c == '-' || c == '_' {
+                ' '
+            } else {
+                c.to_ascii_lowercase()
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -59,7 +65,12 @@ mod tests {
 
     #[test]
     fn real_names_pass() {
-        for name in ["Stream Of Passion", "Various Artists", "Roy Orbison", "Non Documenté"] {
+        for name in [
+            "Stream Of Passion",
+            "Various Artists",
+            "Roy Orbison",
+            "Non Documenté",
+        ] {
             assert!(!is_placeholder_name(name), "{name:?}");
         }
     }

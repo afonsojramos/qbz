@@ -113,16 +113,34 @@ mod tests {
 
     #[test]
     fn open_sidebar_clamps_between_min_and_double() {
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 240), SidebarDrag::Open(240));
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 333), SidebarDrag::Open(333));
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 480), SidebarDrag::Open(480));
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 900), SidebarDrag::Open(480));
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 240),
+            SidebarDrag::Open(240)
+        );
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 333),
+            SidebarDrag::Open(333)
+        );
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 480),
+            SidebarDrag::Open(480)
+        );
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 900),
+            SidebarDrag::Open(480)
+        );
     }
 
     #[test]
     fn a_sloppy_drag_just_under_the_minimum_stays_open_at_the_minimum() {
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 239), SidebarDrag::Open(240));
-        assert_eq!(sidebar_drag_target(SIDEBAR_OPEN, 200), SidebarDrag::Open(240));
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 239),
+            SidebarDrag::Open(240)
+        );
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_OPEN, 200),
+            SidebarDrag::Open(240)
+        );
     }
 
     #[test]
@@ -139,8 +157,14 @@ mod tests {
         assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 64), SidebarDrag::Mini);
         assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 199), SidebarDrag::Mini);
         assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 219), SidebarDrag::Mini);
-        assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 220), SidebarDrag::Open(240));
-        assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 300), SidebarDrag::Open(300));
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_MINI, 220),
+            SidebarDrag::Open(240)
+        );
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_MINI, 300),
+            SidebarDrag::Open(300)
+        );
         assert_eq!(sidebar_drag_target(SIDEBAR_MINI, 23), SidebarDrag::Closed);
     }
 
@@ -151,8 +175,7 @@ mod tests {
         for x in 0..=SIDEBAR_MAX_WIDTH + 50 {
             let from_open = sidebar_drag_target(SIDEBAR_OPEN, x);
             let from_mini = sidebar_drag_target(SIDEBAR_MINI, x);
-            let flips = from_open == SidebarDrag::Mini
-                && matches!(from_mini, SidebarDrag::Open(_));
+            let flips = from_open == SidebarDrag::Mini && matches!(from_mini, SidebarDrag::Open(_));
             assert!(!flips, "x={x} flips open<->mini");
         }
         // And the band between the two thresholds is stable both ways.
@@ -164,7 +187,10 @@ mod tests {
 
     #[test]
     fn closed_sidebar_never_drags() {
-        assert_eq!(sidebar_drag_target(SIDEBAR_CLOSED, 300), SidebarDrag::Closed);
+        assert_eq!(
+            sidebar_drag_target(SIDEBAR_CLOSED, 300),
+            SidebarDrag::Closed
+        );
     }
 
     #[test]

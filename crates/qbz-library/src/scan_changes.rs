@@ -33,7 +33,9 @@ pub(crate) fn begin(connection: &Connection) -> rusqlite::Result<()> {
 }
 
 pub(crate) fn changed(connection: &Connection) -> rusqlite::Result<bool> {
-    connection.query_row("SELECT changed FROM temp.qbz_scan_changes", [], |row| row.get(0))
+    connection.query_row("SELECT changed FROM temp.qbz_scan_changes", [], |row| {
+        row.get(0)
+    })
 }
 
 #[cfg(test)]
@@ -46,17 +48,20 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE local_tracks(id INTEGER PRIMARY KEY, title TEXT, artwork_path TEXT);
              CREATE TABLE local_scan_roots(generation INTEGER);
-             INSERT INTO local_tracks VALUES(1,'Dogs',NULL);"
-        ).unwrap();
+             INSERT INTO local_tracks VALUES(1,'Dogs',NULL);",
+        )
+        .unwrap();
         begin(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO local_scan_roots VALUES(104);
              UPDATE local_scan_roots SET generation=105;
              UPDATE local_tracks SET title=title, artwork_path=NULL;
-             BEGIN; DELETE FROM local_tracks; ROLLBACK;"
-        ).unwrap();
+             BEGIN; DELETE FROM local_tracks; ROLLBACK;",
+        )
+        .unwrap();
         assert!(!changed(&conn).unwrap());
-        conn.execute_batch("UPDATE local_tracks SET artwork_path='cover.jpg'").unwrap();
+        conn.execute_batch("UPDATE local_tracks SET artwork_path='cover.jpg'")
+            .unwrap();
         assert!(changed(&conn).unwrap());
     }
 
@@ -70,11 +75,13 @@ mod tests {
             let conn = Connection::open_in_memory().unwrap();
             conn.execute_batch(
                 "CREATE TABLE local_tracks(id INTEGER PRIMARY KEY, title TEXT);
-                 INSERT INTO local_tracks VALUES(1,'Dogs');"
-            ).unwrap();
+                 INSERT INTO local_tracks VALUES(1,'Dogs');",
+            )
+            .unwrap();
             begin(&conn).unwrap();
             conn.execute_batch(mutation).unwrap();
-            conn.execute_batch("BEGIN; DELETE FROM local_tracks; ROLLBACK;").unwrap();
+            conn.execute_batch("BEGIN; DELETE FROM local_tracks; ROLLBACK;")
+                .unwrap();
             assert!(changed(&conn).unwrap(), "{mutation}");
         }
     }

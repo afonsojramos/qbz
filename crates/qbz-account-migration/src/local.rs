@@ -762,7 +762,7 @@ pub fn other_profiles(data_root: &Path, current: u64) -> Vec<(u64, PathBuf)> {
             Some((uid, entry.path(), modified))
         })
         .collect();
-    found.sort_by(|a, b| b.2.cmp(&a.2));
+    found.sort_by_key(|a| std::cmp::Reverse(a.2));
     found.into_iter().map(|(uid, p, _)| (uid, p)).collect()
 }
 

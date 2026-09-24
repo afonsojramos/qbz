@@ -525,15 +525,13 @@ impl qbz_mini::QbzMini {
     pub fn key_pressed(self: Pin<&mut Self>, key: i32, modifiers: i32, text: QString) -> bool {
         let text = text.to_string();
         let overrides = crate::hotkeys_qt::load_overrides();
-        let Some(action) =
-            crate::hotkeys_qt::action_for_mini_key(
-                crate::hotkeys_qt::active_keymap(),
-                &overrides,
-                key,
-                modifiers,
-                &text,
-            )
-        else {
+        let Some(action) = crate::hotkeys_qt::action_for_mini_key(
+            crate::hotkeys_qt::active_keymap(),
+            &overrides,
+            key,
+            modifiers,
+            &text,
+        ) else {
             return false;
         };
         // The surface writes go through `apply_surface`, the same funnel

@@ -459,10 +459,13 @@ fn empty_response(code: u16) -> Response<Box<dyn Read>> {
 /// fetch out (#646) — spiked RAM by the full file size per request, and
 /// blocked this single-threaded server for the whole copy. In-memory
 /// (Qobuz-stream) entries keep the existing bounded slice copy.
+/// (reader, content length, status, Content-Range header value)
+type OpenRangeResult = (Box<dyn Read>, usize, StatusCode, Option<String>);
+
 fn open_range(
     entry: &MediaEntry,
     range: Option<(u64, u64)>,
-) -> Result<(Box<dyn Read>, usize, StatusCode, Option<String>), std::io::Error> {
+) -> Result<OpenRangeResult, std::io::Error> {
     // 0-byte entries 500'd under the old read-into-Vec path (read_exact of 1
     // byte past EOF); keep that instead of advertising a lying Content-Length.
     if entry.size == 0 {

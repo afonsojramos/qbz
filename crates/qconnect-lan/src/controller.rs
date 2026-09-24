@@ -114,7 +114,9 @@ impl LanRendererCandidate {
         Some(Self {
             device_uuid: device_uuid.trim().to_string(),
             sdk_version: sdk_version.to_string(),
-            path: path.map(|p| p.trim().trim_matches('/').to_string()).unwrap_or_default(),
+            path: path
+                .map(|p| p.trim().trim_matches('/').to_string())
+                .unwrap_or_default(),
             instance: fullname
                 .strip_suffix(&format!(".{SERVICE_TYPE}"))
                 .unwrap_or(fullname)
@@ -231,7 +233,10 @@ pub struct LanBrowser {
 }
 
 impl LanBrowser {
-    pub fn start<F>(own_device_uuid: Option<String>, on_event: F) -> Result<Self, LanControllerError>
+    pub fn start<F>(
+        own_device_uuid: Option<String>,
+        on_event: F,
+    ) -> Result<Self, LanControllerError>
     where
         F: Fn(LanBrowseEvent) + Send + 'static,
     {
@@ -251,15 +256,17 @@ impl LanBrowser {
                     }
                     match event {
                         ServiceEvent::ServiceResolved(info) => {
-                            let Some(candidate) = LanRendererCandidate::from_resolved(&info)
-                            else {
+                            let Some(candidate) = LanRendererCandidate::from_resolved(&info) else {
                                 continue;
                             };
                             if own_device_uuid.as_deref() == Some(candidate.device_uuid.as_str()) {
                                 continue;
                             }
                             if let Ok(mut map) = fullname_uuid.lock() {
-                                map.insert(candidate.fullname.clone(), candidate.device_uuid.clone());
+                                map.insert(
+                                    candidate.fullname.clone(),
+                                    candidate.device_uuid.clone(),
+                                );
                             }
                             on_event(LanBrowseEvent::Found(candidate));
                         }
@@ -372,8 +379,14 @@ impl LanControllerClient {
         address: &IpAddr,
         body: &HandoffBody,
     ) -> Result<(), LanControllerError> {
-        let url = endpoint_url(address, candidate.port, &candidate.path, "connect-to-qconnect");
-        let payload = serde_json::to_vec(body).map_err(|e| LanControllerError::Decode(e.to_string()))?;
+        let url = endpoint_url(
+            address,
+            candidate.port,
+            &candidate.path,
+            "connect-to-qconnect",
+        );
+        let payload =
+            serde_json::to_vec(body).map_err(|e| LanControllerError::Decode(e.to_string()))?;
         let response = self
             .http
             .post(&url)
@@ -425,15 +438,21 @@ mod tests {
     #[test]
     fn candidate_requires_uuid_and_sdk_and_trims_the_path() {
         let full = format!("Node.{SERVICE_TYPE}");
-        let c = LanRendererCandidate::from_parts("abc", "1.2.3", Some("/api/"), &full, &[v4(9)], 8080)
-            .unwrap();
-        assert_eq!((c.path.as_str(), c.instance.as_str(), c.port), ("api", "Node", 8080));
+        let c =
+            LanRendererCandidate::from_parts("abc", "1.2.3", Some("/api/"), &full, &[v4(9)], 8080)
+                .unwrap();
+        assert_eq!(
+            (c.path.as_str(), c.instance.as_str(), c.port),
+            ("api", "Node", 8080)
+        );
         assert!(LanRendererCandidate::from_parts("", "1.2.3", None, &full, &[v4(9)], 80).is_none());
         assert!(
             LanRendererCandidate::from_parts("abc", "0.9.4", None, &full, &[v4(9)], 80).is_none(),
             "below the Electron SDK floor"
         );
-        assert!(LanRendererCandidate::from_parts("abc", "0.9.5", None, &full, &[v4(9)], 80).is_some());
+        assert!(
+            LanRendererCandidate::from_parts("abc", "0.9.5", None, &full, &[v4(9)], 80).is_some()
+        );
         assert!(
             LanRendererCandidate::from_parts("abc", "bluos", None, &full, &[v4(9)], 80).is_some(),
             "an unparsable version is accepted, like Android"
@@ -480,10 +499,19 @@ mod tests {
             },
             become_active: true,
         };
-        let json: serde_json::Value = serde_json::from_slice(&serde_json::to_vec(&body).unwrap()).unwrap();
-        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        let json: serde_json::Value =
+            serde_json::from_slice(&serde_json::to_vec(&body).unwrap()).unwrap();
+        let mut keys: Vec<&str> = json
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
         keys.sort_unstable();
-        assert_eq!(keys, ["become_active", "jwt_api", "jwt_qconnect", "session_id"]);
+        assert_eq!(
+            keys,
+            ["become_active", "jwt_api", "jwt_qconnect", "session_id"]
+        );
         assert_eq!(json["jwt_qconnect"]["endpoint"], "wss://qws.example");
         assert_eq!(json["jwt_api"]["exp"], 1_780_000_000);
         assert_eq!(json["become_active"], true);
@@ -498,7 +526,8 @@ mod tests {
         assert_eq!(d.max_audio_quality, crate::MaxAudioQuality::Unknown);
         assert_eq!(d.device_type, crate::DeviceType::Unknown);
         assert_eq!(d.software_version, "");
-        let c: ConnectInfo = serde_json::from_str(r#"{"app_id":"x","current_session_id":null}"#).unwrap();
+        let c: ConnectInfo =
+            serde_json::from_str(r#"{"app_id":"x","current_session_id":null}"#).unwrap();
         assert_eq!(c.current_session_id, None);
     }
 }

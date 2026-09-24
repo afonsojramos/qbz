@@ -255,7 +255,7 @@ pub fn playlists_containing(
             let mut found = Vec::new();
             for row in rows {
                 let (pid, item) = row?;
-                for (i, ordinal) in &chunk[..] {
+                for (i, ordinal) in chunk {
                     if *i == item {
                         found.push((pid, *ordinal));
                     }
@@ -361,7 +361,7 @@ pub fn playlists_containing(
             let mut found = Vec::new();
             for row in rows {
                 let (pid, item) = row?;
-                for (i, ordinal) in &chunk[..] {
+                for (i, ordinal) in chunk {
                     if *i == item {
                         found.push((pid.clone(), *ordinal));
                     }

@@ -50,17 +50,23 @@ fn projected(index: usize, source: SourceKind) -> ProjectedTrack {
         album_artist: artist.clone(),
         album: format!("Album {album_number:05}"),
         duration_ms: 120_000 + (index % 480_000) as u64,
-        year: (index % 23 != 0).then_some(1950 + (index % 77) as u32),
+        year: (!index.is_multiple_of(23)).then_some(1950 + (index % 77) as u32),
         disc_number: Some((index % 3 + 1) as u32),
         track_number: Some((index % 24 + 1) as u32),
         format: format.to_string(),
-        bit_depth: (format != "mp3").then_some(if index % 3 == 0 { 24 } else { 16 }),
-        sample_rate_hz: Some(if index % 5 == 0 { 96_000 } else { 44_100 }),
+        bit_depth: (format != "mp3").then_some(if index.is_multiple_of(3) { 24 } else { 16 }),
+        sample_rate_hz: Some(if index.is_multiple_of(5) {
+            96_000
+        } else {
+            44_100
+        }),
         artwork_token: Some(format!("art-{:05}", album_number)),
-        isrc: (index % 11 == 0).then(|| format!("ISRC{index:08}")),
-        musicbrainz_recording_id: (index % 101 == 0).then(|| format!("mbid-{index:08}")),
+        isrc: index.is_multiple_of(11).then(|| format!("ISRC{index:08}")),
+        musicbrainz_recording_id: index
+            .is_multiple_of(101)
+            .then(|| format!("mbid-{index:08}")),
         added_at: 1_700_000_000 + index as i64,
-        available: index % 97 != 0,
+        available: !index.is_multiple_of(97),
         observed_generation: 1,
         credits: vec![ArtistCredit {
             display_name: artist,
@@ -632,7 +638,7 @@ fn artist_album_keysets_cross_pages_without_omissions_or_duplicates() {
     let key = normalize_artist_key("Remote Guest");
     assert_eq!(
         catalog
-            .count_artist_albums(&key, &[source.clone()])
+            .count_artist_albums(&key, std::slice::from_ref(&source))
             .unwrap(),
         expected_available as u64
     );
@@ -737,7 +743,8 @@ fn album_fts_filters_and_descriptor_bound_cursors_are_exact() {
         catalog.count_albums(&broad).unwrap()
     );
 
-    let filter_cases: [(QueryDescriptor, fn(&AlbumRecord) -> bool); 5] = [
+    type FilterCase = (QueryDescriptor, fn(&AlbumRecord) -> bool);
+    let filter_cases: [FilterCase; 5] = [
         (
             QueryDescriptor::albums().with_source_buckets(vec!["plex".to_string()]),
             |row: &AlbumRecord| row.source == SourceKind::Plex,
@@ -1018,7 +1025,7 @@ fn upsert_retains_identity_and_fts_tracks_updates_and_deletes() {
     let mut catalog = Catalog::open_in_memory(1).unwrap();
     let mut track = projected(1, SourceKind::Jellyfin);
     track.title = "Old Needle".to_string();
-    catalog.upsert_tracks(&[track.clone()]).unwrap();
+    catalog.upsert_tracks(std::slice::from_ref(&track)).unwrap();
     assert_eq!(
         catalog
             .count_tracks(&QueryDescriptor::tracks().with_search("Old Needle"))
@@ -1027,7 +1034,7 @@ fn upsert_retains_identity_and_fts_tracks_updates_and_deletes() {
     );
 
     track.title = "New Signal".to_string();
-    catalog.upsert_tracks(&[track.clone()]).unwrap();
+    catalog.upsert_tracks(std::slice::from_ref(&track)).unwrap();
     assert_eq!(catalog.stats().unwrap().track_count, 1);
     assert_eq!(
         catalog

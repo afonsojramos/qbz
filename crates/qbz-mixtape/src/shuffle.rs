@@ -164,16 +164,12 @@ pub fn hybrid_sample<R: rand::Rng>(
         return Vec::new();
     }
 
-    let cap =
-        (((requested as f32) * ALBUM_CAP_PCT).ceil() as usize).max(ALBUM_CAP_MIN);
+    let cap = (((requested as f32) * ALBUM_CAP_PCT).ceil() as usize).max(ALBUM_CAP_MIN);
 
     // Bucket original indices by album_id (None goes to a synthetic bucket).
     let mut by_album: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for (i, t) in tracks.iter().enumerate() {
-        let key = t
-            .album_id
-            .clone()
-            .unwrap_or_else(|| "_unknown".to_string());
+        let key = t.album_id.clone().unwrap_or_else(|| "_unknown".to_string());
         by_album.entry(key).or_default().push(i);
     }
 
@@ -209,8 +205,7 @@ pub fn hybrid_sample<R: rand::Rng>(
 
     // Map indices back to tracks, preserving the picked order.
     use std::collections::HashMap;
-    let mut by_index: HashMap<usize, CoreQueueTrack> =
-        tracks.into_iter().enumerate().collect();
+    let mut by_index: HashMap<usize, CoreQueueTrack> = tracks.into_iter().enumerate().collect();
     picked
         .into_iter()
         .filter_map(|i| by_index.remove(&i))
@@ -316,9 +311,7 @@ fn strip_feat(s: &str) -> String {
 }
 
 fn strip_punctuation(s: &str) -> String {
-    const PUNCT: &[char] = &[
-        ',', '.', '!', '?', '¿', '¡', '"', '\'', ';', ':', '/', '\\',
-    ];
+    const PUNCT: &[char] = &[',', '.', '!', '?', '¿', '¡', '"', '\'', ';', ':', '/', '\\'];
     s.chars().filter(|c| !PUNCT.contains(c)).collect()
 }
 
@@ -620,7 +613,12 @@ mod tests {
             assert_eq!(out.len(), 1);
             seen.insert(out[0].id);
         }
-        assert_eq!(seen.len(), 3, "over 200 seeds, all 3 versions should win at least once; got {:?}", seen);
+        assert_eq!(
+            seen.len(),
+            3,
+            "over 200 seeds, all 3 versions should win at least once; got {:?}",
+            seen
+        );
     }
 
     // ──────── hybrid_sample ────────
@@ -722,10 +720,7 @@ mod tests {
         }
         let out = hybrid_sample(tracks, 15, &mut rng);
         assert_eq!(out.len(), 15);
-        let albums: BTreeSet<String> = out
-            .iter()
-            .map(|t| t.album_id.clone().unwrap())
-            .collect();
+        let albums: BTreeSet<String> = out.iter().map(|t| t.album_id.clone().unwrap()).collect();
         assert!(
             albums.len() >= 3,
             "expected >= 3 albums represented, got {} ({:?})",
@@ -757,6 +752,9 @@ mod tests {
         ];
         let out = dedup_by_similarity(tracks, &mut rng);
         // None of these collapse, so all survive in original order.
-        assert_eq!(out.iter().map(|t| t.id).collect::<Vec<_>>(), vec![10, 20, 30]);
+        assert_eq!(
+            out.iter().map(|t| t.id).collect::<Vec<_>>(),
+            vec![10, 20, 30]
+        );
     }
 }

@@ -191,7 +191,10 @@ mod tests {
 
         let only_hires = MediaFilter::from_json(r#"{"hires":true}"#);
         assert!(only_hires.track_enabled(&hires));
-        assert!(!only_hires.track_enabled(&dsd), "DSD no longer hides under Hi-Res");
+        assert!(
+            !only_hires.track_enabled(&dsd),
+            "DSD no longer hides under Hi-Res"
+        );
     }
 
     #[test]

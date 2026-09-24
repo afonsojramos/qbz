@@ -181,7 +181,10 @@ fn same_name(a: &str, b: &str) -> bool {
 /// Every candidate in the window whose trimmed, case-insensitive name equals
 /// the requested one and whose score is at least [`EXACT_NAME_MIN_SCORE`].
 /// No punctuation stripping, no fuzzy distance, no aliases.
-pub fn exact_name_candidates<'a>(name: &str, window: &'a [ArtistCandidate]) -> Vec<&'a ArtistCandidate> {
+pub fn exact_name_candidates<'a>(
+    name: &str,
+    window: &'a [ArtistCandidate],
+) -> Vec<&'a ArtistCandidate> {
     window
         .iter()
         .filter(|c| same_name(&c.name, name) && c.score.unwrap_or(0) >= EXACT_NAME_MIN_SCORE)
@@ -483,7 +486,7 @@ pub fn decide_scene_candidate(
             isrc_votes: verified[0].2,
         },
         _ => {
-            verified.sort_by(|a, b| b.1.unwrap_or(0).cmp(&a.1.unwrap_or(0)));
+            verified.sort_by_key(|a| std::cmp::Reverse(a.1.unwrap_or(0)));
             if verified[0].1.unwrap_or(0) > verified[1].1.unwrap_or(0) {
                 SceneDecision::Verified {
                     qobuz_id: verified[0].0,
@@ -962,7 +965,10 @@ mod tests {
     #[test]
     fn query_expression_quotes_the_whole_name() {
         assert_eq!(artist_query_expression("Swim Deep"), "artist:\"Swim Deep\"");
-        assert_eq!(artist_query_expression("  Swim Deep  "), "artist:\"Swim Deep\"");
+        assert_eq!(
+            artist_query_expression("  Swim Deep  "),
+            "artist:\"Swim Deep\""
+        );
     }
 
     #[test]
@@ -995,7 +1001,10 @@ mod tests {
 
     #[test]
     fn isrc_normalisation() {
-        assert_eq!(normalize_isrc(" gb-aaa-20-12345 ").as_deref(), Some("GBAAA2012345"));
+        assert_eq!(
+            normalize_isrc(" gb-aaa-20-12345 ").as_deref(),
+            Some("GBAAA2012345")
+        );
         assert_eq!(normalize_isrc("  "), None);
     }
 
@@ -1006,7 +1015,10 @@ mod tests {
         let window = swim_deep_window();
         // Score 88 < 90: the containment rule yields nothing — and NOT the
         // unrelated first result.
-        assert_eq!(select_exact_name("Swim Deep", &window), ExactNameSelection::None);
+        assert_eq!(
+            select_exact_name("Swim Deep", &window),
+            ExactNameSelection::None
+        );
         assert_eq!(decide_source_identity(&[], &[]), SourceIdentity::NotFound);
     }
 
@@ -1022,13 +1034,19 @@ mod tests {
     #[test]
     fn low_score_unrelated_first_result_is_never_accepted() {
         let window = vec![cand("x", "Something Else", 100), cand("y", "Swim Deep", 60)];
-        assert_eq!(select_exact_name("Swim Deep", &window), ExactNameSelection::None);
+        assert_eq!(
+            select_exact_name("Swim Deep", &window),
+            ExactNameSelection::None
+        );
     }
 
     #[test]
     fn several_exact_names_are_ambiguous_not_best_of_ties() {
         let window = vec![cand("a", "Eve", 100), cand("b", "Eve", 95)];
-        assert_eq!(select_exact_name("Eve", &window), ExactNameSelection::Ambiguous(2));
+        assert_eq!(
+            select_exact_name("Eve", &window),
+            ExactNameSelection::Ambiguous(2)
+        );
         assert!(matches!(
             decide_source_identity(&exact_name_candidates("Eve", &window), &[]),
             SourceIdentity::Ambiguous
@@ -1079,7 +1097,11 @@ mod tests {
     fn two_distinct_isrcs_agreeing_resolve_over_collaborations() {
         // No single ISRC is unique, but "a" appears on two distinct ISRCs
         // and every other candidate on one.
-        let window = vec![cand("a", "Eve", 100), cand("b", "Eve", 95), cand("c", "Eve", 92)];
+        let window = vec![
+            cand("a", "Eve", 100),
+            cand("b", "Eve", 95),
+            cand("c", "Eve", 92),
+        ];
         let ev = vec![
             credits("GBAAA0000001", &[&["a", "b"]]),
             credits("GBAAA0000002", &[&["a", "c"]]),
@@ -1095,7 +1117,11 @@ mod tests {
 
     #[test]
     fn duplicate_copies_of_one_isrc_count_once() {
-        let window = vec![cand("a", "Eve", 100), cand("b", "Eve", 95), cand("c", "Eve", 92)];
+        let window = vec![
+            cand("a", "Eve", 100),
+            cand("b", "Eve", 95),
+            cand("c", "Eve", 92),
+        ];
         // The same ISRC twice (two recording rows AND two evidence rows).
         let ev = vec![
             credits("GBAAA0000001", &[&["a", "b"], &["a", "b"]]),
@@ -1122,7 +1148,11 @@ mod tests {
 
     #[test]
     fn a_unique_vote_contradicted_by_a_more_credited_rival_fails_closed() {
-        let window = vec![cand("a", "Eve", 100), cand("b", "Eve", 95), cand("c", "Eve", 92)];
+        let window = vec![
+            cand("a", "Eve", 100),
+            cand("b", "Eve", 95),
+            cand("c", "Eve", 92),
+        ];
         let ev = vec![
             credits("GBAAA0000001", &[&["a"]]),
             credits("GBAAA0000002", &[&["b", "c"]]),
@@ -1169,7 +1199,11 @@ mod tests {
         .unwrap();
         let ev = IsrcCredits::from_search("GBAAA0000001", &response);
         assert_eq!(ev.isrc, "GBAAA0000001");
-        assert_eq!(ev.recordings.len(), 1, "only the recording that carries the ISRC");
+        assert_eq!(
+            ev.recordings.len(),
+            1,
+            "only the recording that carries the ISRC"
+        );
         assert_eq!(ev.recordings[0].recording_mbid, "r2");
         assert!(ev.credited().contains("a"));
         assert!(!ev.credited().contains("stranger"));
@@ -1179,7 +1213,7 @@ mod tests {
     fn guest_top_tracks_are_excluded_and_isrcs_deduped_and_capped() {
         let tracks = vec![
             (Some("GBAAA0000001"), Some(7)),
-            (Some("GBAAA0000002"), Some(99)), // guest appearance
+            (Some("GBAAA0000002"), Some(99)),   // guest appearance
             (Some("gb-aaa-00-00001"), Some(7)), // same ISRC, other spelling
             (None, Some(7)),
             (Some("GBAAA0000003"), Some(7)),
@@ -1213,7 +1247,10 @@ mod tests {
             (1, Some(40), vec![credits("A1", &[&["other"]])]),
             (2, Some(3), vec![]),
         ];
-        assert_eq!(decide_scene_candidate("mb-expected", &ev), SceneDecision::Unresolved);
+        assert_eq!(
+            decide_scene_candidate("mb-expected", &ev),
+            SceneDecision::Unresolved
+        );
     }
 
     #[test]
@@ -1233,7 +1270,10 @@ mod tests {
             (1, Some(3), vec![credits("A1", &[&["mb-expected"]])]),
             (2, Some(3), vec![credits("B1", &[&["mb-expected"]])]),
         ];
-        assert_eq!(decide_scene_candidate("mb-expected", &tie), SceneDecision::Unresolved);
+        assert_eq!(
+            decide_scene_candidate("mb-expected", &tie),
+            SceneDecision::Unresolved
+        );
     }
 
     // ----- orchestration with fakes (request counting) ---------------------
@@ -1250,7 +1290,10 @@ mod tests {
 
     impl FakeFetcher {
         fn with_window(self, name: &str, window: Vec<ArtistCandidate>) -> Self {
-            self.windows.lock().unwrap().insert(name.to_string(), window);
+            self.windows
+                .lock()
+                .unwrap()
+                .insert(name.to_string(), window);
             self
         }
         fn with_isrc(self, c: IsrcCredits) -> Self {
@@ -1258,7 +1301,10 @@ mod tests {
             self
         }
         fn counts(&self) -> (usize, usize) {
-            (*self.name_requests.lock().unwrap(), *self.isrc_requests.lock().unwrap())
+            (
+                *self.name_requests.lock().unwrap(),
+                *self.isrc_requests.lock().unwrap(),
+            )
         }
     }
 
@@ -1272,10 +1318,19 @@ mod tests {
                 if self.fail_search {
                     return Err(FetchError::Unavailable("503".into()));
                 }
-                Ok(self.windows.lock().unwrap().get(name).cloned().unwrap_or_default())
+                Ok(self
+                    .windows
+                    .lock()
+                    .unwrap()
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_default())
             })
         }
-        fn isrc_credits<'a>(&'a self, isrc: &'a str) -> BoxFuture<'a, Result<IsrcCredits, FetchError>> {
+        fn isrc_credits<'a>(
+            &'a self,
+            isrc: &'a str,
+        ) -> BoxFuture<'a, Result<IsrcCredits, FetchError>> {
             Box::pin(async move {
                 *self.isrc_requests.lock().unwrap() += 1;
                 if self.fail_isrcs {
@@ -1308,13 +1363,19 @@ mod tests {
             self.queries.lock().unwrap().get(key).cloned()
         }
         fn put_artist_query(&self, key: &str, window: &[ArtistCandidate]) {
-            self.queries.lock().unwrap().insert(key.into(), window.to_vec());
+            self.queries
+                .lock()
+                .unwrap()
+                .insert(key.into(), window.to_vec());
         }
         fn isrc_credits(&self, isrc: &str) -> Option<IsrcCredits> {
             self.isrcs.lock().unwrap().get(isrc).cloned()
         }
         fn put_isrc_credits(&self, credits: &IsrcCredits) {
-            self.isrcs.lock().unwrap().insert(credits.isrc.clone(), credits.clone());
+            self.isrcs
+                .lock()
+                .unwrap()
+                .insert(credits.isrc.clone(), credits.clone());
         }
         fn source_identity(&self, qobuz_artist_id: u64) -> Option<SourceIdentityRow> {
             self.sources
@@ -1325,10 +1386,17 @@ mod tests {
                 .cloned()
         }
         fn put_source_identity(&self, row: &SourceIdentityRow) {
-            self.sources.lock().unwrap().insert(row.qobuz_artist_id, row.clone());
+            self.sources
+                .lock()
+                .unwrap()
+                .insert(row.qobuz_artist_id, row.clone());
         }
         fn scene_identity(&self, mbid: &str, scope: &str) -> Option<SceneIdentityRow> {
-            self.scenes.lock().unwrap().get(&(mbid.into(), scope.into())).cloned()
+            self.scenes
+                .lock()
+                .unwrap()
+                .get(&(mbid.into(), scope.into()))
+                .cloned()
         }
         fn put_scene_identity(&self, row: &SceneIdentityRow) {
             self.scenes
@@ -1339,7 +1407,9 @@ mod tests {
     }
 
     fn rt() -> tokio::runtime::Runtime {
-        tokio::runtime::Builder::new_current_thread().build().unwrap()
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -1354,11 +1424,20 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let out = rt().block_on(resolve_source_artist(Some(&store), &fetcher, 7, "Eve", &isrcs));
+        let out = rt().block_on(resolve_source_artist(
+            Some(&store),
+            &fetcher,
+            7,
+            "Eve",
+            &isrcs,
+        ));
         assert_eq!(fetcher.counts(), (1, MAX_SOURCE_ISRCS));
         assert_eq!(out.requests, 1 + MAX_SOURCE_ISRCS);
         assert_eq!(out.identity, SourceIdentity::Ambiguous);
-        assert!(store.sources.lock().unwrap().is_empty(), "ambiguous writes no identity");
+        assert!(
+            store.sources.lock().unwrap().is_empty(),
+            "ambiguous writes no identity"
+        );
     }
 
     #[test]
@@ -1368,14 +1447,29 @@ mod tests {
             .with_isrc(credits("I1", &[&["a"]]));
         let store = MemStore::default();
         let isrcs = vec!["I1".to_string()];
-        let first = rt().block_on(resolve_source_artist(Some(&store), &fetcher, 7, "Eve", &isrcs));
-        assert!(matches!(first.identity, SourceIdentity::VerifiedIsrc { .. }));
+        let first = rt().block_on(resolve_source_artist(
+            Some(&store),
+            &fetcher,
+            7,
+            "Eve",
+            &isrcs,
+        ));
+        assert!(matches!(
+            first.identity,
+            SourceIdentity::VerifiedIsrc { .. }
+        ));
         assert_eq!(first.resolved.as_ref().map(|r| r.mbid.as_str()), Some("a"));
 
         // Same name, OTHER Qobuz id: no shared mapping.
         assert!(store.source_identity(8).is_none());
 
-        let again = rt().block_on(resolve_source_artist(Some(&store), &fetcher, 7, "Eve", &isrcs));
+        let again = rt().block_on(resolve_source_artist(
+            Some(&store),
+            &fetcher,
+            7,
+            "Eve",
+            &isrcs,
+        ));
         assert_eq!(again.cache, "hit");
         assert_eq!(again.requests, 0);
         assert_eq!(fetcher.counts(), (1, 1), "second resolve issued nothing");
@@ -1386,7 +1480,10 @@ mod tests {
         let fetcher = FakeFetcher::default().with_window("Eve", vec![cand("a", "Eve", 100)]);
         let store = MemStore::default();
         let out = rt().block_on(resolve_source_artist(Some(&store), &fetcher, 7, "Eve", &[]));
-        assert!(matches!(out.identity, SourceIdentity::UniqueExactName { .. }));
+        assert!(matches!(
+            out.identity,
+            SourceIdentity::UniqueExactName { .. }
+        ));
         assert!(store.sources.lock().unwrap().is_empty());
         // ...but the search WINDOW is cached as evidence and re-gated.
         assert!(store.artist_query(&artist_query_key("Eve")).is_some());
@@ -1514,8 +1611,12 @@ mod tests {
         catalog
             .by_name
             .insert("Eve".into(), vec![qc(1, "Eve", 40), qc(2, "Eve", 3)]);
-        catalog.isrcs.insert(1, vec!["A1".into(), "A2".into(), "A3".into()]);
-        catalog.isrcs.insert(2, vec!["B1".into(), "B2".into(), "B3".into()]);
+        catalog
+            .isrcs
+            .insert(1, vec!["A1".into(), "A2".into(), "A3".into()]);
+        catalog
+            .isrcs
+            .insert(2, vec!["B1".into(), "B2".into(), "B3".into()]);
         let fetcher = FakeFetcher::default()
             .with_isrc(credits("A1", &[&["other"]]))
             .with_isrc(credits("A2", &[&["other"]]))
@@ -1534,7 +1635,10 @@ mod tests {
             ))
             .unwrap()
             .unwrap();
-        assert_eq!(out.qobuz_id, 2, "the smaller catalog wins because it is the verified one");
+        assert_eq!(
+            out.qobuz_id, 2,
+            "the smaller catalog wins because it is the verified one"
+        );
         assert_eq!(out.kind, EvidenceKind::VerifiedIsrc);
         assert_eq!(fetcher.counts(), (0, 2 * MAX_SCENE_ISRCS_PER_CANDIDATE));
         assert_eq!(*catalog.page_requests.lock().unwrap(), 2);
@@ -1585,7 +1689,9 @@ mod tests {
     #[test]
     fn blacklisted_scene_hit_is_a_miss_and_unknown_scope_persists_nothing() {
         let mut catalog = FakeCatalog::default();
-        catalog.by_name.insert("Eve".into(), vec![qc(1, "Eve", 4), qc(9, "Eve", 1)]);
+        catalog
+            .by_name
+            .insert("Eve".into(), vec![qc(1, "Eve", 4), qc(9, "Eve", 1)]);
         let fetcher = FakeFetcher::default();
         let store = MemStore::default();
         store.put_scene_identity(&SceneIdentityRow {
@@ -1626,6 +1732,9 @@ mod tests {
                 &|_| false,
             ))
             .unwrap();
-        assert!(store2.scenes.lock().unwrap().is_empty(), "no scope, no durable row");
+        assert!(
+            store2.scenes.lock().unwrap().is_empty(),
+            "no scope, no durable row"
+        );
     }
 }

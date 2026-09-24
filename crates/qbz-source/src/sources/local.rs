@@ -194,10 +194,7 @@ impl LocalSource {
     /// Install the unbound-window path computation. See [`DbPool`]'s
     /// `fallback` field: the frontend passes `local_state::db_path`, because
     /// `UserDataPaths` lives in `qbz-app` and this crate must not link it.
-    pub fn set_unbound_fallback(
-        &self,
-        f: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>,
-    ) {
+    pub fn set_unbound_fallback(&self, f: Option<Box<dyn Fn() -> Option<PathBuf> + Send + Sync>>) {
         self.pool.set_unbound_fallback(f);
     }
 
@@ -603,11 +600,14 @@ impl Source for LocalSource {
                 .unwrap_or_default(),
             // Provider-owned replacement for the legacy local-track resolver.
             ItemKind::Track => {
-                let row_id = item.id().parse::<i64>().map_err(|_| SourceError::BadIdShape {
-                    by: SourceId::LOCAL,
-                    id: item.id().to_string(),
-                    why: "a normalised local track id is always numeric",
-                })?;
+                let row_id = item
+                    .id()
+                    .parse::<i64>()
+                    .map_err(|_| SourceError::BadIdShape {
+                        by: SourceId::LOCAL,
+                        id: item.id().to_string(),
+                        why: "a normalised local track id is always numeric",
+                    })?;
                 self.track_row(row_id).into_iter().collect()
             }
             ItemKind::Playlist | ItemKind::Artist => {
@@ -722,11 +722,14 @@ impl Source for LocalSource {
                 kind: item.kind(),
             });
         }
-        let row_id = item.id().parse::<i64>().map_err(|_| SourceError::BadIdShape {
-            by: SourceId::LOCAL,
-            id: item.id().to_string(),
-            why: "a normalised local track id is always numeric",
-        })?;
+        let row_id = item
+            .id()
+            .parse::<i64>()
+            .map_err(|_| SourceError::BadIdShape {
+                by: SourceId::LOCAL,
+                id: item.id().to_string(),
+                why: "a normalised local track id is always numeric",
+            })?;
         let row = self.track_row(row_id).ok_or_else(|| self.not_found(item))?;
 
         // An OFFLINE row is recognised here and REFUSED here, which is the
@@ -975,7 +978,13 @@ mod tests {
     fn a_non_numeric_track_id_is_a_named_error() {
         let raw = RawRef::new("local", ItemKind::Track, "not-a-number");
         let err = claimed(&raw).unwrap_err();
-        assert!(matches!(err, SourceError::BadIdShape { by: SourceId::LOCAL, .. }));
+        assert!(matches!(
+            err,
+            SourceError::BadIdShape {
+                by: SourceId::LOCAL,
+                ..
+            }
+        ));
     }
 
     // ── artwork_token: the LocalFile arm of the dead `classify` ─────────────

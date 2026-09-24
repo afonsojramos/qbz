@@ -61,7 +61,9 @@ impl Player {
                 // The spool is copied in bounded chunks; never materialize an
                 // oversized file just to pass it to the L2 writer.
                 let saved = cache.get_playback_cache().is_some_and(|disk| {
-                    disk.insert_from_with_quality(track_id, size as u64, quality, |file| writer.write_buffered_to(file))
+                    disk.insert_from_with_quality(track_id, size as u64, quality, |file| {
+                        writer.write_buffered_to(file)
+                    })
                 });
                 if saved {
                     qbz_cache::CacheAdmission::Disk
@@ -76,18 +78,27 @@ impl Player {
         .map_err(|error| format!("Playback cache task failed: {error}"))?
     }
 
-    pub(super) fn cached_data_for_quality(&self, track_id: u64, quality: Quality)
-        -> Option<(Vec<u8>, Option<qbz_cache::CacheQuality>)> {
+    pub(super) fn cached_data_for_quality(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Option<(Vec<u8>, Option<qbz_cache::CacheQuality>)> {
         if let Some(cached) = self.audio_cache.get(track_id) {
             if !cached_quality_below_requested(&cached.data, quality, cached.quality) {
                 return Some((cached.data, cached.quality));
             }
         }
-        let (mut file, acquisition) = self.audio_cache.get_playback_cache()?.open_with_quality(track_id)?;
+        let (mut file, acquisition) = self
+            .audio_cache
+            .get_playback_cache()?
+            .open_with_quality(track_id)?;
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).ok()?;
-        if cached_quality_below_requested(&bytes, quality, acquisition) { return None; }
-        self.audio_cache.promote_from_disk_with_quality(track_id, bytes.clone(), acquisition);
+        if cached_quality_below_requested(&bytes, quality, acquisition) {
+            return None;
+        }
+        self.audio_cache
+            .promote_from_disk_with_quality(track_id, bytes.clone(), acquisition);
         Some((bytes, acquisition))
     }
 
@@ -130,7 +141,9 @@ impl Player {
         start_position_secs: u64,
         play_gen: u64,
     ) -> Result<(), String> {
-        if !self.is_current_play(play_gen) { return Err("cached source superseded before preparation".into()); }
+        if !self.is_current_play(play_gen) {
+            return Err("cached source superseded before preparation".into());
+        }
         self.state
             .set_stream_quality(meta.sample_rate, meta.bit_depth.unwrap_or(16));
         self.state.begin_buffering(track_id, play_gen);

@@ -160,13 +160,22 @@ mod tests {
             QualityHint::from_hz(Some(24), 192_000.0, "FLAC").tier(),
             "max"
         );
-        assert_eq!(QualityHint::from_hz(Some(24), 96_000.0, "FLAC").tier(), "hires");
-        assert_eq!(QualityHint::from_hz(Some(16), 44_100.0, "FLAC").tier(), "cd");
+        assert_eq!(
+            QualityHint::from_hz(Some(24), 96_000.0, "FLAC").tier(),
+            "hires"
+        );
+        assert_eq!(
+            QualityHint::from_hz(Some(16), 44_100.0, "FLAC").tier(),
+            "cd"
+        );
         assert_eq!(QualityHint::from_hz(None, 44_100.0, "FLAC").tier(), "cd");
         assert_eq!(QualityHint::from_hz(None, 0.0, "").tier(), "");
         // kHz input passes through untouched (the QueueTrack convention).
         assert_eq!(QualityHint::from_hz(Some(24), 192.0, "FLAC").tier(), "max");
-        assert_eq!(QualityHint::from_hz(Some(1), 2_822_400.0, "DSF").tier(), "dsd");
+        assert_eq!(
+            QualityHint::from_hz(Some(1), 2_822_400.0, "DSF").tier(),
+            "dsd"
+        );
         assert_eq!(QualityHint::from_hz(None, 0.0, "dff").tier(), "dsd");
     }
 

@@ -78,9 +78,7 @@ async fn run(
     let mut active_owner_token: Option<OwnerAuthorityToken> = None;
     loop {
         match rx.recv().await {
-            Ok(event) => {
-                handle_event(&logger, &authority, &mut active_owner_token, event).await
-            }
+            Ok(event) => handle_event(&logger, &authority, &mut active_owner_token, event).await,
             Err(RecvError::Lagged(n)) => {
                 // Position ticks were dropped: the accumulator simply misses
                 // them (a gap > 5 s credits nothing), which is the honest
@@ -139,7 +137,9 @@ async fn handle_event(
         CoreEvent::PositionUpdated { position_secs, .. } => {
             logger.tick(position_secs * 1_000, true).await;
         }
-        CoreEvent::PlaybackStateChanged { state } if state == PlaybackState::Stopped => {
+        CoreEvent::PlaybackStateChanged {
+            state: PlaybackState::Stopped,
+        } => {
             logger.stopped(true).await;
         }
         _ => {}

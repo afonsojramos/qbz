@@ -93,7 +93,10 @@ async fn assert_serves_audio(url: &str, label: &str) {
         .get(reqwest::header::TRANSFER_ENCODING)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|te| te.eq_ignore_ascii_case("chunked"));
-    assert!(!chunked, "{label}: chunked response — the server is TRANSCODING");
+    assert!(
+        !chunked,
+        "{label}: chunked response — the server is TRANSCODING"
+    );
     let ctype = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
@@ -125,7 +128,8 @@ impl JellyfinCreds for JfCreds {
 
 #[tokio::test]
 async fn jellyfin_walks_from_a_sweep_to_real_audio() {
-    let Some((url, user, pass)) = env3("QBZ_JELLYFIN_URL", "QBZ_JELLYFIN_USER", "QBZ_JELLYFIN_PASS")
+    let Some((url, user, pass)) =
+        env3("QBZ_JELLYFIN_URL", "QBZ_JELLYFIN_USER", "QBZ_JELLYFIN_PASS")
     else {
         eprintln!("SKIP: QBZ_JELLYFIN_* not set");
         return;
@@ -136,7 +140,8 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
         .await
         .expect("authenticate");
     let client =
-        qbz_jellyfin::JellyfinClient::new(&url, &session.access_token, &session.user_id, "qbz-e2e").unwrap();
+        qbz_jellyfin::JellyfinClient::new(&url, &session.access_token, &session.user_id, "qbz-e2e")
+            .unwrap();
     let libs = client.music_libraries().await.expect("libraries");
     let (page, total) = client
         .tracks_page(Some(&libs[0].id), 0, None)
@@ -231,7 +236,10 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
 
     // 2. ARTWORK: a fetchable, tokenless url that really returns an image.
     match src.artwork(&album, ArtSize::Card) {
-        ArtRef::Fetch { url: art, cache_key } => {
+        ArtRef::Fetch {
+            url: art,
+            cache_key,
+        } => {
             assert_eq!(art, cache_key, "a stable jellyfin url should key on itself");
             assert!(
                 !art.contains(&session.access_token),
@@ -272,7 +280,9 @@ async fn jellyfin_walks_from_a_sweep_to_real_audio() {
     // ...and the same id resolves with NO hint, through the cache — the path a
     // producer that only kept the numeric id takes.
     let by_number = src
-        .claim(&RawRef::from_queue_track(&queue_track(qrow.id, "", "jellyfin")))
+        .claim(&RawRef::from_queue_track(&queue_track(
+            qrow.id, "", "jellyfin",
+        )))
         .expect("recognised by namespace bit")
         .expect("resolved through the cache");
     assert_eq!(by_number.id(), claimed.id());
@@ -308,7 +318,8 @@ impl SubsonicCreds for SubCreds {
 
 #[tokio::test]
 async fn subsonic_walks_from_a_sweep_to_real_audio() {
-    let Some((url, user, pass)) = env3("QBZ_SUBSONIC_URL", "QBZ_SUBSONIC_USER", "QBZ_SUBSONIC_PASS")
+    let Some((url, user, pass)) =
+        env3("QBZ_SUBSONIC_URL", "QBZ_SUBSONIC_USER", "QBZ_SUBSONIC_PASS")
     else {
         eprintln!("SKIP: QBZ_SUBSONIC_* not set");
         return;
@@ -394,7 +405,10 @@ async fn subsonic_walks_from_a_sweep_to_real_audio() {
 
     // The cover url CARRIES credentials, so its key must not be the url.
     match src.artwork(&album, ArtSize::Card) {
-        ArtRef::Fetch { url: art, cache_key } => {
+        ArtRef::Fetch {
+            url: art,
+            cache_key,
+        } => {
             assert_ne!(art, cache_key, "a credentialed url must not be its own key");
             assert!(
                 !cache_key.contains("t="),

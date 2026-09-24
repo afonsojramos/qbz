@@ -1,5 +1,5 @@
 use aes::cipher::{BlockDecryptMut, KeyIvInit, StreamCipher};
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hkdf::Hkdf;
 use sha2::Sha256;
 
@@ -11,7 +11,7 @@ type Aes128Ctr = ctr::Ctr128BE<aes::Aes128>;
 /// Strict hex decode for the app seed (HKDF IKM). Fail closed on odd length
 /// or non-hex digits — never zero-fill bad nibbles.
 fn hex_decode(hex: &str) -> Result<Vec<u8>, CmafError> {
-    if hex.len() % 2 != 0 {
+    if !hex.len().is_multiple_of(2) {
         return Err(CmafError::InvalidInfos(format!(
             "seed hex must have even length, got {}",
             hex.len()
@@ -46,7 +46,8 @@ pub fn derive_session_key(seed: &str, infos: &str) -> Result<[u8; 16], CmafError
 
     let hk = Hkdf::<Sha256>::new(Some(&salt), &ikm);
     let mut okm = [0u8; 16];
-    hk.expand(&info, &mut okm).map_err(|_| CmafError::HkdfExpand)?;
+    hk.expand(&info, &mut okm)
+        .map_err(|_| CmafError::HkdfExpand)?;
 
     Ok(okm)
 }
@@ -73,10 +74,9 @@ pub fn unwrap_content_key(session_key: &[u8; 16], key_str: &str) -> Result<[u8; 
     }
 
     let mut buf = wrapped.clone();
-    let decrypted =
-        Aes128CbcDec::new(session_key.into(), iv.as_slice().into())
-            .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
-            .map_err(|e| CmafError::AesDecrypt(format!("AES-CBC unwrap failed: {e}")))?;
+    let decrypted = Aes128CbcDec::new(session_key.into(), iv.as_slice().into())
+        .decrypt_padded_mut::<aes::cipher::block_padding::Pkcs7>(&mut buf)
+        .map_err(|e| CmafError::AesDecrypt(format!("AES-CBC unwrap failed: {e}")))?;
 
     if decrypted.len() != 16 {
         return Err(CmafError::InvalidKey(format!(

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Qobuz account migration for QBZ — snapshot one account's favorites and playlists, plan and apply them additively into another (headless, frontend-agnostic)"
 authors = ["blitzkriegfc"]
+license = "MIT"
 
 [dependencies]
 qbz-models = { path = "../qbz-models" }

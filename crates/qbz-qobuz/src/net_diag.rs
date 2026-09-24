@@ -95,7 +95,10 @@ mod tests {
             "precondition: reqwest's Display embeds the url: {err}"
         );
 
-        assert_eq!(describe_reqwest_error(&err), "HTTP transport connection failed");
+        assert_eq!(
+            describe_reqwest_error(&err),
+            "HTTP transport connection failed"
+        );
         let classified = crate::retry::classify_reqwest(&err, "fetch").to_string();
         assert_eq!(classified, "fetch: HTTP transport connection failed");
         assert!(!classified.contains("SIGNEDSECRET"));

@@ -39,7 +39,12 @@ pub struct BootedRuntime {
 /// `qbzd run` — boot the daemon in the foreground, park on signals, shut down
 /// gracefully. Returns the process exit code (0 = clean shutdown). `warns` are
 /// the unknown-key warnings surfaced by [`QbzdConfig::load`] in `main`.
-pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>, orbit: bool) -> Result<i32, String> {
+pub async fn run(
+    roots: ProfileRoots,
+    cfg: QbzdConfig,
+    warns: Vec<String>,
+    orbit: bool,
+) -> Result<i32, String> {
     // 1. argv parse happened in main(). 2. logging — to its OWN file, never
     //    the desktop app's (a shared qbz.log was rotated from under the GUI):
     qbz_log::install_named(&cfg.log.level, "qbzd.log");
@@ -213,7 +218,10 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>, orbit
     //       Holds no Arc<AppRuntime>; aborted for a clean shutdown.
     let hooks = match crate::hooks::script(&roots) {
         Some(path) => {
-            log::info!("[hooks] running {} on daemon events (hooks.script)", path.display());
+            log::info!(
+                "[hooks] running {} on daemon events (hooks.script)",
+                path.display()
+            );
             Some(crate::hooks::spawn(path, booted.bus.subscribe()))
         }
         None => None,
@@ -251,13 +259,22 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>, orbit
         Arc::new(std::sync::OnceLock::new());
     // Orbit uses the daemon's OWN roots. Construction is inert and local
     // library access never depends on Qobuz authentication. No second port.
-    let library = orbit.then(|| Arc::new(qbz_library::service::LibraryService::new(
-        qbz_library::LibraryStore::new(roots.data.join("library.db")),
-        roots.cache.join("artwork"),
-    )));
-    let library_endpoint = library.as_ref().map(|service| qbz_control::library::LibraryEndpoint::new(
-        service.clone(), std::env::var("HOSTNAME").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| "qbzd".into()), true,
-    ));
+    let library = orbit.then(|| {
+        Arc::new(qbz_library::service::LibraryService::new(
+            qbz_library::LibraryStore::new(roots.data.join("library.db")),
+            roots.cache.join("artwork"),
+        ))
+    });
+    let library_endpoint = library.as_ref().map(|service| {
+        qbz_control::library::LibraryEndpoint::new(
+            service.clone(),
+            std::env::var("HOSTNAME")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "qbzd".into()),
+            true,
+        )
+    });
     let api = crate::api::serve(
         bound,
         crate::api::ApiState {
@@ -304,7 +321,9 @@ pub async fn run(roots: ProfileRoots, cfg: QbzdConfig, warns: Vec<String>, orbit
     //     documented skeptic-correction #1 trap (§8.1).
     wait_for_signal().await;
     // Reject new library work immediately; join after the API stops serving.
-    if let Some(library) = &library { library.close(); }
+    if let Some(library) = &library {
+        library.close();
+    }
 
     // ── Shutdown (§8.2, ordered). Step 1: disconnect the QConnect session (and
     //    stop its auto-connect watcher) BEFORE playback is stopped, then drop the
@@ -603,15 +622,14 @@ fn build_driver_deps(
         owner_actions_allowed: Arc::new(move || qconnect_authority_allowed.owner_actions_allowed()),
         observe_authority: Arc::new(move || {
             match qconnect_authority_observe.observe_owner_authority() {
-                crate::qconnect::authority::OwnerAuthorityObservation::Owner {
-                    token,
-                    permit,
-                } => qbz_app::playback_driver::DriverAuthorityObservation::Owner(
-                    qbz_app::playback_driver::DriverOwnerAdmission::new(
-                        qbz_app::playback_driver::DriverOwnerToken::new(token),
-                        qbz_app::playback_driver::DriverActionPermit::new(permit),
-                    ),
-                ),
+                crate::qconnect::authority::OwnerAuthorityObservation::Owner { token, permit } => {
+                    qbz_app::playback_driver::DriverAuthorityObservation::Owner(
+                        qbz_app::playback_driver::DriverOwnerAdmission::new(
+                            qbz_app::playback_driver::DriverOwnerToken::new(token),
+                            qbz_app::playback_driver::DriverActionPermit::new(permit),
+                        ),
+                    )
+                }
                 crate::qconnect::authority::OwnerAuthorityObservation::Delegated => {
                     qbz_app::playback_driver::DriverAuthorityObservation::Delegated
                 }
@@ -780,7 +798,9 @@ pub(crate) fn set_needs_auth(shared: &Arc<Mutex<DaemonShared>>, err: Option<Core
     match err {
         None => log::info!("Not logged in — run 'qbzd setup' (or 'qbzd login')"),
         Some(e) => {
-            log::warn!("Qobuz rejected the saved session ({e}) — run 'qbzd login' to re-authenticate")
+            log::warn!(
+                "Qobuz rejected the saved session ({e}) — run 'qbzd login' to re-authenticate"
+            )
         }
     }
 }
@@ -814,9 +834,7 @@ pub(crate) fn latch_undecryptable_token(shared: &Arc<Mutex<DaemonShared>>) {
             "the saved token could not be decrypted by this daemon — run 'qbzd login' to re-authenticate".into(),
         );
     }
-    log::warn!(
-        "saved token present but undecryptable — run 'qbzd login' to re-authenticate"
-    );
+    log::warn!("saved token present but undecryptable — run 'qbzd login' to re-authenticate");
 }
 
 /// Latch an auth error so a `status` call remains diagnosable after the fact
@@ -877,7 +895,10 @@ fn spawn_auth_retry(
                     return;
                 }
                 Err(e) => {
-                    log::warn!("session restore retry {} failed (network-class): {e}", i + 1);
+                    log::warn!(
+                        "session restore retry {} failed (network-class): {e}",
+                        i + 1
+                    );
                     // 01 §9.3: latch `network.online` false on every real
                     // network-class outcome, not just the first.
                     if let Ok(s) = shared.lock() {
@@ -1055,7 +1076,9 @@ pub(crate) fn reload_audio(state: &crate::api::ApiState) {
         .map(|old| audio_routing_changed(&old, &fresh))
         .unwrap_or(false);
     if needs_reinit {
-        log::info!("[reload] routing-critical audio field changed — reinitializing the output device");
+        log::info!(
+            "[reload] routing-critical audio field changed — reinitializing the output device"
+        );
         if let Err(e) = player.reinit_device(fresh.output_device.clone()) {
             log::warn!("[reload] player.reinit_device failed: {e}");
         }
@@ -1400,7 +1423,10 @@ mod tests {
 
         let mut hw_vol = base.clone();
         hw_vol.alsa_hardware_volume = !base.alsa_hardware_volume;
-        assert!(audio_routing_changed(&base, &hw_vol), "alsa_hardware_volume");
+        assert!(
+            audio_routing_changed(&base, &hw_vol),
+            "alsa_hardware_volume"
+        );
 
         let mut hw_control = base.clone();
         let route = serde_json::from_str("\"alsa-route-v1|card=card:D50|pcm=hw|DEV=0\"")
@@ -1435,7 +1461,10 @@ mod tests {
 
         let mut rate = base.clone();
         rate.device_max_sample_rate = Some(192_000);
-        assert!(audio_routing_changed(&base, &rate), "device_max_sample_rate");
+        assert!(
+            audio_routing_changed(&base, &rate),
+            "device_max_sample_rate"
+        );
     }
 
     #[test]

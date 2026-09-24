@@ -216,7 +216,10 @@ impl LyricsDoc {
                         }
                     }
                     Err(e) => {
-                        log::warn!("[Lyrics] unparsable cached wsync json ({}); falling back to LRC", e);
+                        log::warn!(
+                            "[Lyrics] unparsable cached wsync json ({}); falling back to LRC",
+                            e
+                        );
                     }
                 }
             }
@@ -275,7 +278,10 @@ mod tests {
             assert_eq!(LyricsProvider::from_str(provider.as_str()), provider);
         }
         // Unknown strings collapse to Lrclib (Tauri parity).
-        assert_eq!(LyricsProvider::from_str("musixmatch"), LyricsProvider::Lrclib);
+        assert_eq!(
+            LyricsProvider::from_str("musixmatch"),
+            LyricsProvider::Lrclib
+        );
     }
 
     #[test]

@@ -416,7 +416,14 @@ impl DaemonRendererEngine {
         }
         let playback_result = self
             .core()
-            .play_track_resolved_with_state(track_id, quality, None, None, start_position_secs, playing)
+            .play_track_resolved_with_state(
+                track_id,
+                quality,
+                None,
+                None,
+                start_position_secs,
+                playing,
+            )
             .await;
         self.ensure_current()?;
         playback_result.map_err(|error| {
@@ -571,7 +578,14 @@ impl QconnectRendererEngine for DaemonRendererEngine {
         duration_secs: u64,
         start_position_secs: u64,
     ) -> Result<(), String> {
-        self.start_track_stream_with_state(track_id, requested_quality, duration_secs, start_position_secs, true).await
+        self.start_track_stream_with_state(
+            track_id,
+            requested_quality,
+            duration_secs,
+            start_position_secs,
+            true,
+        )
+        .await
     }
 
     async fn start_track_stream_with_state(
@@ -655,7 +669,12 @@ impl QconnectRendererEngine for DaemonRendererEngine {
         match download_remote_audio(&stream_url.url).await {
             Ok(audio_data) => {
                 self.ensure_current()?;
-                let playback_result = self.core().player().play_data_at(audio_data, track_id, start_position_secs, playing);
+                let playback_result = self.core().player().play_data_at(
+                    audio_data,
+                    track_id,
+                    start_position_secs,
+                    playing,
+                );
                 self.ensure_current()?;
                 playback_result.map_err(|err| format!("play remote track {track_id}: {err}"))?;
                 Ok(())

@@ -25,9 +25,7 @@ use tokio::sync::{broadcast, Notify};
 use tokio::task::JoinHandle;
 
 use crate::adapter::DaemonAdapter;
-use crate::qconnect::authority::{
-    AuthorityCell, OwnerAuthorityObservation, OwnerAuthorityToken,
-};
+use crate::qconnect::authority::{AuthorityCell, OwnerAuthorityObservation, OwnerAuthorityToken};
 
 type Runtime = Arc<AppRuntime<DaemonAdapter>>;
 
@@ -77,9 +75,7 @@ pub fn spawn(
             // observation remains stamped `None` even if an owner is installed
             // while the async queue lookup below is pending.
             let (owner_token, owner_permit) = match authority.observe_owner_authority() {
-                OwnerAuthorityObservation::Owner { token, permit } => {
-                    (Some(token), Some(permit))
-                }
+                OwnerAuthorityObservation::Owner { token, permit } => (Some(token), Some(permit)),
                 OwnerAuthorityObservation::Delegated => (None, None),
                 OwnerAuthorityObservation::Fenced => {
                     // A candidate activation can hold the fence while the

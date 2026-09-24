@@ -361,8 +361,8 @@ mod tests {
     #[test]
     fn synced_outranks_plain() {
         let items = vec![
-            item("S", "A", None, None, Some("plain text")),    // +1
-            item("S", "A", None, Some("[00:01.00]hi"), None),  // +2
+            item("S", "A", None, None, Some("plain text")),   // +1
+            item("S", "A", None, Some("[00:01.00]hi"), None), // +2
         ];
         let best = pick_best_match(&items, "S", "A", None).unwrap();
         assert!(best.synced_lyrics.is_some());

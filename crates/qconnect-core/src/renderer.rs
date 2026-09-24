@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::QueueItem;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct QConnectRendererState {
     pub active: Option<bool>,
     pub playing_state: Option<i32>,
@@ -16,25 +16,6 @@ pub struct QConnectRendererState {
     pub loop_mode: Option<i32>,
     pub shuffle_mode: Option<bool>,
     pub updated_at_ms: u64,
-}
-
-impl Default for QConnectRendererState {
-    fn default() -> Self {
-        Self {
-            active: None,
-            playing_state: None,
-            current_position_ms: None,
-            current_track: None,
-            next_track: None,
-            volume: None,
-            volume_delta: None,
-            muted: None,
-            max_audio_quality: None,
-            loop_mode: None,
-            shuffle_mode: None,
-            updated_at_ms: 0,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,8 +60,14 @@ pub fn apply_renderer_command(
             next_track,
         } => {
             // Position belongs to an occurrence, never to the next track.
-            if current_track.as_ref().zip(state.current_track.as_ref()).is_some_and(|(next, previous)|
-                next.track_id != previous.track_id || next.queue_item_id != previous.queue_item_id) {
+            if current_track
+                .as_ref()
+                .zip(state.current_track.as_ref())
+                .is_some_and(|(next, previous)| {
+                    next.track_id != previous.track_id
+                        || next.queue_item_id != previous.queue_item_id
+                })
+            {
                 state.current_position_ms = None;
                 state.next_track = None;
             }
@@ -143,10 +130,16 @@ mod tests {
     #[test]
     fn partial_first_target_keeps_position_but_a_new_occurrence_does_not() {
         let mut state = QConnectRendererState::default();
-        let item = QueueItem { track_context_uuid: String::new(), track_id: 10, queue_item_id: 0 };
+        let item = QueueItem {
+            track_context_uuid: String::new(),
+            track_id: 10,
+            queue_item_id: 0,
+        };
         let command = |track, position| RendererCommand::SetState {
-            playing_state: Some(3), current_position_ms: position,
-            current_track: track, next_track: None,
+            playing_state: Some(3),
+            current_position_ms: position,
+            current_track: track,
+            next_track: None,
         };
         apply_renderer_command(&mut state, &command(None, Some(45_000)), 1);
         apply_renderer_command(&mut state, &command(Some(item.clone()), None), 2);

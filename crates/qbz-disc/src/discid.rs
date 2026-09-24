@@ -54,11 +54,7 @@ pub fn disc_id(starts: &[u32], leadout: u32) -> Option<String> {
     // URL-safe base64 (that keeps `=`), so the alphabet is applied by hand.
     use base64::Engine as _;
     let b64 = base64::engine::general_purpose::STANDARD.encode(digest);
-    Some(
-        b64.replace('+', ".")
-            .replace('/', "_")
-            .replace('=', "-"),
-    )
+    Some(b64.replace('+', ".").replace('/', "_").replace('=', "-"))
 }
 
 /// The URL that resolves a Disc ID to releases, with recordings and artists.
@@ -78,8 +74,7 @@ mod tests {
     use super::*;
 
     /// The owner's disc, and the id MusicBrainz actually answered to.
-    const FEAR_INOCULUM_STARTS: [u32; 7] =
-        [0, 46_577, 100_047, 157_373, 218_718, 264_120, 285_735];
+    const FEAR_INOCULUM_STARTS: [u32; 7] = [0, 46_577, 100_047, 157_373, 218_718, 264_120, 285_735];
     const FEAR_INOCULUM_LEADOUT: u32 = 356_568;
     const FEAR_INOCULUM_ID: &str = "BeNBMsD8Du5NO2W61Yk.B2jwwIs-";
 

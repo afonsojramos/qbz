@@ -168,7 +168,9 @@ impl ImageCacheService {
         // LRU entries (oldest access first), bounded to this batch.
         let mut stmt = self
             .conn
-            .prepare("SELECT hash, file_size FROM cached_images ORDER BY last_accessed ASC LIMIT ?1")
+            .prepare(
+                "SELECT hash, file_size FROM cached_images ORDER BY last_accessed ASC LIMIT ?1",
+            )
             .map_err(|e| format!("Failed to prepare eviction query: {}", e))?;
         let limit = i64::try_from(max_entries).unwrap_or(i64::MAX);
         let entries: Vec<(String, i64)> = stmt
@@ -289,7 +291,8 @@ mod tests {
     use super::*;
 
     fn fresh_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("qbz-image-cache-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("qbz-image-cache-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }
@@ -307,7 +310,13 @@ mod tests {
 
         let batch = cache.evict(150, usize::MAX).unwrap();
 
-        assert_eq!(batch, EvictBatch { freed_bytes: 200, evicted_entries: 2 });
+        assert_eq!(
+            batch,
+            EvictBatch {
+                freed_bytes: 200,
+                evicted_entries: 2
+            }
+        );
         assert!(!oldest.exists());
         assert!(!middle.exists());
         assert!(newest.exists());
@@ -323,8 +332,17 @@ mod tests {
         let dir = fresh_dir("noop");
         let cache = ImageCacheService::open_at(dir.clone()).unwrap();
         let kept = cache.store("https://img/a", &[0u8; 100]).unwrap();
-        assert_eq!(cache.evict(100, usize::MAX).unwrap(), EvictBatch { freed_bytes: 0, evicted_entries: 0 });
-        assert_eq!(cache.evict(u64::MAX, usize::MAX).unwrap().evicted_entries, 0);
+        assert_eq!(
+            cache.evict(100, usize::MAX).unwrap(),
+            EvictBatch {
+                freed_bytes: 0,
+                evicted_entries: 0
+            }
+        );
+        assert_eq!(
+            cache.evict(u64::MAX, usize::MAX).unwrap().evicted_entries,
+            0
+        );
         assert!(kept.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -334,13 +352,39 @@ mod tests {
         let dir = fresh_dir("batch");
         let cache = ImageCacheService::open_at(dir.clone()).unwrap();
         for i in 0..3 {
-            cache.store(&format!("https://img/{i}"), &[0u8; 100]).unwrap();
+            cache
+                .store(&format!("https://img/{i}"), &[0u8; 100])
+                .unwrap();
             cache.backdate(&format!("https://img/{i}"), 1_000 + i);
         }
-        assert_eq!(cache.evict(0, 1).unwrap(), EvictBatch { freed_bytes: 100, evicted_entries: 1 });
-        assert_eq!(cache.evict(0, 1).unwrap(), EvictBatch { freed_bytes: 100, evicted_entries: 1 });
-        assert_eq!(cache.evict(0, 1).unwrap(), EvictBatch { freed_bytes: 100, evicted_entries: 1 });
-        assert_eq!(cache.evict(0, 1).unwrap(), EvictBatch { freed_bytes: 0, evicted_entries: 0 });
+        assert_eq!(
+            cache.evict(0, 1).unwrap(),
+            EvictBatch {
+                freed_bytes: 100,
+                evicted_entries: 1
+            }
+        );
+        assert_eq!(
+            cache.evict(0, 1).unwrap(),
+            EvictBatch {
+                freed_bytes: 100,
+                evicted_entries: 1
+            }
+        );
+        assert_eq!(
+            cache.evict(0, 1).unwrap(),
+            EvictBatch {
+                freed_bytes: 100,
+                evicted_entries: 1
+            }
+        );
+        assert_eq!(
+            cache.evict(0, 1).unwrap(),
+            EvictBatch {
+                freed_bytes: 0,
+                evicted_entries: 0
+            }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -351,16 +395,16 @@ mod tests {
         let tracked = cache.store("https://img/tracked", &[0u8; 100]).unwrap();
         let old_orphan = dir.join("0000000000000000000000000000dead.img");
         std::fs::write(&old_orphan, [0u8; 300]).unwrap();
-        let two_hours_ago = filetime::FileTime::from_unix_time(
-            filetime::FileTime::now().unix_seconds() - 7_200,
-            0,
-        );
+        let two_hours_ago =
+            filetime::FileTime::from_unix_time(filetime::FileTime::now().unix_seconds() - 7_200, 0);
         filetime::set_file_mtime(&old_orphan, two_hours_ago).unwrap();
         let fresh_orphan = dir.join("000000000000000000000000000beef1.img");
         std::fs::write(&fresh_orphan, [0u8; 50]).unwrap();
 
         assert_eq!(
-            cache.sweep_orphans(std::time::Duration::from_secs(3_600)).unwrap(),
+            cache
+                .sweep_orphans(std::time::Duration::from_secs(3_600))
+                .unwrap(),
             (1, 300)
         );
         assert!(tracked.exists(), "a tracked file is never swept");

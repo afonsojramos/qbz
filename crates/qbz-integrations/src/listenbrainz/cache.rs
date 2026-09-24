@@ -130,6 +130,7 @@ impl ListenBrainzCache {
     }
 
     /// Queue a listen for later submission
+    #[allow(clippy::too_many_arguments)]
     pub fn queue_listen(
         &self,
         listened_at: i64,

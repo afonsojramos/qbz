@@ -97,15 +97,15 @@ impl MediaIntegration for LinuxHandle {
     }
 
     fn set_position(&self, position: std::time::Duration) {
-        let _ = self
-            .tx
-            .try_send(Update::Position(Time::from_micros(position.as_micros() as i64)));
+        let _ = self.tx.try_send(Update::Position(Time::from_micros(
+            position.as_micros() as i64
+        )));
     }
 
     fn seeked(&self, position: std::time::Duration) {
-        let _ = self
-            .tx
-            .try_send(Update::Seeked(Time::from_micros(position.as_micros() as i64)));
+        let _ = self.tx.try_send(Update::Seeked(Time::from_micros(
+            position.as_micros() as i64
+        )));
     }
 }
 
@@ -119,10 +119,12 @@ fn map_status(s: PlaybackStatus) -> MprisStatus {
 
 fn build_metadata(meta: &TrackMeta) -> Metadata {
     let seq = TRACK_SEQ.fetch_add(1, Ordering::Relaxed);
-    let trackid = TrackId::try_from(format!("/com/blitzfc/qbz/track/{seq}"))
-        .unwrap_or(TrackId::NO_TRACK);
+    let trackid =
+        TrackId::try_from(format!("/com/blitzfc/qbz/track/{seq}")).unwrap_or(TrackId::NO_TRACK);
 
-    let mut b = Metadata::builder().trackid(trackid).title(meta.title.clone());
+    let mut b = Metadata::builder()
+        .trackid(trackid)
+        .title(meta.title.clone());
     if !meta.artist.is_empty() {
         b = b.artist([meta.artist.clone()]);
     }

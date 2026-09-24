@@ -89,17 +89,12 @@ fn default_streamable() -> bool {
 }
 
 /// Repeat mode options
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RepeatMode {
+    #[default]
     Off,
     All,
     One,
-}
-
-impl Default for RepeatMode {
-    fn default() -> Self {
-        Self::Off
-    }
 }
 
 /// Queue state snapshot for frontend
@@ -122,9 +117,10 @@ pub struct QueueState {
 // ============ Playback State ============
 
 /// Current playback state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PlaybackState {
     /// No track loaded
+    #[default]
     Stopped,
     /// Track loaded and playing
     Playing,
@@ -132,12 +128,6 @@ pub enum PlaybackState {
     Paused,
     /// Loading/buffering track
     Loading,
-}
-
-impl Default for PlaybackState {
-    fn default() -> Self {
-        Self::Stopped
-    }
 }
 
 /// Detailed playback status with position and duration

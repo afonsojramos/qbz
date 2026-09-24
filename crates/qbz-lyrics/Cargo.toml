@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Lyrics engine for QBZ — Qobuz-first source chain, LRC parser/emitter, external providers, SQLite cache (headless, frontend-agnostic)"
 authors = ["blitzkriegfc"]
+license = "MIT"
 
 [dependencies]
 # Shared QBZ crates (Qobuz lyrics endpoint + wire DTOs live in qbz-qobuz)

@@ -58,10 +58,10 @@
 mod audio_cache;
 mod quality;
 pub use quality::CacheQuality;
-mod memory;
 mod image_cache;
+mod memory;
 mod playback_cache;
 
-pub use audio_cache::{AudioCache, CacheStats, CachedTrack, CacheAdmission};
+pub use audio_cache::{AudioCache, CacheAdmission, CacheStats, CachedTrack};
 pub use image_cache::{EvictBatch, ImageCacheService, ImageCacheStats};
 pub use playback_cache::{PlaybackCache, PlaybackCacheStats};

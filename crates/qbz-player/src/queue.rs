@@ -123,9 +123,7 @@ impl QueueManager {
             let Some(key) = track.source_item_id_hint.as_deref() else {
                 continue;
             };
-            if let Some((_, bit_depth, sample_rate)) =
-                updates.iter().find(|(k, _, _)| k == key)
-            {
+            if let Some((_, bit_depth, sample_rate)) = updates.iter().find(|(k, _, _)| k == key) {
                 if let Some(bd) = *bit_depth {
                     track.bit_depth = Some(bd);
                     track.hires = bd > 16;
@@ -246,8 +244,11 @@ impl QueueManager {
         log::debug!(
             "[queue][#442] play-next id={} linear@{insert_index} shuffle={} \
              mnc={} mlc={} current={:?} order_len={}",
-            state.tracks.get(insert_index.min(state.tracks.len().saturating_sub(1)))
-                .map(|t| t.id).unwrap_or(0),
+            state
+                .tracks
+                .get(insert_index.min(state.tracks.len().saturating_sub(1)))
+                .map(|t| t.id)
+                .unwrap_or(0),
             state.shuffle,
             state.manual_next_count,
             state.manual_later_count,
@@ -508,14 +509,12 @@ impl QueueManager {
         if let Some(curr_idx) = state.current_index {
             if index < curr_idx {
                 state.current_index = Some(curr_idx - 1);
-            } else if index == curr_idx {
-                if curr_idx >= state.tracks.len() {
-                    state.current_index = if state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(state.tracks.len() - 1)
-                    };
-                }
+            } else if index == curr_idx && curr_idx >= state.tracks.len() {
+                state.current_index = if state.tracks.is_empty() {
+                    None
+                } else {
+                    Some(state.tracks.len() - 1)
+                };
             }
         }
 
@@ -570,14 +569,12 @@ impl QueueManager {
         if let Some(curr_idx) = state.current_index {
             if actual_index < curr_idx {
                 state.current_index = Some(curr_idx - 1);
-            } else if actual_index == curr_idx {
-                if curr_idx >= state.tracks.len() {
-                    state.current_index = if state.tracks.is_empty() {
-                        None
-                    } else {
-                        Some(state.tracks.len() - 1)
-                    };
-                }
+            } else if actual_index == curr_idx && curr_idx >= state.tracks.len() {
+                state.current_index = if state.tracks.is_empty() {
+                    None
+                } else {
+                    Some(state.tracks.len() - 1)
+                };
             }
         }
 
@@ -739,7 +736,7 @@ impl QueueManager {
         }
 
         if direction == QueueMoveDirection::Down {
-            to_idx = to_idx - 1;
+            to_idx -= 1;
         }
 
         log::info!(
@@ -919,7 +916,9 @@ impl QueueManager {
 
             state.history.retain(|&index| index != source_index);
             state.shuffle_order.remove(source_order_position);
-            let base_position = current_after_removal.map(|position| position + 1).unwrap_or(0);
+            let base_position = current_after_removal
+                .map(|position| position + 1)
+                .unwrap_or(0);
             let insertion_slot = match source_upcoming_position {
                 Some(position) if to_slot > position => to_slot - 1,
                 _ => to_slot,
@@ -1366,8 +1365,8 @@ impl QueueManager {
                 // rows are the shuffle-order rows ahead of the target, so they
                 // become the cursor's back path in play order.
                 let target_index = *state.shuffle_order.get(upcoming_index)?;
-                let crossed = state.shuffle_order[..upcoming_index.min(state.shuffle_order.len())]
-                    .to_vec();
+                let crossed =
+                    state.shuffle_order[..upcoming_index.min(state.shuffle_order.len())].to_vec();
                 (target_index, crossed)
             }
             None => {
@@ -1476,7 +1475,9 @@ impl QueueManager {
             }
         }
 
-        state.history.retain(|&history_index| history_index != index);
+        state
+            .history
+            .retain(|&history_index| history_index != index);
         state.current_index = Some(index);
 
         if state.shuffle {
@@ -1757,12 +1758,7 @@ impl QueueManager {
                     .filter_map(|&idx| state.tracks.get(idx).cloned())
                     .collect()
             } else {
-                state
-                    .tracks
-                    .iter()
-                    .skip(curr_idx + 1)
-                    .cloned()
-                    .collect()
+                state.tracks.iter().skip(curr_idx + 1).cloned().collect()
             }
         } else if state.shuffle {
             // IDLE + shuffle: the upcoming list must follow the shuffle order,
@@ -1954,7 +1950,10 @@ impl QueueManager {
         let mut new_indices_by_id: HashMap<u64, VecDeque<usize>> =
             HashMap::with_capacity(new_tracks.len());
         for (idx, track) in new_tracks.iter().enumerate() {
-            new_indices_by_id.entry(track.id).or_default().push_back(idx);
+            new_indices_by_id
+                .entry(track.id)
+                .or_default()
+                .push_back(idx);
         }
         let mut old_to_new = vec![None; state.tracks.len()];
         for (old_index, track) in state.tracks.iter().enumerate() {
@@ -2270,7 +2269,9 @@ mod tests {
         queue.play_index(0);
         queue.set_repeat(RepeatMode::One);
 
-        let repeated = queue.next().expect("repeat-one must replay the current row");
+        let repeated = queue
+            .next()
+            .expect("repeat-one must replay the current row");
         assert_eq!(repeated.id, 7);
         assert_eq!(queue.current_track().map(|track| track.id), Some(7));
     }
@@ -2768,7 +2769,10 @@ mod tests {
         let state = queue.get_state_full();
         assert_eq!(state.total_tracks, 4);
         assert_eq!(state.history[0].title, "First copy");
-        assert_eq!(state.current_track.expect("current copy").title, "Second copy");
+        assert_eq!(
+            state.current_track.expect("current copy").title,
+            "Second copy"
+        );
         assert_eq!(
             state
                 .upcoming
@@ -2821,7 +2825,10 @@ mod tests {
         let idle = queue.get_state_full();
         assert!(idle.current_track.is_none());
         assert_eq!(
-            idle.upcoming.iter().map(|track| track.id).collect::<Vec<_>>(),
+            idle.upcoming
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
             vec![3, 2, 1]
         );
 
@@ -3019,11 +3026,7 @@ mod tests {
 
         let state = queue.get_state();
         assert_eq!(
-            state
-                .upcoming
-                .iter()
-                .map(|t| t.id)
-                .collect::<Vec<_>>(),
+            state.upcoming.iter().map(|t| t.id).collect::<Vec<_>>(),
             vec![5, 2, 4, 1]
         );
 
@@ -3256,7 +3259,14 @@ mod tests {
         assert!(queue.next().is_none());
         let finished = queue.get_state_full();
         assert_eq!(finished.total_tracks, 5);
-        assert_eq!(finished.history.iter().filter(|track| track.id == 1).count(), 1);
+        assert_eq!(
+            finished
+                .history
+                .iter()
+                .filter(|track| track.id == 1)
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -3283,7 +3293,10 @@ mod tests {
         assert!(queue.requeue_history_entry(0, 7, 0));
         let state = queue.get_state_full();
         assert_eq!(state.total_tracks, 5);
-        assert_eq!(state.history.iter().filter(|track| track.id == 7).count(), 1);
+        assert_eq!(
+            state.history.iter().filter(|track| track.id == 7).count(),
+            1
+        );
         assert_eq!(state.history[1].title, "Lunch A");
         assert_eq!(state.upcoming[0].title, "Lunch B");
     }
@@ -3692,7 +3705,11 @@ mod tests {
         let fired = queue.consume_stop_after_if(102);
 
         assert!(fired, "consume should return true on match");
-        assert_eq!(queue.get_stop_after(), None, "marker should be cleared after firing");
+        assert_eq!(
+            queue.get_stop_after(),
+            None,
+            "marker should be cleared after firing"
+        );
     }
 
     #[test]
@@ -3705,7 +3722,11 @@ mod tests {
         let fired = queue.consume_stop_after_if(101);
 
         assert!(!fired, "consume should return false on mismatch");
-        assert_eq!(queue.get_stop_after(), Some(102), "marker should remain on mismatch");
+        assert_eq!(
+            queue.get_stop_after(),
+            Some(102),
+            "marker should remain on mismatch"
+        );
     }
 
     #[test]
@@ -3962,7 +3983,11 @@ mod tests {
         assert_eq!(capped.upcoming.len(), 20, "get_state caps upcoming at 20");
 
         let full = queue.get_state_full();
-        assert_eq!(full.upcoming.len(), 49, "get_state_full returns all upcoming");
+        assert_eq!(
+            full.upcoming.len(),
+            49,
+            "get_state_full returns all upcoming"
+        );
         assert_eq!(full.total_tracks, 50);
         assert_eq!(full.upcoming.first().unwrap().id, 2);
         assert_eq!(full.upcoming.last().unwrap().id, 50);

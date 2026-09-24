@@ -61,6 +61,7 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev \
             qt6-base-dev \
+            qt6-base-private-dev \
             qt6-declarative-dev \
             qt6-svg-dev
 

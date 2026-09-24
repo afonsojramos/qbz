@@ -43,6 +43,7 @@ const AUDIO_QUALITY_HIRES_L3: i32 = 5;
 /// PEER owns playback), resolves the current/next queue_item_id from the playing
 /// track, sends a `RndrSrvrStateUpdated`, and keeps the app's renderer position
 /// in sync.
+#[allow(clippy::too_many_arguments)]
 pub async fn report_playback_state(
     app: &Arc<DaemonQconnectApp>,
     sync_state: &Arc<Mutex<QconnectRemoteSyncState>>,

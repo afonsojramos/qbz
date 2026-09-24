@@ -11,8 +11,11 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      pr: ${{ steps.release.outputs.pr }}
     steps:
-      - uses: googleapis/release-please-action@v5
+      - id: release
+        uses: googleapis/release-please-action@v5
         with:
           # A tag/release created with the default GITHUB_TOKEN doesn't
           # trigger other workflows (GitHub's loop-prevention) — build-debian.yml
@@ -21,3 +24,43 @@ jobs:
           token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # release-please only bumps crates/Cargo.toml's workspace.package.version
+  # (release-please-config.json's extra-files entry) — it has no notion of
+  # Cargo.lock, which mirrors every workspace member's own version too
+  # (version.workspace = true). Left alone, that desync makes every
+  # `--locked` cargo invocation after the bump fail outright ("cannot
+  # update the lock file because --locked was passed") — hit for real on
+  # PR #1 (chore(main): release 2.2.0), broke build-debian.yml. `cargo
+  # update --workspace` only touches local workspace-member entries, never
+  # an external dependency's resolved version.
+  sync-cargo-lock:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.pr != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # release-please always names its head branch this way for a
+          # release-type "simple" package targeting main (release-please-
+          # config.json) — more reliable than parsing the pr output's JSON
+          # shape, which isn't documented as stable.
+          ref: release-please--branches--main
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync crates/Cargo.lock workspace-member versions
+        run: cargo update --manifest-path crates/Cargo.toml --workspace
+
+      - name: Commit and push if Cargo.lock changed
+        run: |
+          if git diff --quiet -- crates/Cargo.lock; then
+            echo "Cargo.lock already in sync"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add crates/Cargo.lock
+          git commit -m "chore: sync Cargo.lock workspace-member versions"
+          git push origin HEAD:release-please--branches--main

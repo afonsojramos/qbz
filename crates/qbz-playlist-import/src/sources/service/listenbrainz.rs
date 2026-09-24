@@ -145,7 +145,10 @@ pub async fn fetch(mbid: &str, token: Option<&str>) -> Result<ImportPlaylist, Pl
     Ok(ImportPlaylist {
         provider: ImportProvider::ListenBrainz,
         provider_id: mbid.to_string(),
-        name: pl["title"].as_str().unwrap_or("ListenBrainz playlist").to_string(),
+        name: pl["title"]
+            .as_str()
+            .unwrap_or("ListenBrainz playlist")
+            .to_string(),
         description: pl["annotation"]
             .as_str()
             .map(str::to_string)
@@ -188,7 +191,9 @@ fn map_track(t: &Value) -> Option<ImportTrack> {
 }
 
 async fn get_json(url: &str, token: Option<&str>) -> Result<Value, PlaylistImportError> {
-    let mut req = http().get(url).header(reqwest::header::USER_AGENT, LB_USER_AGENT);
+    let mut req = http()
+        .get(url)
+        .header(reqwest::header::USER_AGENT, LB_USER_AGENT);
     if let Some(t) = token.map(str::trim).filter(|t| !t.is_empty()) {
         req = req.header(reqwest::header::AUTHORIZATION, format!("Token {t}"));
     }

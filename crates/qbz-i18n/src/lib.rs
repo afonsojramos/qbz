@@ -188,7 +188,7 @@ mod tests {
         // Header-only catalogs still parse and expose nplurals.
         assert_eq!(catalog(0).nplurals(), 2); // en
         assert_eq!(catalog(3).nplurals(), 2); // fr
-        // fr uses (n > 1): 1 -> form 0, 2 -> form 1.
+                                              // fr uses (n > 1): 1 -> form 0, 2 -> form 1.
         assert_eq!(catalog(3).plural_rule().index(1), 0);
         assert_eq!(catalog(3).plural_rule().index(2), 1);
     }

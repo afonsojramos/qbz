@@ -25,7 +25,9 @@ pub fn extract_palette(image_path: &str) -> Result<ThemePalette, String> {
     limits.max_image_height = Some(12_000);
     limits.max_alloc = Some(512 * 1024 * 1024);
     reader.limits(limits);
-    let img = reader.decode().map_err(|e| format!("Failed to decode image: {}", e))?;
+    let img = reader
+        .decode()
+        .map_err(|e| format!("Failed to decode image: {}", e))?;
 
     // Downsample to 100x100 for fast processing.
     let thumb = img.resize_exact(100, 100, image::imageops::FilterType::Lanczos3);
@@ -154,7 +156,7 @@ fn rgb_dist_sq(a: &[f64; 3], b: &[f64; 3]) -> f64 {
 /// Build a [`ThemePalette`] from k-means clusters.
 fn build_palette(mut clusters: Vec<Cluster>) -> Result<ThemePalette, String> {
     // Sort by pixel count (dominant first).
-    clusters.sort_by(|a, b| b.count.cmp(&a.count));
+    clusters.sort_by_key(|a| std::cmp::Reverse(a.count));
 
     let all_colors: Vec<PaletteColor> = clusters
         .iter()

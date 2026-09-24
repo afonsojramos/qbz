@@ -791,7 +791,12 @@ fn build_audio_rows(g: &Gathered) -> Vec<Row> {
             "—",
             0,
         ),
-        row("Normalization Clipping Guard", yn(d.audio_normalization_prevent_clipping), "—", 0),
+        row(
+            "Normalization Clipping Guard",
+            yn(d.audio_normalization_prevent_clipping),
+            "—",
+            0,
+        ),
         row("Gapless", yn(d.audio_gapless_enabled), "—", 0),
         row(
             "PW Force Bitperfect",

@@ -16,8 +16,8 @@
 //! so those are not carried over.
 
 use super::{PaletteColor, SystemColorScheme, ThemePalette};
-use crate::colors::{alpha_ramp, ThemeColors};
 use crate::color::Rgba;
+use crate::colors::{alpha_ramp, ThemeColors};
 
 /// Legacy card shadow (`rgba(0,0,0,0.4)`), identical to the registry constant so
 /// generated themes drop the same shadow as static ones.
@@ -163,9 +163,15 @@ pub fn theme_from_palette(palette: &ThemePalette) -> ThemeColors {
 
     // Status hues by polarity (identical to generate_theme).
     let (danger, warning) = if is_dark {
-        (PaletteColor::new(239, 68, 68), PaletteColor::new(251, 191, 36))
+        (
+            PaletteColor::new(239, 68, 68),
+            PaletteColor::new(251, 191, 36),
+        )
     } else {
-        (PaletteColor::new(220, 38, 38), PaletteColor::new(217, 119, 6))
+        (
+            PaletteColor::new(220, 38, 38),
+            PaletteColor::new(217, 119, 6),
+        )
     };
     let status_hover = if is_dark { 0.2 } else { 0.15 };
 

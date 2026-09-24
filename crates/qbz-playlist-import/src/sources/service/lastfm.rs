@@ -402,7 +402,9 @@ mod tests {
         );
         assert_eq!(
             detect("  rob-2  "),
-            Some(LastFmTarget::Profile { user: "rob-2".into() })
+            Some(LastFmTarget::Profile {
+                user: "rob-2".into()
+            })
         );
         assert_eq!(detect(""), None);
         assert_eq!(detect("https://example.com/user/rob"), None);
@@ -422,7 +424,10 @@ mod tests {
         assert_eq!(t.album.as_deref(), Some("Al"));
         // 214 SECONDS -> ms.
         assert_eq!(t.duration_ms, Some(214_000));
-        assert_eq!(t.provider_url.as_deref(), Some("https://www.last.fm/music/A/_/Song"));
+        assert_eq!(
+            t.provider_url.as_deref(),
+            Some("https://www.last.fm/music/A/_/Song")
+        );
     }
 
     #[test]
@@ -472,7 +477,10 @@ mod tests {
                 }
             }
         }
-        assert_eq!(kept, MAX_STATION_TRACKS, "the cap is what bounds the result");
+        assert_eq!(
+            kept, MAX_STATION_TRACKS,
+            "the cap is what bounds the result"
+        );
         assert_eq!(seen.len(), kept, "nothing repeats in the output");
     }
 

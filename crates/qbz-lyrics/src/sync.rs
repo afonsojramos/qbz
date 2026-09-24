@@ -144,8 +144,7 @@ pub fn line_fill_fraction(lines: &[LyricsLine], index: usize, now_ms: i64) -> f3
     } else {
         1.0
     };
-    let filled: f32 =
-        weights[..current].iter().sum::<f32>() + weights[current] * word_progress;
+    let filled: f32 = weights[..current].iter().sum::<f32>() + weights[current] * word_progress;
     snap((filled / total).clamp(0.0, 1.0))
 }
 

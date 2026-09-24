@@ -14,10 +14,11 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 /// Canonical runtime states
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "state", content = "data")]
 pub enum RuntimeState {
     /// Initial state - nothing initialized
+    #[default]
     Uninitialized,
     /// Client initialized but no authentication
     InitializedNoAuth,
@@ -27,12 +28,6 @@ pub enum RuntimeState {
     Ready { user_id: u64 },
     /// Degraded state - something is broken
     Degraded { reason: DegradedReason },
-}
-
-impl Default for RuntimeState {
-    fn default() -> Self {
-        Self::Uninitialized
-    }
 }
 
 /// Reasons for degraded state
@@ -127,7 +122,10 @@ impl std::fmt::Display for RuntimeError {
             Self::V2AuthFailed(msg) => write!(f, "V2 authentication failed: {}", msg),
             Self::V2NotInitialized => write!(f, "V2 CoreBridge not initialized"),
             Self::TrackNotAvailableOffline => {
-                write!(f, "Track not available in offline cache while in offline mode")
+                write!(
+                    f,
+                    "Track not available in offline cache while in offline mode"
+                )
             }
             Self::Internal(msg) => write!(f, "Internal error: {}", msg),
         }
@@ -396,7 +394,8 @@ mod tests {
         assert_eq!(mgr.get_queue_source_collection().await, None);
 
         // Set Some
-        mgr.set_queue_source_collection(Some("col-abc".to_string())).await;
+        mgr.set_queue_source_collection(Some("col-abc".to_string()))
+            .await;
         assert_eq!(
             mgr.get_queue_source_collection().await,
             Some("col-abc".to_string())
@@ -480,7 +479,8 @@ mod tests {
             .await
             .is_ok());
         assert!(matches!(
-            mgr.check_requirements(CommandRequirement::RequiresAuth).await,
+            mgr.check_requirements(CommandRequirement::RequiresAuth)
+                .await,
             Err(RuntimeError::RuntimeNotInitialized)
         ));
     }

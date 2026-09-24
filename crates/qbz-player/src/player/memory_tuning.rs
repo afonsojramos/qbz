@@ -26,11 +26,7 @@ static AUDIO_CACHE_L1_MAX_BYTES: AtomicUsize = AtomicUsize::new(400 * 1024 * 102
 /// Push the host memory profile's derived values into the player. Called
 /// once at process start by the frontend binaries; not designed for
 /// mid-session mutation (the L1 cache reads its budget at construction).
-pub fn apply_memory_tuning(
-    low_memory: bool,
-    l1_max_bytes: usize,
-    max_initial_buffer_bytes: usize,
-) {
+pub fn apply_memory_tuning(low_memory: bool, l1_max_bytes: usize, max_initial_buffer_bytes: usize) {
     LOW_MEMORY_CLASS.store(low_memory, Ordering::Relaxed);
     AUDIO_CACHE_L1_MAX_BYTES.store(l1_max_bytes, Ordering::Relaxed);
     super::streaming_source::set_max_initial_buffer_bytes(max_initial_buffer_bytes);

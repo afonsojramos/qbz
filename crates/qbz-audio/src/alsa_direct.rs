@@ -81,17 +81,29 @@ fn ensure_exact_rate(hwp: &HwParams<'_>, requested: u32, kind: &str) -> Result<(
 
 #[cfg(target_os = "linux")]
 fn write_pcm_frames(
-    pcm: &PCM, frames: usize, cancel: &AtomicBool,
+    pcm: &PCM,
+    frames: usize,
+    cancel: &AtomicBool,
     mut write: impl FnMut(usize) -> Result<usize, alsa::Error>,
 ) -> Result<usize, crate::backend::DirectWriteError> {
-    crate::pcm_write::write_complete(frames, cancel, std::time::Duration::from_secs(2),
+    crate::pcm_write::write_complete(
+        frames,
+        cancel,
+        std::time::Duration::from_secs(2),
         |offset| write(offset).map_err(|e| e.errno()),
         |error| match error {
-            libc::EPIPE => { pcm.prepare().map_err(|e| e.to_string())?; log_pcm_recovery(""); Ok(true) }
+            libc::EPIPE => {
+                pcm.prepare().map_err(|e| e.to_string())?;
+                log_pcm_recovery("");
+                Ok(true)
+            }
             libc::ESTRPIPE => match pcm.resume() {
                 Ok(()) => Ok(true),
                 Err(e) if e.errno() == libc::EAGAIN => Ok(false),
-                Err(_) => { pcm.prepare().map_err(|e| e.to_string())?; Ok(true) }
+                Err(_) => {
+                    pcm.prepare().map_err(|e| e.to_string())?;
+                    Ok(true)
+                }
             },
             libc::EBADFD => {
                 let _ = PCM::drop(pcm);
@@ -104,7 +116,8 @@ fn write_pcm_frames(
             Ok(_) => Ok(()),
             Err(e) if matches!(e.errno(), libc::EINTR | libc::EPIPE | libc::ESTRPIPE) => Ok(()),
             Err(e) => Err(format!("ALSA wait failed: {e}")),
-        })
+        },
+    )
 }
 
 /// Direct ALSA PCM stream for hw: devices
@@ -505,7 +518,7 @@ impl AlsaDirectStream {
                 Ok(())
             }
             Err(e) => {
-                if let Err(msg) = recover_write_error(&pcm, e.errno() as i32, "(DoP)") {
+                if let Err(msg) = recover_write_error(&pcm, e.errno(), "(DoP)") {
                     Err(msg)
                 } else {
                     Ok(())
@@ -517,7 +530,7 @@ impl AlsaDirectStream {
     /// Write audio samples to ALSA (auto-converts from i16 based on detected format)
     pub fn write(&self, samples_i16: &[i16]) -> Result<(), String> {
         let pcm = self.pcm.lock().unwrap();
-        if self.channels == 0 || samples_i16.len() % usize::from(self.channels) != 0 {
+        if self.channels == 0 || !samples_i16.len().is_multiple_of(usize::from(self.channels)) {
             return Err("PCM input does not contain complete frames".into());
         }
         let frames = samples_i16.len() / self.channels as usize;
@@ -535,7 +548,9 @@ impl AlsaDirectStream {
 
                 write_pcm_frames(&pcm, frames, cancel, |offset| {
                     io.writei(&samples_f32[offset * (usize::from(self.channels))..])
-                }).map(|_| ()).map_err(|e| e.message)
+                })
+                .map(|_| ())
+                .map_err(|e| e.message)
             }
             Format::S32LE => {
                 // Convert i16 to i32 (bit-perfect: shift left 16 bits)
@@ -547,7 +562,9 @@ impl AlsaDirectStream {
 
                 write_pcm_frames(&pcm, frames, cancel, |offset| {
                     io.writei(&samples_i32[offset * (usize::from(self.channels))..])
-                }).map(|_| ()).map_err(|e| e.message)
+                })
+                .map(|_| ())
+                .map_err(|e| e.message)
             }
             Format::S16LE => {
                 // Direct write (no conversion needed)
@@ -557,7 +574,9 @@ impl AlsaDirectStream {
 
                 write_pcm_frames(&pcm, frames, cancel, |offset| {
                     io.writei(&samples_i16[offset * (usize::from(self.channels))..])
-                }).map(|_| ()).map_err(|e| e.message)
+                })
+                .map(|_| ())
+                .map_err(|e| e.message)
             }
             Format::S243LE => {
                 // S24_3LE: 24-bit packed in 3 bytes, little-endian
@@ -579,7 +598,9 @@ impl AlsaDirectStream {
 
                 write_pcm_frames(&pcm, frames, cancel, |offset| {
                     io.writei(&bytes[offset * (usize::from(self.channels) * 3)..])
-                }).map(|_| ()).map_err(|e| e.message)
+                })
+                .map(|_| ())
+                .map_err(|e| e.message)
             }
             Format::S24LE => {
                 // S24LE: 24-bit in 32-bit container (padded)
@@ -592,7 +613,9 @@ impl AlsaDirectStream {
 
                 write_pcm_frames(&pcm, frames, cancel, |offset| {
                     io.writei(&samples_i32[offset * (usize::from(self.channels))..])
-                }).map(|_| ()).map_err(|e| e.message)
+                })
+                .map(|_| ())
+                .map_err(|e| e.message)
             }
             _ => Err(format!("Unsupported format: {:?}", self.format)),
         }
@@ -603,13 +626,20 @@ impl AlsaDirectStream {
     /// f32 has 24 bits of significand, so 24-bit audio is preserved losslessly.
     /// This is the primary write path for the f32 pipeline.
     pub fn write_f32(&self, samples_f32: &[f32]) -> Result<(), String> {
-        self.write_f32_with_cancel(samples_f32, &AtomicBool::new(false)).map(|_| ()).map_err(|e| e.message)
+        self.write_f32_with_cancel(samples_f32, &AtomicBool::new(false))
+            .map(|_| ())
+            .map_err(|e| e.message)
     }
 
-    fn write_f32_with_cancel(&self, samples_f32: &[f32], cancel: &AtomicBool)
-        -> Result<usize, crate::backend::DirectWriteError> {
-        if self.channels == 0 || samples_f32.len() % usize::from(self.channels) != 0 {
-            return Err("PCM input does not contain complete frames".to_string().into());
+    fn write_f32_with_cancel(
+        &self,
+        samples_f32: &[f32],
+        cancel: &AtomicBool,
+    ) -> Result<usize, crate::backend::DirectWriteError> {
+        if self.channels == 0 || !samples_f32.len().is_multiple_of(usize::from(self.channels)) {
+            return Err("PCM input does not contain complete frames"
+                .to_string()
+                .into());
         }
         let pcm = self.pcm.lock().unwrap();
         let frames = samples_f32.len() / self.channels as usize;
@@ -673,8 +703,10 @@ impl AlsaDirectStream {
             }
             Format::S16LE => {
                 // f32 -> i16
-                let samples_i16: Vec<i16> =
-                    samples_f32.iter().map(|&s| crate::pcm_sample::s16(s)).collect();
+                let samples_i16: Vec<i16> = samples_f32
+                    .iter()
+                    .map(|&s| crate::pcm_sample::s16(s))
+                    .collect();
 
                 let io = pcm
                     .io_i16()
@@ -709,7 +741,9 @@ impl AlsaDirectStream {
         const DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
         let start = std::time::Instant::now();
         loop {
-            if cancel.load(std::sync::atomic::Ordering::Acquire) { return Ok(()); }
+            if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return Ok(());
+            }
             match pcm.state() {
                 alsa::pcm::State::Running | alsa::pcm::State::Draining => {
                     if start.elapsed() >= DRAIN_DEADLINE {
@@ -759,7 +793,7 @@ impl AlsaDirectStream {
         if let Err(e) = PCM::drop(&pcm) {
             // libc::EBADFD — the PCM was not in a running-ish state.
             const EBADFD: i32 = 77;
-            if e.errno() as i32 != EBADFD {
+            if e.errno() != EBADFD {
                 log::warn!(
                     "[ALSA Direct] drop on stop failed (continuing to prepare): {}",
                     e
@@ -903,6 +937,59 @@ impl AlsaDirectStream {
     }
 }
 
+/// Forwards to the inherent methods, which is all this is: no behaviour is
+/// added, moved or wrapped. See `backend::DirectSink`.
+impl crate::backend::DirectSink for AlsaDirectStream {
+    fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
+        AlsaDirectStream::write_f32(self, samples)
+    }
+    #[cfg(target_os = "linux")]
+    fn write_f32_interruptible(
+        &self,
+        samples: &[f32],
+        cancel: &AtomicBool,
+    ) -> Result<usize, crate::backend::DirectWriteError> {
+        self.write_f32_with_cancel(samples, cancel)
+    }
+    #[cfg(target_os = "linux")]
+    fn drain_interruptible(&self, cancel: &AtomicBool) -> Result<(), String> {
+        self.drain_with_cancel(cancel)
+    }
+    fn drain(&self) -> Result<(), String> {
+        AlsaDirectStream::drain(self)
+    }
+    fn stop(&self) -> Result<(), String> {
+        AlsaDirectStream::stop(self)
+    }
+    fn sample_rate(&self) -> u32 {
+        AlsaDirectStream::sample_rate(self)
+    }
+    fn channels(&self) -> u16 {
+        AlsaDirectStream::channels(self)
+    }
+    fn playback_delay_frames(&self) -> Result<u64, String> {
+        AlsaDirectStream::playback_delay_frames(self)
+    }
+    fn log_label(&self) -> &'static str {
+        "ALSA Direct Engine"
+    }
+    #[cfg(target_os = "linux")]
+    fn alsa_device_id(&self) -> Option<&str> {
+        Some(self.device_id())
+    }
+    /// Linux only, because the inherent method is: the non-Linux stub of this
+    /// type has no mixer at all, and there the trait default refusal is the
+    /// honest answer.
+    #[cfg(target_os = "linux")]
+    fn set_hardware_volume(
+        &self,
+        control: &crate::alsa_hardware_volume::AlsaMixerControlId,
+        volume: f32,
+    ) -> Result<(), String> {
+        AlsaDirectStream::set_hardware_volume(self, control, volume)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::uses_alsa_direct_route;
@@ -945,16 +1032,10 @@ mod tests {
         audio.backend_type = Some(AudioBackendType::Alsa);
         audio.output_device = Some("front:CARD=USB,DEV=0".to_string());
         audio.alsa_plugin = Some(AlsaPlugin::Hw);
-        assert_eq!(
-            uses_alsa_direct_route(&audio),
-            cfg!(target_os = "linux")
-        );
+        assert_eq!(uses_alsa_direct_route(&audio), cfg!(target_os = "linux"));
 
         audio.alsa_plugin = Some(AlsaPlugin::PlugHw);
-        assert_eq!(
-            uses_alsa_direct_route(&audio),
-            cfg!(target_os = "linux")
-        );
+        assert_eq!(uses_alsa_direct_route(&audio), cfg!(target_os = "linux"));
 
         audio.alsa_plugin = Some(AlsaPlugin::Pcm);
         assert!(!uses_alsa_direct_route(&audio));
@@ -965,55 +1046,5 @@ mod tests {
 
         audio.output_device = None;
         assert!(!uses_alsa_direct_route(&audio));
-    }
-}
-
-/// Forwards to the inherent methods, which is all this is: no behaviour is
-/// added, moved or wrapped. See `backend::DirectSink`.
-impl crate::backend::DirectSink for AlsaDirectStream {
-    fn write_f32(&self, samples: &[f32]) -> Result<(), String> {
-        AlsaDirectStream::write_f32(self, samples)
-    }
-    #[cfg(target_os = "linux")]
-    fn write_f32_interruptible(&self, samples: &[f32], cancel: &AtomicBool)
-        -> Result<usize, crate::backend::DirectWriteError> {
-        self.write_f32_with_cancel(samples, cancel)
-    }
-    #[cfg(target_os = "linux")]
-    fn drain_interruptible(&self, cancel: &AtomicBool) -> Result<(), String> {
-        self.drain_with_cancel(cancel)
-    }
-    fn drain(&self) -> Result<(), String> {
-        AlsaDirectStream::drain(self)
-    }
-    fn stop(&self) -> Result<(), String> {
-        AlsaDirectStream::stop(self)
-    }
-    fn sample_rate(&self) -> u32 {
-        AlsaDirectStream::sample_rate(self)
-    }
-    fn channels(&self) -> u16 {
-        AlsaDirectStream::channels(self)
-    }
-    fn playback_delay_frames(&self) -> Result<u64, String> {
-        AlsaDirectStream::playback_delay_frames(self)
-    }
-    fn log_label(&self) -> &'static str {
-        "ALSA Direct Engine"
-    }
-    #[cfg(target_os = "linux")]
-    fn alsa_device_id(&self) -> Option<&str> {
-        Some(self.device_id())
-    }
-    /// Linux only, because the inherent method is: the non-Linux stub of this
-    /// type has no mixer at all, and there the trait default refusal is the
-    /// honest answer.
-    #[cfg(target_os = "linux")]
-    fn set_hardware_volume(
-        &self,
-        control: &crate::alsa_hardware_volume::AlsaMixerControlId,
-        volume: f32,
-    ) -> Result<(), String> {
-        AlsaDirectStream::set_hardware_volume(self, control, volume)
     }
 }

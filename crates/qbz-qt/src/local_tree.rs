@@ -283,8 +283,9 @@ fn selected_under(paths: &[String], folder: &str) -> u32 {
         let end = paths.partition_point(|p| p.as_str() < upper.as_str());
         end.saturating_sub(start)
     };
-    (range(format!("{folder}/")) + range(format!("sacd:{folder}/")) + range(format!("sacd:{folder}#")))
-        as u32
+    (range(format!("{folder}/"))
+        + range(format!("sacd:{folder}/"))
+        + range(format!("sacd:{folder}#"))) as u32
 }
 
 /// Annotate the visible rows. ONE sorted view of the selected paths is built

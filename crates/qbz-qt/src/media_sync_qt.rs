@@ -292,8 +292,9 @@ pub async fn sync_jellyfin(full: bool) -> Result<SyncReport, String> {
 async fn sync_jellyfin_inner(cfg: MediaServerSettings, full: bool) -> Result<SyncReport, String> {
     let kind = MediaServerKind::Jellyfin;
 
-    let client = qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username, &cfg.device_id)
-        .map_err(|e| e.to_string())?;
+    let client =
+        qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username, &cfg.device_id)
+            .map_err(|e| e.to_string())?;
     // `username` holds the Jellyfin USER ID for the API's purposes — see
     // `connect_jellyfin`, which stores the id the auth response returned rather
     // than the typed name, because every `/Items` call keys on the id.
@@ -548,8 +549,9 @@ async fn jellyfin_quality_worker(epoch: u64) -> Result<(), String> {
     if !cfg.is_configured(MediaServerKind::Jellyfin) {
         return Ok(());
     }
-    let client = qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username, &cfg.device_id)
-        .map_err(|error| error.to_string())?;
+    let client =
+        qbz_jellyfin::JellyfinClient::new(&cfg.base_url, &cfg.token, &cfg.username, &cfg.device_id)
+            .map_err(|error| error.to_string())?;
     let mut hydrated = 0usize;
     let mut batches = 0usize;
     let mut priority_published = false;

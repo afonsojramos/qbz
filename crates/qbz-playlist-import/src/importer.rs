@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn the_three_counts_are_disjoint_and_sum_to_the_total() {
         // 6 rows: ids 1,1,2,2,2 and one miss.
-        let matches = vec![
+        let matches = [
             m(Some(1)),
             m(Some(1)),
             m(Some(2)),

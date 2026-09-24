@@ -59,7 +59,8 @@ impl Decoder {
                 Ok((Decoder::Memory(dec), sr, ch))
             }
             ShadowSource::File(path) => {
-                let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+                let bytes =
+                    std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
                 let dec = InMemorySource::new(bytes)?;
                 let (sr, ch) = (dec.sample_rate(), dec.channels());
                 Ok((Decoder::Memory(dec), sr, ch))

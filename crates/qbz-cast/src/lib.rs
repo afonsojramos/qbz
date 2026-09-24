@@ -37,4 +37,3 @@ pub use dlna::{
 
 /// Cast device type alias for backwards compatibility
 pub type CastDevice = CastDeviceConnection;
-

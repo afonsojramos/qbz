@@ -365,7 +365,10 @@ mod tests {
     #[test]
     fn alsa_honours_the_exclusive_toggle_on_every_platform() {
         for macos in [false, true] {
-            assert!(backend_honours_exclusive(Some(AudioBackendType::Alsa), macos));
+            assert!(backend_honours_exclusive(
+                Some(AudioBackendType::Alsa),
+                macos
+            ));
         }
     }
 
@@ -376,8 +379,14 @@ mod tests {
         // System default there, exactly as qbz-player's
         // `using_coreaudio_exclusive` reads it.
         for backend in [Some(AudioBackendType::SystemDefault), None] {
-            assert!(backend_honours_exclusive(backend, true), "{backend:?} on macOS");
-            assert!(!backend_honours_exclusive(backend, false), "{backend:?} off macOS");
+            assert!(
+                backend_honours_exclusive(backend, true),
+                "{backend:?} on macOS"
+            );
+            assert!(
+                !backend_honours_exclusive(backend, false),
+                "{backend:?} off macOS"
+            );
         }
     }
 
@@ -392,7 +401,10 @@ mod tests {
             AudioBackendType::WasapiExclusive,
         ] {
             for macos in [false, true] {
-                assert!(!backend_honours_exclusive(Some(backend), macos), "{backend:?}");
+                assert!(
+                    !backend_honours_exclusive(Some(backend), macos),
+                    "{backend:?}"
+                );
             }
         }
     }

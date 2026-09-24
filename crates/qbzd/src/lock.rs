@@ -27,6 +27,7 @@ impl InstanceLock {
         let path = data_root.join("qbzd.lock");
         let mut file = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&path)
@@ -49,8 +50,7 @@ impl InstanceLock {
             use windows_sys::Win32::Storage::FileSystem::{
                 LockFileEx, LOCKFILE_EXCLUSIVE_LOCK, LOCKFILE_FAIL_IMMEDIATELY,
             };
-            let mut ov: windows_sys::Win32::System::IO::OVERLAPPED =
-                unsafe { std::mem::zeroed() };
+            let mut ov: windows_sys::Win32::System::IO::OVERLAPPED = unsafe { std::mem::zeroed() };
             // A LOCK BYTE past any real content, not the whole file. Windows
             // byte-range locks are MANDATORY: locking from offset 0 would make
             // the `read_to_string` below fail for the losing instance, so

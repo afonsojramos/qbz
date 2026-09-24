@@ -57,7 +57,9 @@ use super::{err_json, json, owner_action_gate, owner_action_lease, ApiState};
 /// documented (§3.3.13); nothing existing is renamed or removed.
 pub fn list(state: &ApiState, query: &str) -> Response<Cursor<Vec<u8>>> {
     let (offset, limit) = parse_offset_limit(query);
-    let queue = state.rt.block_on(state.runtime.core().get_queue_state_full());
+    let queue = state
+        .rt
+        .block_on(state.runtime.core().get_queue_state_full());
 
     let current_track = queue
         .current_track
@@ -150,13 +152,18 @@ pub fn add(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         // track, so reverse iteration is what lands multiple tracks in
         // request order (matches the desktop's multi-add-next convention).
         for track in resolved.into_iter().rev() {
-            state.rt.block_on(state.runtime.core().add_track_next(track));
+            state
+                .rt
+                .block_on(state.runtime.core().add_track_next(track));
         }
     } else {
         state.rt.block_on(state.runtime.core().add_tracks(resolved));
     }
 
-    let total_tracks = state.rt.block_on(state.runtime.core().get_queue_state()).total_tracks;
+    let total_tracks = state
+        .rt
+        .block_on(state.runtime.core().get_queue_state())
+        .total_tracks;
     json(
         200,
         serde_json::json!({"added": added, "total_tracks": total_tracks, "tracks": tracks_json}),
@@ -178,7 +185,9 @@ pub fn remove(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         Err((message, hint)) => return err_json(400, "bad_request", &message, &hint),
     };
 
-    let queue = state.rt.block_on(state.runtime.core().get_queue_state_full());
+    let queue = state
+        .rt
+        .block_on(state.runtime.core().get_queue_state_full());
     match check_remove_index(index, queue.total_tracks, queue.current_index) {
         RemoveCheck::OutOfRange => {
             return err_json(
@@ -201,9 +210,14 @@ pub fn remove(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
 
     match state.rt.block_on(state.runtime.core().remove_track(index)) {
         Some(track) => {
-            let total_tracks =
-                state.rt.block_on(state.runtime.core().get_queue_state()).total_tracks;
-            json(200, serde_json::json!({"removed": track.id, "total_tracks": total_tracks}))
+            let total_tracks = state
+                .rt
+                .block_on(state.runtime.core().get_queue_state())
+                .total_tracks;
+            json(
+                200,
+                serde_json::json!({"removed": track.id, "total_tracks": total_tracks}),
+            )
         }
         // Narrow race, acknowledged: the bounds/playing check above and this
         // mutation are two separate core calls, and while the API serving
@@ -233,9 +247,17 @@ pub fn clear(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         Ok(lease) => lease,
         Err(response) => return response,
     };
-    let keep_current = body.get("keep_current").and_then(|v| v.as_bool()).unwrap_or(true);
-    state.rt.block_on(state.runtime.core().clear_queue(keep_current));
-    let total_tracks = state.rt.block_on(state.runtime.core().get_queue_state()).total_tracks;
+    let keep_current = body
+        .get("keep_current")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    state
+        .rt
+        .block_on(state.runtime.core().clear_queue(keep_current));
+    let total_tracks = state
+        .rt
+        .block_on(state.runtime.core().get_queue_state())
+        .total_tracks;
     json(200, serde_json::json!({"total_tracks": total_tracks}))
 }
 
@@ -247,11 +269,25 @@ pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     }
     let from = match body.get("from").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
-        None => return err_json(400, "bad_request", "move requires 'from' and 'to'", "body: {\"from\": 7, \"to\": 2}"),
+        None => {
+            return err_json(
+                400,
+                "bad_request",
+                "move requires 'from' and 'to'",
+                "body: {\"from\": 7, \"to\": 2}",
+            )
+        }
     };
     let to = match body.get("to").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
-        None => return err_json(400, "bad_request", "move requires 'from' and 'to'", "body: {\"from\": 7, \"to\": 2}"),
+        None => {
+            return err_json(
+                400,
+                "bad_request",
+                "move requires 'from' and 'to'",
+                "body: {\"from\": 7, \"to\": 2}",
+            )
+        }
     };
     let _owner_lease = match owner_action_lease(state) {
         Ok(lease) => lease,
@@ -260,7 +296,12 @@ pub fn reorder(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     if state.rt.block_on(state.runtime.core().move_track(from, to)) {
         json(200, serde_json::json!({"from": from, "to": to}))
     } else {
-        err_json(404, "not_found", "queue index out of range", "check: qbzd queue list")
+        err_json(
+            404,
+            "not_found",
+            "queue index out of range",
+            "check: qbzd queue list",
+        )
     }
 }
 
@@ -280,7 +321,14 @@ pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     }
     let index = match body.get("index").and_then(|v| v.as_u64()) {
         Some(n) => n as usize,
-        None => return err_json(400, "bad_request", "jump requires an 'index'", "body: {\"index\": 2}"),
+        None => {
+            return err_json(
+                400,
+                "bad_request",
+                "jump requires an 'index'",
+                "body: {\"index\": 2}",
+            )
+        }
     };
     let owner_lease = match owner_action_lease(state) {
         Ok(lease) => lease,
@@ -288,7 +336,14 @@ pub fn jump(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
     };
     let track = match state.rt.block_on(state.runtime.core().play_index(index)) {
         Some(t) => t,
-        None => return err_json(404, "not_found", &format!("queue index {index} is out of range"), "check: qbzd queue list"),
+        None => {
+            return err_json(
+                404,
+                "not_found",
+                &format!("queue index {index} is out of range"),
+                "check: qbzd queue list",
+            )
+        }
     };
     let track_id = track.id;
     let quality = super::playback::resolve_quality(state);
@@ -327,10 +382,25 @@ pub fn stop_after(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
         state.rt.block_on(state.runtime.core().clear_stop_after());
         return json(200, serde_json::json!({"stop_after_track_id": Value::Null}));
     }
-    let track_id = if body.get("current").and_then(|v| v.as_bool()).unwrap_or(false) {
-        match state.rt.block_on(state.runtime.core().get_queue_state()).current_track {
+    let track_id = if body
+        .get("current")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        match state
+            .rt
+            .block_on(state.runtime.core().get_queue_state())
+            .current_track
+        {
             Some(t) => t.id,
-            None => return err_json(404, "not_found", "nothing is playing", "queue a track first"),
+            None => {
+                return err_json(
+                    404,
+                    "not_found",
+                    "nothing is playing",
+                    "queue a track first",
+                )
+            }
         }
     } else if let Some(id) = body.get("track_id").and_then(|v| v.as_u64()) {
         id
@@ -342,7 +412,9 @@ pub fn stop_after(state: &ApiState, body: &Value) -> Response<Cursor<Vec<u8>>> {
             "body: {\"current\": true} | {\"track_id\": N} | {\"off\": true}",
         );
     };
-    state.rt.block_on(state.runtime.core().set_stop_after(track_id));
+    state
+        .rt
+        .block_on(state.runtime.core().set_stop_after(track_id));
     json(200, serde_json::json!({"stop_after_track_id": track_id}))
 }
 
@@ -360,7 +432,12 @@ fn auth_gate(state: &ApiState) -> Option<Response<Cursor<Vec<u8>>>> {
         .map(|s| s.auth == AuthState::NeedsAuth)
         .unwrap_or(false);
     if needs_auth {
-        Some(err_json(409, "needs_auth", "not logged in to Qobuz", "run: qbzd login"))
+        Some(err_json(
+            409,
+            "needs_auth",
+            "not logged in to Qobuz",
+            "run: qbzd login",
+        ))
     } else {
         None
     }
@@ -413,7 +490,10 @@ fn parse_position(body: &Value) -> Result<AddPosition, (String, String)> {
         Some(v) => match v.as_str() {
             Some("end") => Ok(AddPosition::End),
             Some("next") => Ok(AddPosition::Next),
-            _ => Err((format!("invalid position {v} — use \"end\" or \"next\""), hint)),
+            _ => Err((
+                format!("invalid position {v} — use \"end\" or \"next\""),
+                hint,
+            )),
         },
     }
 }
@@ -445,7 +525,11 @@ enum RemoveCheck {
     PlayingIndex,
 }
 
-fn check_remove_index(index: usize, total_tracks: usize, current_index: Option<usize>) -> RemoveCheck {
+fn check_remove_index(
+    index: usize,
+    total_tracks: usize,
+    current_index: Option<usize>,
+) -> RemoveCheck {
     if index >= total_tracks {
         return RemoveCheck::OutOfRange;
     }
@@ -682,7 +766,10 @@ mod tests {
         // Strict match (review fix): a typo must not silently become "end".
         let (message, _hint) =
             parse_position(&serde_json::json!({"position": "nxet"})).unwrap_err();
-        assert_eq!(message, "invalid position \"nxet\" — use \"end\" or \"next\"");
+        assert_eq!(
+            message,
+            "invalid position \"nxet\" — use \"end\" or \"next\""
+        );
         assert!(parse_position(&serde_json::json!({"position": 3})).is_err());
         assert!(parse_position(&serde_json::json!({"position": null})).is_err());
     }
@@ -716,7 +803,10 @@ mod tests {
     #[test]
     fn check_remove_index_rejects_the_playing_index() {
         // 02 §3.3.15's own example state: current_index=1, removing index 1.
-        assert_eq!(check_remove_index(1, 14, Some(1)), RemoveCheck::PlayingIndex);
+        assert_eq!(
+            check_remove_index(1, 14, Some(1)),
+            RemoveCheck::PlayingIndex
+        );
     }
 
     #[test]
@@ -790,7 +880,10 @@ mod tests {
         assert_eq!(qt.album_id.as_deref(), Some("0060253776847"));
         assert_eq!(qt.artist_id, Some(123206));
         assert_eq!(qt.source.as_deref(), Some("qobuz"));
-        assert_eq!(qt.artwork_url.as_deref(), Some("https://static.qobuz.com/large.jpg"));
+        assert_eq!(
+            qt.artwork_url.as_deref(),
+            Some("https://static.qobuz.com/large.jpg")
+        );
     }
 
     #[test]

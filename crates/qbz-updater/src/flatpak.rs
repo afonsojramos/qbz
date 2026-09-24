@@ -8,8 +8,8 @@ use std::{
     time::Duration,
 };
 use zbus::{
-    Connection, Proxy,
     zvariant::{OwnedObjectPath, OwnedValue, Value},
+    Connection, Proxy,
 };
 
 const SERVICE: &str = "org.freedesktop.portal.Flatpak";

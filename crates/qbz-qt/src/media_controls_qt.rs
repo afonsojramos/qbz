@@ -181,9 +181,7 @@ fn init_windows() {
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
             if CONTROLS.get().is_none() {
-                log::warn!(
-                    "[media-controls] SMTC never started: no top-level window after 10 s"
-                );
+                log::warn!("[media-controls] SMTC never started: no top-level window after 10 s");
             }
         });
     if let Err(e) = spawned {
@@ -546,7 +544,10 @@ fn maybe_notify(track: &qbz_models::QueueTrack, title: &str, album: &str) {
 /// `crate::transport_*`, which spawns onto the process-global runtime.
 /// Time values are MICROSECONDS (`qbz-media-controls/src/types.rs:47`).
 fn dispatch(ev: MediaEvent) {
-    if matches!(ev, MediaEvent::Play | MediaEvent::Pause | MediaEvent::Toggle) {
+    if matches!(
+        ev,
+        MediaEvent::Play | MediaEvent::Pause | MediaEvent::Toggle
+    ) {
         log::info!("[media-controls] inbound {ev:?}");
     }
     match ev {

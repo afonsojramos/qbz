@@ -484,7 +484,10 @@ pub fn open_award(award_id: String, fallback_name: String) {
     if id.is_empty() {
         return;
     }
-    crate::nav_qt::record_with("award", serde_json::json!({ "id": &id, "name": &fallback_name }));
+    crate::nav_qt::record_with(
+        "award",
+        serde_json::json!({ "id": &id, "name": &fallback_name }),
+    );
     let generation = with_state(|s| {
         s.generation = s.generation.wrapping_add(1);
         s.id = id.clone();
@@ -721,7 +724,10 @@ pub fn open_albums() {
     if id.is_empty() {
         return;
     }
-    crate::nav_qt::record_with("awardalbums", serde_json::json!({ "id": &id, "name": &name }));
+    crate::nav_qt::record_with(
+        "awardalbums",
+        serde_json::json!({ "id": &id, "name": &name }),
+    );
     let generation = with_state(|s| {
         s.generation = s.generation.wrapping_add(1);
         s.all_albums.clear();

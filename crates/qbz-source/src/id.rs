@@ -246,7 +246,10 @@ impl RawRef {
 
     /// The hint, trimmed, when it is present and non-empty.
     pub fn hint_str(&self) -> Option<&str> {
-        self.hint.as_deref().map(str::trim).filter(|h| !h.is_empty())
+        self.hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|h| !h.is_empty())
     }
 }
 
@@ -389,7 +392,10 @@ mod tests {
             added_at: 0,
         };
         let raw = RawRef::from_mixtape_item(&it);
-        assert_eq!(raw.source, None, "Local is an umbrella, not SourceId::LOCAL");
+        assert_eq!(
+            raw.source, None,
+            "Local is an umbrella, not SourceId::LOCAL"
+        );
         assert_eq!(raw.is_local, Some(true));
         assert_eq!(raw.kind, Some(ItemKind::Album));
     }

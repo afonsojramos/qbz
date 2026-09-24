@@ -35,7 +35,11 @@ fn main() {
     );
 
     const FRAME: usize = 9408;
-    for t in area.tracks.iter().filter(|t| only.is_none_or(|n| t.number == n)) {
+    for t in area
+        .tracks
+        .iter()
+        .filter(|t| only.is_none_or(|n| t.number == n))
+    {
         // Walk the track's sectors by hand so the frame_start bits stay
         // visible — `next_chunk` throws them away.
         let mut iso = match qbz_disc::iso9660::IsoImage::open(&path) {
@@ -82,11 +86,7 @@ fn main() {
 
         let first = starts.first().copied();
         // Are the later frame starts exactly one frame apart from the first?
-        let aligned_to_first = first.map(|f| {
-            starts
-                .iter()
-                .all(|s| (s - f) % FRAME == 0)
-        });
+        let aligned_to_first = first.map(|f| starts.iter().all(|s| (s - f) % FRAME == 0));
         // And is the NAIVE assumption (frames start at payload byte 0) right?
         let aligned_to_zero = starts.iter().all(|s| s % FRAME == 0);
 

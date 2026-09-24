@@ -81,6 +81,9 @@ pub struct LyricsResult {
     pub doc: LyricsDoc,
 }
 
+// Boxing LyricsResult would touch every construction/match site for a
+// result type that isn't allocated in a hot loop — not a mechanical fix.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum LyricsOutcome {
     Found(LyricsResult),
@@ -242,9 +245,8 @@ impl LyricsService {
                 (existing.clone(), false)
             } else {
                 let inner = Arc::clone(&self.inner);
-                let boxed: Pin<
-                    Box<dyn Future<Output = Result<LyricsResponse, String>> + Send>,
-                > = Box::pin(run_chain(inner, request));
+                let boxed: Pin<Box<dyn Future<Output = Result<LyricsResponse, String>> + Send>> =
+                    Box::pin(run_chain(inner, request));
                 let future = boxed.shared();
                 inflight.insert(dedupe_key.clone(), future.clone());
                 (future, true)
@@ -433,11 +435,19 @@ async fn run_chain(
     // LRCLIB with exactly 1 retry on transport error (parity:
     // legacy_compat.rs:519-536 — Ok(None) is a miss, NOT a retry).
     let lrclib_fut = async {
-        match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
+        match inner
+            .providers
+            .lrclib(&title, &artist, request.duration_secs)
+            .await
+        {
             Ok(data) => data,
             Err(e) => {
                 log::warn!("[Lyrics] LRCLIB attempt 1 failed: {}, retrying…", e);
-                match inner.providers.lrclib(&title, &artist, request.duration_secs).await {
+                match inner
+                    .providers
+                    .lrclib(&title, &artist, request.duration_secs)
+                    .await
+                {
                     Ok(data) => data,
                     Err(e2) => {
                         log::warn!("[Lyrics] LRCLIB attempt 2 failed: {}, falling back", e2);
@@ -729,11 +739,22 @@ mod tests {
         assert_eq!(result.payload.provider, LyricsProvider::Qobuz);
         assert!(result.doc.synced);
         assert_eq!(result.doc.lines.len(), 2);
-        assert!(result.doc.lines[0].words.is_some(), "native words preserved");
+        assert!(
+            result.doc.lines[0].words.is_some(),
+            "native words preserved"
+        );
         assert_eq!(result.doc.writers.as_deref(), Some("W. Riter"));
         // LRC emitted for cross-frontend compat; plain joined.
-        assert!(result.payload.synced_lrc.as_deref().unwrap().contains("[00:01.000] first line"));
-        assert_eq!(result.payload.plain.as_deref(), Some("first line\nsecond line"));
+        assert!(result
+            .payload
+            .synced_lrc
+            .as_deref()
+            .unwrap()
+            .contains("[00:01.000] first line"));
+        assert_eq!(
+            result.payload.plain.as_deref(),
+            Some("first line\nsecond line")
+        );
         // LRCLIB now runs CONCURRENTLY with Qobuz (parallel resolution), so it
         // is called once — but Qobuz wsync still wins the selection and its
         // result is discarded; ovh never runs once something is found.
@@ -811,7 +832,10 @@ mod tests {
         let result = found(&response);
         assert_eq!(result.payload.provider, LyricsProvider::Qobuz);
         assert!(!result.doc.synced);
-        assert_eq!(result.payload.plain.as_deref(), Some("plain one\nplain two"));
+        assert_eq!(
+            result.payload.plain.as_deref(),
+            Some("plain one\nplain two")
+        );
         // Something was held -> ovh never runs.
         assert_eq!(providers.ovh_calls.load(Ordering::SeqCst), 0);
     }
@@ -837,7 +861,11 @@ mod tests {
     #[tokio::test]
     async fn full_fallback_to_ovh_then_not_found() {
         let providers = Arc::new(FakeProviders::default());
-        providers.ovh_queue.lock().unwrap().push_back(Some(ovh_plain()));
+        providers
+            .ovh_queue
+            .lock()
+            .unwrap()
+            .push_back(Some(ovh_plain()));
         let (service, _dir) = service_with(providers.clone()).await;
 
         let response = service.get(request()).await.unwrap();
@@ -892,7 +920,11 @@ mod tests {
             q.push_back(Err("timeout".into()));
             q.push_back(Err("timeout".into()));
         }
-        providers.ovh_queue.lock().unwrap().push_back(Some(ovh_plain()));
+        providers
+            .ovh_queue
+            .lock()
+            .unwrap()
+            .push_back(Some(ovh_plain()));
         let (service, _dir) = service_with(providers.clone()).await;
         let response = service.get(request()).await.unwrap();
         assert_eq!(found(&response).payload.provider, LyricsProvider::Ovh);
@@ -1023,11 +1055,8 @@ mod tests {
     #[tokio::test]
     async fn plain_original_with_plain_translation_is_mapped() {
         let providers = Arc::new(FakeProviders::default());
-        providers
-            .qobuz_queue
-            .lock()
-            .unwrap()
-            .push_back(Ok(Some(serde_json::from_str(
+        providers.qobuz_queue.lock().unwrap().push_back(Ok(Some(
+            serde_json::from_str(
                 r#"{
                 "track_id": 100, "album_id": "alb",
                 "translation_langs": ["de"],
@@ -1037,7 +1066,8 @@ mod tests {
                     "lines": [{"line": "einfach eins"}, {"line": "einfach zwei"}]}
             }"#,
             )
-            .unwrap())));
+            .unwrap(),
+        )));
         let (service, _dir) = service_with(providers.clone()).await;
 
         let mut translated = request();
@@ -1117,7 +1147,11 @@ mod tests {
     #[tokio::test]
     async fn offline_serves_cached_plain_and_skips_all_providers() {
         let providers = Arc::new(FakeProviders::default());
-        providers.ovh_queue.lock().unwrap().push_back(Some(ovh_plain()));
+        providers
+            .ovh_queue
+            .lock()
+            .unwrap()
+            .push_back(Some(ovh_plain()));
         let (service, _dir) = service_with(providers.clone()).await;
 
         // Seed a plain-only entry online.

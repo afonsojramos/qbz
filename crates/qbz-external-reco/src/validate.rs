@@ -204,7 +204,11 @@ pub async fn validate_track(
     if let Some(c) = cache {
         if let Ok(guard) = c.lock() {
             match &reco {
-                Some(r) => guard.put(&key, "track", Some(&serde_json::to_string(r).unwrap_or_default())),
+                Some(r) => guard.put(
+                    &key,
+                    "track",
+                    Some(&serde_json::to_string(r).unwrap_or_default()),
+                ),
                 // Only persist a negative when negatives are trusted (NOT for
                 // weeklies — a transient miss must not stick for 7 days).
                 None if !skip_negative => guard.put(&key, "track", None),
@@ -249,7 +253,11 @@ pub async fn validate_artist(
         .map(|a| ArtistReco {
             qobuz_artist_id: a.id,
             name: a.name.clone(),
-            image_url: a.image.as_ref().and_then(|i| i.best().cloned()).unwrap_or_default(),
+            image_url: a
+                .image
+                .as_ref()
+                .and_then(|i| i.best().cloned())
+                .unwrap_or_default(),
             subtitle: cand.subtitle.clone(),
             source: cand.source,
         });
@@ -257,7 +265,11 @@ pub async fn validate_artist(
     if let Some(c) = cache {
         if let Ok(guard) = c.lock() {
             match &reco {
-                Some(r) => guard.put(&key, "artist", Some(&serde_json::to_string(r).unwrap_or_default())),
+                Some(r) => guard.put(
+                    &key,
+                    "artist",
+                    Some(&serde_json::to_string(r).unwrap_or_default()),
+                ),
                 None => guard.put(&key, "artist", None),
             }
         }
@@ -313,10 +325,12 @@ pub fn build_album_reco(album: &Album, subtitle: String, source: RecoSource) -> 
 async fn resolve_album_live(catalog: &dyn RecoCatalog, cand: &AlbumCandidate) -> Option<AlbumReco> {
     if let Some(upc) = cand.upc.as_deref().filter(|s| !s.is_empty()) {
         let albums = catalog.search_albums(upc, 5).await;
-        if let Some(a) = albums
-            .iter()
-            .find(|a| a.upc.as_deref().map(|u| u.eq_ignore_ascii_case(upc)).unwrap_or(false))
-        {
+        if let Some(a) = albums.iter().find(|a| {
+            a.upc
+                .as_deref()
+                .map(|u| u.eq_ignore_ascii_case(upc))
+                .unwrap_or(false)
+        }) {
             // The UPC pins the exact release; if it's a single/slop, discard the
             // candidate rather than fuzzy-hunting for a different album.
             return album_if_full(a, cand);
@@ -366,7 +380,11 @@ pub async fn validate_album(
     if let Some(c) = cache {
         if let Ok(guard) = c.lock() {
             match &reco {
-                Some(r) => guard.put(&key, "album", Some(&serde_json::to_string(r).unwrap_or_default())),
+                Some(r) => guard.put(
+                    &key,
+                    "album",
+                    Some(&serde_json::to_string(r).unwrap_or_default()),
+                ),
                 None => guard.put(&key, "album", None),
             }
         }

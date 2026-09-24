@@ -246,8 +246,20 @@ mod tests {
     fn windows_msi_manifest_cannot_select_a_portable_archive() {
         let r = release("2.1.2", 24);
         let mut manifest = serde_json::json!({"version":"2.1.2","platforms":{"windows-x86_64":{"signature":"sig","url":"https://github.com/vicrodh/qbz/releases/download/v2.1.2/QBZ_2.1.2_x64.msi"}}});
-        assert!(select_asset(&serde_json::to_vec(&manifest).unwrap(), &r, "windows-x86_64").is_ok());
-        manifest["platforms"]["windows-x86_64"]["url"] = "https://github.com/vicrodh/qbz/releases/download/v2.1.2/qbz_2.1.2_windows_x64.zip".into();
-        assert!(select_asset(&serde_json::to_vec(&manifest).unwrap(), &r, "windows-x86_64").is_err());
+        assert!(select_asset(
+            &serde_json::to_vec(&manifest).unwrap(),
+            &r,
+            "windows-x86_64"
+        )
+        .is_ok());
+        manifest["platforms"]["windows-x86_64"]["url"] =
+            "https://github.com/vicrodh/qbz/releases/download/v2.1.2/qbz_2.1.2_windows_x64.zip"
+                .into();
+        assert!(select_asset(
+            &serde_json::to_vec(&manifest).unwrap(),
+            &r,
+            "windows-x86_64"
+        )
+        .is_err());
     }
 }

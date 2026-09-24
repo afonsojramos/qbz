@@ -226,7 +226,10 @@ pub fn plan_tick(
     // 2. Periodic session-position save (playback.rs:4305-4308): ~11 ticks ≈ 5 s
     //    while a track is actually playing.
     let next_save_tick = state.save_pos_tick.wrapping_add(1);
-    if ev.is_playing && ev.track_id != 0 && next_save_tick % SAVE_POSITION_EVERY_N_TICKS == 0 {
+    if ev.is_playing
+        && ev.track_id != 0
+        && next_save_tick.is_multiple_of(SAVE_POSITION_EVERY_N_TICKS)
+    {
         actions.push(DriverAction::SavePosition(ev.position));
     }
 
@@ -314,7 +317,7 @@ pub fn plan_tick(
             PlaybackBufferState::InitialBuffering | PlaybackBufferState::Underrun
         );
         let periodic = (ev.is_playing || buffer_active)
-            && next_report_tick % QCONNECT_REPORT_EVERY_N_TICKS == 0;
+            && next_report_tick.is_multiple_of(QCONNECT_REPORT_EVERY_N_TICKS);
         if transition || periodic {
             actions.push(DriverAction::ReportEdge);
         }
@@ -324,6 +327,11 @@ pub fn plan_tick(
     //    never advance, ahead of any repeat/shuffle); else advance to the next
     //    playable track; else the queue is finished. repeat one/all always yield
     //    a next track (QueueManager owns the replay/wrap), so they never finish.
+    // The repeat-mode and has-next-track arms below both push AdvanceAndPlay
+    // for genuinely different reasons (see the comment above) — a `||` merge
+    // would work but breaks the 1:1 correspondence with playback.rs's own
+    // branch structure this ports.
+    #[allow(clippy::if_same_then_else)]
     if track_ended {
         if queue.current != 0 && queue.stop_after == Some(queue.current) {
             actions.push(DriverAction::PauseStopAfter);
@@ -360,7 +368,9 @@ pub fn advance_state(
                 | DriverAction::QueueFinished
         )
     });
-    let reported = actions.iter().any(|a| matches!(a, DriverAction::ReportEdge));
+    let reported = actions
+        .iter()
+        .any(|a| matches!(a, DriverAction::ReportEdge));
     let warmed = actions
         .iter()
         .any(|a| matches!(a, DriverAction::WarmSuccessor));
@@ -483,6 +493,12 @@ pub fn quality_from_key(key: &str) -> Quality {
 
 // ─────────────────────────── IO shell ───────────────────────────
 
+/// Re-admit callback — see [`DriverDeps::readmit_owner_action`].
+type ReadmitOwnerAction =
+    Arc<dyn Fn(&DriverOwnerToken) -> Option<DriverActionPermit> + Send + Sync>;
+/// Latch callback — see [`DriverDeps::on_latch`].
+type OnLatch = Arc<dyn Fn(&str, String) + Send + Sync>;
+
 /// Host-supplied side channels the shell drives on each relevant action. Kept
 /// as trait objects so qbzd can wire daemon-shared latching / tick timestamping
 /// / the QConnect report signal without this module depending on qbzd.
@@ -501,12 +517,11 @@ pub struct DriverDeps {
     /// Re-admit a spawned continuation only under the exact owner generation
     /// that produced it. A guest round-trip must never promote stale work into
     /// a later owner merely because owner actions are allowed again.
-    pub readmit_owner_action:
-        Arc<dyn Fn(&DriverOwnerToken) -> Option<DriverActionPermit> + Send + Sync>,
+    pub readmit_owner_action: ReadmitOwnerAction,
     /// Report-edge signal (T10 wires the QConnect renderer report).
     pub on_edge: Arc<dyn Fn() + Send + Sync>,
     /// Latch a drained error under a category ("stream" | "transport" | "auth").
-    pub on_latch: Arc<dyn Fn(&str, String) + Send + Sync>,
+    pub on_latch: OnLatch,
     /// Called at the end of every tick (qbzd timestamps `driver_last_tick`).
     pub on_tick: Arc<dyn Fn() + Send + Sync>,
 }
@@ -729,9 +744,7 @@ pub async fn run_driver<A: FrontendAdapter + Send + Sync + 'static>(
                 continue;
             }
         };
-        let owner_token = owner_admission
-            .as_ref()
-            .map(DriverOwnerAdmission::token);
+        let owner_token = owner_admission.as_ref().map(DriverOwnerAdmission::token);
         let core = runtime.core();
         let player = core.player();
         let ev = player.get_playback_event();
@@ -983,7 +996,10 @@ pub async fn advance_and_play<A: FrontendAdapter + Send + Sync + 'static>(
             break Some(track);
         }
         skips += 1;
-        log::info!("[qbzd] driver: skipping unavailable track {} ({skips}/{MAX_OFFLINE_SKIPS})", track.id);
+        log::info!(
+            "[qbzd] driver: skipping unavailable track {} ({skips}/{MAX_OFFLINE_SKIPS})",
+            track.id
+        );
         if skips >= MAX_OFFLINE_SKIPS {
             let _ = core.stop();
             break None;
@@ -1052,8 +1068,7 @@ async fn prefetch_successors<A: FrontendAdapter + Send + Sync + 'static>(
     // (~60 MB/track → ~15 MB at Lossless); the watchdog additionally pauses
     // HiRes prefetch on low-pressure ticks. This caps only the warm-ahead
     // copy — playback of the user's selected quality is unaffected.
-    let allow_hires =
-        profile.allow_hires && !crate::memory_watchdog::hires_prefetch_paused();
+    let allow_hires = profile.allow_hires && !crate::memory_watchdog::hires_prefetch_paused();
     let prefetch_quality = cap_prefetch_quality(quality, allow_hires);
     if prefetch_quality != quality {
         // Do not warm a CD copy that will be rejected at a Hi-Res transition.
@@ -1760,13 +1775,19 @@ mod tests {
     #[test]
     fn prefetch_quality_caps_hires_to_lossless_when_disallowed() {
         // LowMemory profile / low-pressure tick: HiRes warm-aheads shrink.
-        assert_eq!(cap_prefetch_quality(Quality::HiRes, false), Quality::Lossless);
+        assert_eq!(
+            cap_prefetch_quality(Quality::HiRes, false),
+            Quality::Lossless
+        );
         assert_eq!(
             cap_prefetch_quality(Quality::UltraHiRes, false),
             Quality::Lossless
         );
         // Lower tiers are untouched.
-        assert_eq!(cap_prefetch_quality(Quality::Lossless, false), Quality::Lossless);
+        assert_eq!(
+            cap_prefetch_quality(Quality::Lossless, false),
+            Quality::Lossless
+        );
         assert_eq!(cap_prefetch_quality(Quality::Mp3, false), Quality::Mp3);
     }
 }

@@ -88,7 +88,9 @@ fn db_path() -> Result<PathBuf, StoreError> {
     if let Some(p) = DB_OVERRIDE.get() {
         return Ok(p.clone());
     }
-    let dir = dirs::data_local_dir().ok_or(StoreError::NoDataDir)?.join("qbz");
+    let dir = dirs::data_local_dir()
+        .ok_or(StoreError::NoDataDir)?
+        .join("qbz");
     Ok(dir.join("discs.db"))
 }
 
@@ -162,7 +164,9 @@ fn read(fingerprint: &str) -> Result<Option<DiscMemory>, StoreError> {
     Ok(Some(DiscMemory {
         album: row.get(0)?,
         album_artist: row.get(1)?,
-        year: row.get::<_, Option<i64>>(2)?.and_then(|y| u32::try_from(y).ok()),
+        year: row
+            .get::<_, Option<i64>>(2)?
+            .and_then(|y| u32::try_from(y).ok()),
         release_id: row.get(3)?,
         release_group_id: row.get(4)?,
         cover_path: row.get(5)?,
@@ -301,7 +305,8 @@ mod tests {
     fn init() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
-            let dir = std::env::temp_dir().join(format!("qbz-disc-store-test-{}", std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("qbz-disc-store-test-{}", std::process::id()));
             std::fs::create_dir_all(&dir).unwrap();
             set_db_path(dir.join("discs.db"));
         });
@@ -333,7 +338,11 @@ mod tests {
     #[test]
     fn what_a_lookup_found_comes_back() {
         init();
-        assert!(put_auto("fp-roundtrip", Some("disc-1"), &memory("Fear Inoculum")));
+        assert!(put_auto(
+            "fp-roundtrip",
+            Some("disc-1"),
+            &memory("Fear Inoculum")
+        ));
         let got = get("fp-roundtrip").expect("remembered");
         assert_eq!(got.album, "Fear Inoculum");
         assert_eq!(got.year, Some(2019));
@@ -352,7 +361,10 @@ mod tests {
 
         // MusicBrainz answers again tomorrow with its own first pick.
         let written = put_auto("fp-edited", Some("disc-2"), &memory("The Wrong Pressing"));
-        assert!(!written, "an auto lookup must refuse to touch an edited row");
+        assert!(
+            !written,
+            "an auto lookup must refuse to touch an edited row"
+        );
 
         let got = get("fp-edited").expect("remembered");
         assert_eq!(got.album, "The Right Pressing");

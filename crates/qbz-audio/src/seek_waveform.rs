@@ -239,7 +239,7 @@ impl SeekWaveformAccumulator {
 
         for frame_offset in 0..frames {
             let absolute = start_frame.saturating_add(frame_offset as u64);
-            if absolute >= self.total_frames || absolute % stride != 0 {
+            if absolute >= self.total_frames || !absolute.is_multiple_of(stride) {
                 continue;
             }
             let bin = ((absolute as u128 * SEEK_WAVEFORM_BINS as u128) / self.total_frames as u128)

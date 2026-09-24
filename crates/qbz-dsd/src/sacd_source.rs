@@ -312,7 +312,7 @@ impl DsdDemuxer for SacdDemuxer {
                     out[1].extend_from_slice(&frame[FRAME_PER_CH..]);
                 }
                 ChannelLayout::ByteInterleaved => {
-                    for pair in frame.chunks_exact(2) {
+                    for pair in frame.as_chunks::<2>().0 {
                         out[0].push(pair[0]);
                         out[1].push(pair[1]);
                     }
@@ -343,15 +343,15 @@ mod tests {
         // A deliberately asymmetric frame: the first half all 0xAA, the
         // second all 0x55.
         let mut frame = vec![0xAAu8; FRAME_PER_CH];
-        frame.extend(std::iter::repeat(0x55).take(FRAME_PER_CH));
+        frame.extend(std::iter::repeat_n(0x55, FRAME_PER_CH));
 
         let block0: Vec<u8> = frame[..FRAME_PER_CH].to_vec();
-        let inter0: Vec<u8> = frame.chunks_exact(2).map(|p| p[0]).collect();
+        let inter0: Vec<u8> = frame.as_chunks::<2>().0.iter().map(|p| p[0]).collect();
         assert!(block0.iter().all(|b| *b == 0xAA));
         // Byte-interleaving the same frame gives a channel that is half 0xAA
         // and half 0x55 — a completely different signal, which is why picking
         // the wrong one is audible rather than subtle.
-        assert!(inter0.iter().any(|b| *b == 0x55));
+        assert!(inter0.contains(&0x55));
     }
 
     /// THE regression guard for the 2026-08-21 correction.
@@ -375,8 +375,8 @@ mod tests {
         let frame: Vec<u8> = (0..FRAME)
             .map(|i| if i % 2 == 0 { 0x11 } else { 0x22 })
             .collect();
-        let l: Vec<u8> = frame.chunks_exact(2).map(|p| p[0]).collect();
-        let r: Vec<u8> = frame.chunks_exact(2).map(|p| p[1]).collect();
+        let l: Vec<u8> = frame.as_chunks::<2>().0.iter().map(|p| p[0]).collect();
+        let r: Vec<u8> = frame.as_chunks::<2>().0.iter().map(|p| p[1]).collect();
         assert_eq!(l.len(), FRAME_PER_CH);
         assert_eq!(r.len(), FRAME_PER_CH);
         assert!(l.iter().all(|b| *b == 0x11), "channel 0 is the even bytes");

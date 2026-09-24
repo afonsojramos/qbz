@@ -8,8 +8,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, MediaPosition};
 use souvlaki::{MediaControlEvent, PlatformConfig, SeekDirection};
+use souvlaki::{MediaControls, MediaMetadata, MediaPlayback, MediaPosition};
 
 use crate::types::{MediaEvent, MediaIntegration, PlaybackStatus, TrackMeta};
 use crate::NativeWindow;
@@ -327,7 +327,10 @@ mod tests {
 
     #[test]
     fn remote_urls_are_never_touched() {
-        assert_eq!(cover_for_souvlaki("https://x/y.jpg", true), "https://x/y.jpg");
+        assert_eq!(
+            cover_for_souvlaki("https://x/y.jpg", true),
+            "https://x/y.jpg"
+        );
     }
 
     #[test]

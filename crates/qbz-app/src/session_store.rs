@@ -436,6 +436,18 @@ impl SessionStore {
     }
 
     pub fn load_session(&self) -> Result<PersistedSessionSnapshot, String> {
+        type SessionRow = (
+            Option<i64>,
+            i64,
+            f64,
+            i64,
+            String,
+            i64,
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+        );
         let (
             current_index,
             current_position_secs,
@@ -447,18 +459,7 @@ impl SessionStore {
             last_view,
             view_context_id,
             view_context_type,
-        ): (
-            Option<i64>,
-            i64,
-            f64,
-            i64,
-            String,
-            i64,
-            i64,
-            String,
-            Option<String>,
-            Option<String>,
-        ) = self
+        ): SessionRow = self
             .conn
             .query_row(
                 "SELECT current_index, current_position_secs, volume, shuffle_enabled, repeat_mode, was_playing, saved_at, last_view, view_context_id, view_context_type

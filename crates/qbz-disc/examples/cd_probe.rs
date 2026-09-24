@@ -27,7 +27,11 @@ fn main() {
             t.sectors,
             d / 60,
             d % 60,
-            if t.is_audio { "audio" } else { "DATA (skipped)" }
+            if t.is_audio {
+                "audio"
+            } else {
+                "DATA (skipped)"
+            }
         );
     }
     println!("total {}:{:02}", total / 60, total % 60);
@@ -52,7 +56,9 @@ fn main() {
         }
     }
     let samples: Vec<i16> = buf
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|b| i16::from_le_bytes([b[0], b[1]]))
         .collect();
     let peak = samples.iter().map(|s| s.unsigned_abs()).max().unwrap_or(0);

@@ -433,10 +433,34 @@ pub struct TestSeed {
 }
 
 pub const TEST_SEEDS: [TestSeed; 4] = [
-    TestSeed { depth: 16, rate: 44100.0, id_hint: 19301386, artist: "George Harrison", title: "My Sweet Lord" },
-    TestSeed { depth: 24, rate: 44100.0, id_hint: 266725027, artist: "Billie Eilish", title: "LUNCH" },
-    TestSeed { depth: 24, rate: 96000.0, id_hint: 126886854, artist: "Iron Maiden", title: "Stratego" },
-    TestSeed { depth: 24, rate: 192000.0, id_hint: 52265, artist: "Toto", title: "Africa" },
+    TestSeed {
+        depth: 16,
+        rate: 44100.0,
+        id_hint: 19301386,
+        artist: "George Harrison",
+        title: "My Sweet Lord",
+    },
+    TestSeed {
+        depth: 24,
+        rate: 44100.0,
+        id_hint: 266725027,
+        artist: "Billie Eilish",
+        title: "LUNCH",
+    },
+    TestSeed {
+        depth: 24,
+        rate: 96000.0,
+        id_hint: 126886854,
+        artist: "Iron Maiden",
+        title: "Stratego",
+    },
+    TestSeed {
+        depth: 24,
+        rate: 192000.0,
+        id_hint: 52265,
+        artist: "Toto",
+        title: "Africa",
+    },
 ];
 
 /// True if a resolved track matches this seed's family (rate + bit depth — the
@@ -498,7 +522,7 @@ pub fn poll_view(
 }
 
 fn khz(hz: u32) -> String {
-    if hz % 1000 == 0 {
+    if hz.is_multiple_of(1000) {
         format!("{} kHz", hz / 1000)
     } else {
         format!("{:.1} kHz", hz as f64 / 1000.0)

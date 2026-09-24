@@ -138,7 +138,7 @@ fn read_sidecar_file(path: &Path) -> Result<Option<AlbumTagSidecar>, LibraryErro
         return Ok(None);
     }
 
-    let bytes = fs::read(&path).map_err(LibraryError::Io)?;
+    let bytes = fs::read(path).map_err(LibraryError::Io)?;
     let sidecar: AlbumTagSidecar =
         serde_json::from_slice(&bytes).map_err(|e| LibraryError::Metadata(e.to_string()))?;
     Ok(Some(sidecar))

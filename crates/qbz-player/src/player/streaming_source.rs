@@ -383,7 +383,9 @@ impl BufferedMediaSource {
             config: self.config.clone(),
             read_pos: std::sync::atomic::AtomicU64::new(0),
             reader_generation: self.reader_generation.clone(),
-            generation: self.reader_generation.load(std::sync::atomic::Ordering::SeqCst),
+            generation: self
+                .reader_generation
+                .load(std::sync::atomic::Ordering::SeqCst),
         }
     }
 
@@ -392,7 +394,8 @@ impl BufferedMediaSource {
     pub(super) fn interrupt_readers(&self) {
         let (lock, cvar) = &*self.state;
         let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
-        self.reader_generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.reader_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         cvar.notify_all();
     }
 
@@ -406,7 +409,7 @@ impl BufferedMediaSource {
         let (lock, cvar) = &*self.state;
         let mut state = lock
             .lock()
-            .map_err(|_| IoError::new(ErrorKind::Other, "Failed to acquire buffer lock"))?;
+            .map_err(|_| IoError::other("Failed to acquire buffer lock"))?;
 
         while state.len() < self.config.initial_buffer_bytes
             && !state.download_complete
@@ -414,11 +417,11 @@ impl BufferedMediaSource {
         {
             state = cvar
                 .wait(state)
-                .map_err(|_| IoError::new(ErrorKind::Other, "Condition variable wait failed"))?;
+                .map_err(|_| IoError::other("Condition variable wait failed"))?;
         }
 
         if let Some(ref err) = state.download_error {
-            return Err(IoError::new(ErrorKind::Other, err.clone()));
+            return Err(IoError::other(err.clone()));
         }
 
         Ok(())
@@ -549,17 +552,19 @@ impl Read for BufferedMediaSource {
         let (lock, cvar) = &*self.state;
         let mut state = lock
             .lock()
-            .map_err(|_| IoError::new(ErrorKind::Other, "Failed to acquire buffer lock"))?;
+            .map_err(|_| IoError::other("Failed to acquire buffer lock"))?;
 
         let read_pos = self.read_pos.load(Ordering::SeqCst) as usize;
 
         // Wait for data if we're ahead of buffer
-        while read_pos >= state.len() && !state.download_complete && state.download_error.is_none()
+        while read_pos >= state.len()
+            && !state.download_complete
+            && state.download_error.is_none()
             && self.reader_generation.load(Ordering::SeqCst) == self.generation
         {
             state = cvar
                 .wait(state)
-                .map_err(|_| IoError::new(ErrorKind::Other, "Condition variable wait failed"))?;
+                .map_err(|_| IoError::other("Condition variable wait failed"))?;
         }
 
         if self.reader_generation.load(Ordering::SeqCst) != self.generation {
@@ -567,7 +572,7 @@ impl Read for BufferedMediaSource {
         }
         // Check for errors
         if let Some(ref err) = state.download_error {
-            return Err(IoError::new(ErrorKind::Other, err.clone()));
+            return Err(IoError::other(err.clone()));
         }
 
         // EOF if at end and download complete
@@ -599,7 +604,7 @@ impl Seek for BufferedMediaSource {
         let (lock, cvar) = &*self.state;
         let mut state = lock
             .lock()
-            .map_err(|_| IoError::new(ErrorKind::Other, "Failed to acquire buffer lock"))?;
+            .map_err(|_| IoError::other("Failed to acquire buffer lock"))?;
 
         let current_pos = self.read_pos.load(Ordering::SeqCst) as i64;
 
@@ -638,11 +643,11 @@ impl Seek for BufferedMediaSource {
         {
             state = cvar
                 .wait(state)
-                .map_err(|_| IoError::new(ErrorKind::Other, "Condition variable wait failed"))?;
+                .map_err(|_| IoError::other("Condition variable wait failed"))?;
         }
 
         if let Some(ref err) = state.download_error {
-            return Err(IoError::new(ErrorKind::Other, err.clone()));
+            return Err(IoError::other(err.clone()));
         }
 
         // After download complete, check bounds
@@ -815,7 +820,7 @@ impl BufferWriter {
         loop {
             let state = lock
                 .lock()
-                .map_err(|_| IoError::new(ErrorKind::Other, "Failed to acquire buffer lock"))?;
+                .map_err(|_| IoError::other("Failed to acquire buffer lock"))?;
             if offset >= state.len() {
                 break;
             }
@@ -1500,9 +1505,17 @@ mod tests {
         let source = Arc::new(source);
         let mut reader = source.create_reader();
         let (done_tx, done_rx) = std::sync::mpsc::channel();
-        let worker = thread::spawn(move || { done_tx.send(reader.read(&mut [0; 8])).unwrap(); });
+        let worker = thread::spawn(move || {
+            done_tx.send(reader.read(&mut [0; 8])).unwrap();
+        });
         source.interrupt_readers();
-        assert_eq!(done_rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 0);
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            0
+        );
         worker.join().unwrap();
         assert!(!source.is_complete());
         writer.push_chunk(b"resume").unwrap();
@@ -1565,7 +1578,12 @@ mod tests {
         assert_eq!(streaming.get_sample_rate(), 192000);
         let expected = |index: usize| {
             let value = ((index / 2) % 100000) as i32 - 50000;
-            (if index % 2 == 0 { value } else { -value }) as f32 / 8388608.0
+            (if index.is_multiple_of(2) {
+                value
+            } else {
+                -value
+            }) as f32
+                / 8388608.0
         };
         for index in 0..1000 {
             assert_eq!(streaming.next().unwrap(), expected(index));
@@ -1626,7 +1644,8 @@ mod tests {
     #[ignore = "requires QBZ_HIRES_FIXTURE pointing to a real 24/192 FLAC file"]
     fn real_hires_disk_file_matches_memory_decode_and_seeks() {
         let path = std::env::var("QBZ_HIRES_FIXTURE").expect("set QBZ_HIRES_FIXTURE");
-        let buffer = Arc::new(BufferedMediaSource::from_file(std::fs::File::open(&path).unwrap()).unwrap());
+        let buffer =
+            Arc::new(BufferedMediaSource::from_file(std::fs::File::open(&path).unwrap()).unwrap());
         let mut disk = IncrementalStreamingSource::new(buffer.clone()).unwrap();
         let mut reference = InMemorySource::new(std::fs::read(path).unwrap()).unwrap();
         assert_eq!(disk.get_sample_rate(), 192000);
@@ -1643,7 +1662,11 @@ mod tests {
             disk.seek_to(position).unwrap();
             reference.seek_to(position).unwrap();
             for index in 0..384000 {
-                assert_eq!(disk.next(), reference.next(), "seek {seconds}s sample {index}");
+                assert_eq!(
+                    disk.next(),
+                    reference.next(),
+                    "seek {seconds}s sample {index}"
+                );
             }
         }
         assert!(buffer.complete_data_shared().is_none());
@@ -1838,17 +1861,17 @@ mod tests {
 
         // Read first 5 bytes
         let mut buf = [0u8; 5];
-        source.read(&mut buf).unwrap();
+        source.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"01234");
 
         // Seek back to start
         source.seek(SeekFrom::Start(0)).unwrap();
-        source.read(&mut buf).unwrap();
+        source.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"01234");
 
         // Seek to middle
         source.seek(SeekFrom::Start(3)).unwrap();
-        source.read(&mut buf).unwrap();
+        source.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"34567");
     }
 

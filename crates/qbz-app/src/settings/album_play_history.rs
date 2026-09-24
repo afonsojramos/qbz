@@ -87,7 +87,9 @@ fn open_db() -> Option<Connection> {
         }
     };
     // ADR-002: WAL for any SQLite store touched off the UI thread.
-    if let Err(e) = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;") {
+    if let Err(e) = conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+    ) {
         log::warn!("[qbz-app] album_play_history pragma failed: {e}");
     }
     if let Err(e) = init_schema(&conn) {
@@ -269,8 +271,7 @@ pub fn prune_albums(album_ids: &[String]) -> usize {
     if album_ids.is_empty() {
         return 0;
     }
-    with_db(|conn| Some(prune_on(conn, album_ids)))
-        .unwrap_or(0)
+    with_db(|conn| Some(prune_on(conn, album_ids))).unwrap_or(0)
 }
 
 fn prune_on(conn: &Connection, album_ids: &[String]) -> usize {
@@ -330,7 +331,9 @@ mod tests {
         }
         let rows = query_on(&c, None);
         assert_eq!(
-            rows.iter().map(|r| (r.album_id.as_str(), r.plays)).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|r| (r.album_id.as_str(), r.plays))
+                .collect::<Vec<_>>(),
             vec![("C", 36), ("B", 20), ("A", 12)]
         );
         // Meta round-trips.
@@ -348,7 +351,10 @@ mod tests {
         record_on(&c, &meta("B", "B"), 20);
         record_on(&c, &meta("B", "B"), 21);
         let rows = query_on(&c, None);
-        assert_eq!(rows.iter().map(|r| r.album_id.clone()).collect::<Vec<_>>(), vec!["B", "A"]);
+        assert_eq!(
+            rows.iter().map(|r| r.album_id.clone()).collect::<Vec<_>>(),
+            vec!["B", "A"]
+        );
     }
 
     #[test]
@@ -363,7 +369,10 @@ mod tests {
         }
         let top = query_on(&c, Some(3));
         assert_eq!(top.len(), 3);
-        assert_eq!(top.iter().map(|r| r.album_id.clone()).collect::<Vec<_>>(), vec!["id4", "id3", "id2"]);
+        assert_eq!(
+            top.iter().map(|r| r.album_id.clone()).collect::<Vec<_>>(),
+            vec!["id4", "id3", "id2"]
+        );
     }
 
     #[test]

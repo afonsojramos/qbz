@@ -16,16 +16,11 @@ const CUE_EXTENSION: &str = "cue";
 /// Explicit symlink policy for a root. The compatibility default follows
 /// links, but WalkDir's loop detector remains enabled and every loop/error is
 /// surfaced to the caller; there is no silent `filter_map(Result::ok)` path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SymlinkPolicy {
     Ignore,
+    #[default]
     FollowWithCycleDetection,
-}
-
-impl Default for SymlinkPolicy {
-    fn default() -> Self {
-        Self::FollowWithCycleDetection
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

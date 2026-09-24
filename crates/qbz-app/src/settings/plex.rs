@@ -79,8 +79,10 @@ impl PlexSettingsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open Plex settings database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-            .map_err(|e| format!("Failed to enable WAL for Plex settings database: {}", e))?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+        )
+        .map_err(|e| format!("Failed to enable WAL for Plex settings database: {}", e))?;
 
         // Base (slice 2a) schema. New columns are added by idempotent ALTERs
         // below so an existing 4-column 2a DB migrates without dropping creds.
@@ -576,9 +578,7 @@ mod tests {
         assert_eq!(settings.selected_section_key, "3");
 
         // Empty list clears the mirror.
-        store
-            .set_selected_section_keys(&[])
-            .expect("clear keys");
+        store.set_selected_section_keys(&[]).expect("clear keys");
         let cleared = store.get_settings().expect("get settings");
         assert!(cleared.selected_section_keys.is_empty());
         assert!(cleared.selected_section_key.is_empty());

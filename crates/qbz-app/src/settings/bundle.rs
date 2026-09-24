@@ -233,12 +233,14 @@ impl Bundle {
             .and_then(|i| i.get("scrobblers"))
             .and_then(Value::as_object)
             .map(|s| {
-                ["lastfm_session_key", "listenbrainz_token"].iter().any(|k| {
-                    s.get(*k)
-                        .and_then(Value::as_str)
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false)
-                })
+                ["lastfm_session_key", "listenbrainz_token"]
+                    .iter()
+                    .any(|k| {
+                        s.get(*k)
+                            .and_then(Value::as_str)
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false)
+                    })
             })
             .unwrap_or(false)
     }
@@ -251,12 +253,14 @@ impl Bundle {
             serde_json::from_str(text).map_err(|e| BundleError::Parse(e.to_string()))?;
         let mut obj = match value {
             Value::Object(m) => m,
-            _ => return Err(BundleError::Parse("bundle root is not a JSON object".into())),
+            _ => {
+                return Err(BundleError::Parse(
+                    "bundle root is not a JSON object".into(),
+                ))
+            }
         };
         let schema_version = match obj.remove("schema_version") {
-            Some(Value::Number(n)) if n.is_i64() || n.is_u64() => {
-                n.as_i64().unwrap_or(i64::MAX)
-            }
+            Some(Value::Number(n)) if n.is_i64() || n.is_u64() => n.as_i64().unwrap_or(i64::MAX),
             _ => return Err(BundleError::VersionMalformed),
         };
         let created_at = obj
@@ -644,11 +648,13 @@ fn plan_playback(value: &Value, plan: &mut ImportPlan) {
     };
     for (k, v) in map {
         if k.eq_ignore_ascii_case("volume") {
-            plan.skipped.push(skip_line(&format!("playback.{k}"), VOLUME_SKIP_WHY));
+            plan.skipped
+                .push(skip_line(&format!("playback.{k}"), VOLUME_SKIP_WHY));
         } else if PLAYBACK_KEYS.contains(&k.as_str()) {
             applied_line(plan, &format!("playback.{k}"), v, "");
         } else {
-            plan.skipped.push(skip_line(&format!("playback.{k}"), UNKNOWN_WHY));
+            plan.skipped
+                .push(skip_line(&format!("playback.{k}"), UNKNOWN_WHY));
         }
     }
 }
@@ -662,13 +668,16 @@ fn plan_prefs(value: &Value, plan: &mut ImportPlan) {
         match k.as_str() {
             "streaming_quality" => applied_line(plan, "prefs.streaming_quality", v, ""),
             _ if k.eq_ignore_ascii_case("volume") => {
-                plan.skipped.push(skip_line(&format!("prefs.{k}"), VOLUME_SKIP_WHY));
+                plan.skipped
+                    .push(skip_line(&format!("prefs.{k}"), VOLUME_SKIP_WHY));
             }
             "language" => plan.skipped.push(skip_line(
                 "prefs.language",
                 "not imported (no TUI i18n in daemon v1)",
             )),
-            _ => plan.skipped.push(skip_line(&format!("prefs.{k}"), UNKNOWN_WHY)),
+            _ => plan
+                .skipped
+                .push(skip_line(&format!("prefs.{k}"), UNKNOWN_WHY)),
         }
     }
 }
@@ -713,9 +722,11 @@ fn plan_audio(
     // First pass: the simple classifications.
     for (k, v) in map {
         if k.eq_ignore_ascii_case("volume") {
-            plan.skipped.push(skip_line(&format!("audio.{k}"), VOLUME_SKIP_WHY));
+            plan.skipped
+                .push(skip_line(&format!("audio.{k}"), VOLUME_SKIP_WHY));
         } else if AUDIO_NEVER_CACHES.contains(&k.as_str()) {
-            plan.skipped.push(skip_line(&format!("audio.{k}"), CACHE_SKIP_WHY));
+            plan.skipped
+                .push(skip_line(&format!("audio.{k}"), CACHE_SKIP_WHY));
         } else if AUDIO_PORTABLE.contains(&k.as_str()) {
             applied_line(plan, &format!("audio.{k}"), v, "");
         } else if k == "quality_fallback_behavior" {
@@ -743,7 +754,8 @@ fn plan_audio(
             )
             || k.eq_ignore_ascii_case("volume");
         if !known {
-            plan.skipped.push(skip_line(&format!("audio.{k}"), UNKNOWN_WHY));
+            plan.skipped
+                .push(skip_line(&format!("audio.{k}"), UNKNOWN_WHY));
         }
     }
 }
@@ -802,10 +814,7 @@ fn plan_audio_machine(
             device_survives = false;
         }
         None => {
-            if device_no_change || device_is_null || !device_present {
-                resolved_device = bundle_device.clone();
-                device_survives = true;
-            } else if device_found {
+            if device_no_change || device_is_null || !device_present || device_found {
                 resolved_device = bundle_device.clone();
                 device_survives = true;
             } else {
@@ -831,9 +840,7 @@ fn plan_audio_machine(
             None => Value::Null,
         };
         if resolved_device == bundle_device {
-            let why = if device_no_change {
-                ""
-            } else if device_is_null {
+            let why = if device_no_change || device_is_null {
                 ""
             } else {
                 "found on this machine"
@@ -1070,9 +1077,12 @@ fn plan_qconnect(value: &Value, target: &ProfilePaths, plan: &mut ImportPlan) {
                 "never imported (runtime state)",
             )),
             _ if k.eq_ignore_ascii_case("volume") => {
-                plan.skipped.push(skip_line(&format!("qconnect.{k}"), VOLUME_SKIP_WHY));
+                plan.skipped
+                    .push(skip_line(&format!("qconnect.{k}"), VOLUME_SKIP_WHY));
             }
-            _ => plan.skipped.push(skip_line(&format!("qconnect.{k}"), UNKNOWN_WHY)),
+            _ => plan
+                .skipped
+                .push(skip_line(&format!("qconnect.{k}"), UNKNOWN_WHY)),
         }
     }
 }
@@ -1087,12 +1097,18 @@ const SCROBBLER_PORTABLE: &[&str] = &[
 ];
 const SCROBBLER_SECRET: &[&str] = &["lastfm_session_key", "listenbrainz_token"];
 
-fn plan_integrations(value: &Value, opts: &ImportOptions, uid_will_exist: bool, plan: &mut ImportPlan) {
+fn plan_integrations(
+    value: &Value,
+    opts: &ImportOptions,
+    uid_will_exist: bool,
+    plan: &mut ImportPlan,
+) {
     let Some(scrob) = value.get("scrobblers").and_then(Value::as_object) else {
         // Unknown integration domain.
         if let Some(map) = value.as_object() {
             for k in map.keys() {
-                plan.skipped.push(skip_line(&format!("integrations.{k}"), UNKNOWN_WHY));
+                plan.skipped
+                    .push(skip_line(&format!("integrations.{k}"), UNKNOWN_WHY));
             }
         }
         return;
@@ -1129,7 +1145,10 @@ fn plan_integrations(value: &Value, opts: &ImportOptions, uid_will_exist: bool, 
 fn plan_library_folders(value: &Value, plan: &mut ImportPlan) {
     let count = value.as_array().map(|a| a.len()).unwrap_or(0);
     plan.skipped.push(PlanLine {
-        key: format!("library_folders ({count} folder{})", if count == 1 { "" } else { "s" }),
+        key: format!(
+            "library_folders ({count} folder{})",
+            if count == 1 { "" } else { "s" }
+        ),
         old: None,
         new: String::new(),
         why: "no local library on qbzd v1".to_string(),
@@ -1198,14 +1217,13 @@ fn apply_audio_writes(data_root: &Path, writes: &[(&str, &Value)]) -> Result<(),
                 store.set_stream_buffer_seconds(value.as_u64().unwrap_or(2) as u8)?
             }
             "playback_cache" => {
-                let policy = serde_json::from_value((*value).clone()).map_err(|e| format!("playback_cache: {e}"))?;
+                let policy = serde_json::from_value((*value).clone())
+                    .map_err(|e| format!("playback_cache: {e}"))?;
                 store.set_playback_cache(&policy)?;
             }
             "streaming_only" => store.set_streaming_only(as_bool(value))?,
             "limit_quality_to_device" => store.set_limit_quality_to_device(as_bool(value))?,
-            "preferred_sample_rate" => {
-                store.set_sample_rate(value.as_u64().map(|r| r as u32))?
-            }
+            "preferred_sample_rate" => store.set_sample_rate(value.as_u64().map(|r| r as u32))?,
             "normalization_enabled" => store.set_normalization_enabled(as_bool(value))?,
             "normalization_target_lufs" => {
                 store.set_normalization_target_lufs(value.as_f64().unwrap_or(-14.0) as f32)?
@@ -1371,8 +1389,16 @@ fn read_scrobblers(data_root: &Path, uid: u64, include_auth: bool) -> Option<Val
         Value::String(s.listenbrainz_username),
     );
     // Secrets only with --include-auth; otherwise empty (§2.5).
-    let lastfm_key = if include_auth { s.lastfm_session_key } else { String::new() };
-    let lb_token = if include_auth { s.listenbrainz_token } else { String::new() };
+    let lastfm_key = if include_auth {
+        s.lastfm_session_key
+    } else {
+        String::new()
+    };
+    let lb_token = if include_auth {
+        s.listenbrainz_token
+    } else {
+        String::new()
+    };
     obj.insert("lastfm_session_key".into(), Value::String(lastfm_key));
     obj.insert("listenbrainz_token".into(), Value::String(lb_token));
     Some(Value::Object(obj))
@@ -1454,8 +1480,10 @@ fn qconnect_kv_read(db: &Path, key: &str) -> Option<String> {
 
 fn qconnect_kv_write(db: &Path, key: &str, value: Option<&str>) -> Result<(), String> {
     let conn = rusqlite::Connection::open(db).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
-        .map_err(|e| e.to_string())?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;",
+    )
+    .map_err(|e| e.to_string())?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     )
@@ -1517,13 +1545,11 @@ fn load_decrypted_token(
                 }
             }
         },
-        ExportSource::Daemon(_) => {
-            match qbz_credentials::load_oauth_token_at(&paths.config_root) {
-                Ok(Some(t)) => Ok(Some(t)),
-                Ok(None) => Ok(None),
-                Err(e) => Err(BundleError::Io(e)),
-            }
-        }
+        ExportSource::Daemon(_) => match qbz_credentials::load_oauth_token_at(&paths.config_root) {
+            Ok(Some(t)) => Ok(Some(t)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(BundleError::Io(e)),
+        },
     }
 }
 

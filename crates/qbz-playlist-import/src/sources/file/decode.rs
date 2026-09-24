@@ -65,10 +65,7 @@ pub(crate) fn split_artist_title(raw: &str) -> (String, String) {
 /// The filename without its directory or extension — the last-resort title,
 /// and the playlist name when the format carries none.
 pub(crate) fn file_stem(path: &str) -> String {
-    let name = path
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(path);
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     match name.rsplit_once('.') {
         // A leading dot is not an extension separator (".hidden").
         Some((stem, _)) if !stem.is_empty() => stem.to_string(),
@@ -126,7 +123,9 @@ pub(crate) fn track_or_skip(
     Some(ImportTrack {
         title,
         artist: artist.trim().to_string(),
-        album: album.map(|a| a.trim().to_string()).filter(|a| !a.is_empty()),
+        album: album
+            .map(|a| a.trim().to_string())
+            .filter(|a| !a.is_empty()),
         duration_ms,
         isrc,
         provider_id: None,
@@ -234,7 +233,10 @@ mod tests {
             normalize_isrc("US-KO1-16-00123").as_deref(),
             Some("USKO11600123")
         );
-        assert_eq!(normalize_isrc("usko11600123").as_deref(), Some("USKO11600123"));
+        assert_eq!(
+            normalize_isrc("usko11600123").as_deref(),
+            Some("USKO11600123")
+        );
         // A MusicBrainz recording id is NOT an ISRC and must never pass — it
         // would misfire the score-1.0 short circuit.
         assert_eq!(normalize_isrc("b1a9c0e9-1b47-4f3d-9a1e-000000000000"), None);

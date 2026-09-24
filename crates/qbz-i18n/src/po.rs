@@ -75,16 +75,12 @@ impl Catalog {
                 // Continuation line: append to the most recently seen field.
                 let piece = parse_quoted(line).unwrap_or_default();
                 match cur.last {
-                    Field::Msgid => {
-                        cur.msgid.get_or_insert_with(String::new).push_str(&piece)
-                    }
+                    Field::Msgid => cur.msgid.get_or_insert_with(String::new).push_str(&piece),
                     Field::MsgidPlural => cur
                         .msgid_plural
                         .get_or_insert_with(String::new)
                         .push_str(&piece),
-                    Field::Msgstr => {
-                        cur.msgstr.get_or_insert_with(String::new).push_str(&piece)
-                    }
+                    Field::Msgstr => cur.msgstr.get_or_insert_with(String::new).push_str(&piece),
                     Field::MsgstrPlural(n) => {
                         if n < cur.msgstr_plural.len() {
                             cur.msgstr_plural[n].push_str(&piece);
@@ -140,19 +136,14 @@ impl Catalog {
 }
 
 /// Which field the parser last touched (for continuation lines).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Field {
+    #[default]
     None,
     Msgid,
     MsgidPlural,
     Msgstr,
     MsgstrPlural(usize),
-}
-
-impl Default for Field {
-    fn default() -> Self {
-        Field::None
-    }
 }
 
 #[derive(Debug, Default)]

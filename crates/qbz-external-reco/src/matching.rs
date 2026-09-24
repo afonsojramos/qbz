@@ -27,7 +27,10 @@ pub struct MatchInput<'a> {
 
 /// Pick the best streamable candidate and its score (hi-res breaks ties).
 /// Does NOT gate on [`MIN_SCORE`] — the caller decides.
-pub fn select_best_match<'a>(input: &MatchInput, candidates: &'a [Track]) -> (Option<&'a Track>, f32) {
+pub fn select_best_match<'a>(
+    input: &MatchInput,
+    candidates: &'a [Track],
+) -> (Option<&'a Track>, f32) {
     let mut best: Option<&Track> = None;
     let mut best_score = 0.0f32;
     let mut best_quality = 0.0f32;
@@ -89,11 +92,7 @@ pub fn score_candidate(input: &MatchInput, candidate: &Track) -> f32 {
         input.duration_ms,
         (candidate.duration as u64).saturating_mul(1000),
     ) {
-        let diff = if import_duration > candidate_duration {
-            import_duration - candidate_duration
-        } else {
-            candidate_duration - import_duration
-        };
+        let diff = import_duration.abs_diff(candidate_duration);
         if diff <= 3000 {
             score += 0.05;
         } else if diff <= 5000 {
@@ -159,9 +158,7 @@ fn remove_bracketed(input: &str) -> String {
         match ch {
             '(' | '[' => depth += 1,
             ')' | ']' => {
-                if depth > 0 {
-                    depth -= 1;
-                }
+                depth = depth.saturating_sub(1);
             }
             _ => {
                 if depth == 0 {

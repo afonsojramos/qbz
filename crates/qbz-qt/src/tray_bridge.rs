@@ -216,7 +216,9 @@ impl qbz_tray::QbzTray {
         // callback has static lifetime and queues all QML work.
         unsafe { qbz_install_lifecycle_filter(request_lifecycle) };
         #[cfg(target_os = "macos")]
-        unsafe { qbz_install_macos_reopen_handler(present_from_dock) };
+        unsafe {
+            qbz_install_macos_reopen_handler(present_from_dock)
+        };
         // If `tray_qt::init` ran before this point its queued closure was
         // dropped on the floor -- `ui()` above is a no-op until the line
         // right here. Pick the work up now; we are already on the GUI thread.

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Mixtapes & Collections backend for QBZ — schema, repo, shuffle, enqueue (headless, frontend-agnostic)"
 authors = ["blitzkriegfc"]
+license = "MIT"
 
 [dependencies]
 # Shared QBZ crates

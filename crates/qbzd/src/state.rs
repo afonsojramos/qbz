@@ -161,12 +161,14 @@ mod tests {
 
     #[test]
     fn qconnect_lan_observability_serializes_with_contract_field_names() {
-        let mut q = QconnectStatus::default();
-        q.lan_state = "validating".to_string();
-        q.lan_port = Some(49_152);
-        q.credential_origin = "delegated".to_string();
-        q.candidate_generation = Some(7);
-        q.last_lan_error = Some("qws_auth_rejected".to_string());
+        let q = QconnectStatus {
+            lan_state: "validating".to_string(),
+            lan_port: Some(49_152),
+            credential_origin: "delegated".to_string(),
+            candidate_generation: Some(7),
+            last_lan_error: Some("qws_auth_rejected".to_string()),
+            ..Default::default()
+        };
 
         let value = serde_json::to_value(q).expect("serialize QConnect status");
         assert_eq!(value["lan_state"], "validating");

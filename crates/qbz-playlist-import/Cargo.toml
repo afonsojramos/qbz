@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Public-playlist import for QBZ — provider scrapers, Qobuz matcher, playlist creation (headless, frontend-agnostic)"
 authors = ["blitzkriegfc"]
+license = "MIT"
 
 [dependencies]
 # Shared QBZ crates (the real models + client, not src-tauri shims)

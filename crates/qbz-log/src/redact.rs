@@ -111,7 +111,8 @@ fn ip_patterns() -> &'static Vec<Regex> {
             // IPv6 full form (first group 4 hex wide — see the doc above).
             r"\b[0-9a-fA-F]{4}:(?:[0-9a-fA-F]{1,4}:){1,6}([0-9a-fA-F]{1,4})\b".to_string(),
             // IPv6 `::`-compressed form (same 4-wide anchor).
-            r"\b[0-9a-fA-F]{4}(?::[0-9a-fA-F]{0,4})*::(?:[0-9a-fA-F]{1,4}:)*([0-9a-fA-F]{1,4})\b".to_string(),
+            r"\b[0-9a-fA-F]{4}(?::[0-9a-fA-F]{0,4})*::(?:[0-9a-fA-F]{1,4}:)*([0-9a-fA-F]{1,4})\b"
+                .to_string(),
         ]
         .iter()
         .filter_map(|p| Regex::new(p).ok())
@@ -193,7 +194,10 @@ mod tests {
         for leaked in ["HMACSECRET", "POLICYBLOB", "SIGBLOB", "KPID123"] {
             assert!(!r.contains(leaked), "leaked {leaked}: {r}");
         }
-        assert!(r.contains("etsp=1700000000"), "non-secret params survive: {r}");
+        assert!(
+            r.contains("etsp=1700000000"),
+            "non-secret params survive: {r}"
+        );
         assert!(r.contains("eid=1"), "non-secret params survive: {r}");
     }
 
@@ -214,7 +218,10 @@ mod tests {
     fn literal_registry_scrubs_unlabeled_value() {
         register_secret("LIVE_TOKEN_xyz".into());
         let r = redact("blah LIVE_TOKEN_xyz blah");
-        assert!(!r.contains("LIVE_TOKEN_xyz"), "literal secret survived: {r}");
+        assert!(
+            !r.contains("LIVE_TOKEN_xyz"),
+            "literal secret survived: {r}"
+        );
         assert!(r.contains(REPLACEMENT), "no redaction marker: {r}");
     }
 

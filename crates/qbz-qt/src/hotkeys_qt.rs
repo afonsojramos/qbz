@@ -1320,7 +1320,12 @@ mod tests {
     #[test]
     fn apply_binding_refuses_conflicts_without_touching_the_map() {
         let mut overrides = no_overrides();
-        assert!(!apply_binding(Keymap::Default, &mut overrides, "ui.sidebar", "q"));
+        assert!(!apply_binding(
+            Keymap::Default,
+            &mut overrides,
+            "ui.sidebar",
+            "q"
+        ));
         assert!(overrides.is_empty());
     }
 
@@ -1328,14 +1333,24 @@ mod tests {
     fn apply_binding_back_to_default_prunes_the_override() {
         let mut overrides = no_overrides();
         overrides.insert("ui.queue".into(), "w".into());
-        assert!(apply_binding(Keymap::Default, &mut overrides, "ui.queue", "q")); // "q" = default
+        assert!(apply_binding(
+            Keymap::Default,
+            &mut overrides,
+            "ui.queue",
+            "q"
+        )); // "q" = default
         assert!(!overrides.contains_key("ui.queue"));
     }
 
     #[test]
     fn apply_binding_writes_a_clean_rebind() {
         let mut overrides = no_overrides();
-        assert!(apply_binding(Keymap::Default, &mut overrides, "ui.queue", "w"));
+        assert!(apply_binding(
+            Keymap::Default,
+            &mut overrides,
+            "ui.queue",
+            "w"
+        ));
         assert_eq!(overrides.get("ui.queue").unwrap(), "w");
         assert_eq!(modified_count_with(Keymap::Default, &overrides), 1);
     }
@@ -1344,7 +1359,8 @@ mod tests {
 
     #[test]
     fn groups_split_sequentially_into_three_columns() {
-        let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let labels = |col: &str| -> Vec<String> {
             doc[col]
                 .as_array()
@@ -1360,7 +1376,8 @@ mod tests {
 
     #[test]
     fn groups_rows_carry_id_label_shortcut_modified_contextual() {
-        let doc: serde_json::Value = serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
+        let doc: serde_json::Value =
+            serde_json::from_str(&groups_json(Keymap::Default, &no_overrides())).unwrap();
         let row = &doc["col1"][0]["rows"][0];
         assert_eq!(row["id"], "playback.toggle");
         assert_eq!(row["label"], "Play / Pause"); // en fallback (msgid)
@@ -1470,12 +1487,26 @@ mod tests {
     fn capture_escape_cancels_and_bare_modifiers_are_ignored() {
         let overrides = no_overrides();
         assert_eq!(
-            capture_step(Keymap::Default, &overrides, "ui.queue", QT_KEY_ESCAPE, 0, ""),
+            capture_step(
+                Keymap::Default,
+                &overrides,
+                "ui.queue",
+                QT_KEY_ESCAPE,
+                0,
+                ""
+            ),
             CaptureOutcome::Cancelled
         );
         // Qt.Key_Shift alone → Ignored (keep recording).
         assert_eq!(
-            capture_step(Keymap::Default, &overrides, "ui.queue", 0x0100_0020, QT_SHIFT, ""),
+            capture_step(
+                Keymap::Default,
+                &overrides,
+                "ui.queue",
+                0x0100_0020,
+                QT_SHIFT,
+                ""
+            ),
             CaptureOutcome::Ignored
         );
     }
@@ -1679,7 +1710,12 @@ mod tests {
             (QT_KEY_A + 18, QT_CONTROL, "", "playback.shuffle"),
             (QT_KEY_A + 17, QT_CONTROL, "", "playback.repeat"),
             (QT_KEY_A + 1, QT_ALT | QT_SHIFT, "", "playback.favorite"),
-            (QT_KEY_RIGHT, QT_CONTROL | QT_SHIFT, "", "playback.seekForward"),
+            (
+                QT_KEY_RIGHT,
+                QT_CONTROL | QT_SHIFT,
+                "",
+                "playback.seekForward",
+            ),
             (QT_KEY_LEFT, QT_CONTROL | QT_SHIFT, "", "playback.seekBack"),
         ] {
             let a = action_for_key(Keymap::Default, &ov, key, modifiers, text, false)

@@ -598,6 +598,7 @@ impl BootstrapSession {
 pub(crate) fn acquire_lock(path: &Path) -> Result<File> {
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)?;

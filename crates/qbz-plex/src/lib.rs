@@ -873,12 +873,11 @@ fn parse_track_block(start_tag: &str, inner_xml: &str) -> Option<PlexTrack> {
         *album = normalized;
     }
 
-    for media_tag in collect_start_tags(inner_xml, "Media") {
+    if let Some(media_tag) = collect_start_tags(inner_xml, "Media").into_iter().next() {
         t.container = get_attr(&media_tag, "container");
         t.bitrate_kbps = parse_u32(get_attr(&media_tag, "bitrate"));
         t.sampling_rate_hz = parse_u32(get_attr(&media_tag, "samplingRate"));
         t.bit_depth = parse_u32(get_attr(&media_tag, "bitDepth"));
-        break;
     }
 
     // Stream metadata is more accurate for audio details than Media-level fields.
@@ -1587,7 +1586,7 @@ pub fn plex_cache_get_tracks(
                     ),
                     genre: row.get(16)?,
                     parent_rating_key: row.get(18)?,
-                recording_mbid: row.get(20)?,
+                    recording_mbid: row.get(20)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1635,7 +1634,7 @@ pub fn plex_cache_get_tracks(
                     ),
                     genre: row.get(16)?,
                     parent_rating_key: row.get(18)?,
-                recording_mbid: row.get(20)?,
+                    recording_mbid: row.get(20)?,
                 })
             })
             .map_err(|e| format!("Failed to query Plex cache tracks: {}", e))?;
@@ -1659,8 +1658,7 @@ pub fn plex_cache_get_tracks_by_keys(rating_keys: &[String]) -> Result<Vec<PlexT
         return Ok(Vec::new());
     }
     let conn = open_plex_cache_db()?;
-    let placeholders = std::iter::repeat("?")
-        .take(rating_keys.len())
+    let placeholders = std::iter::repeat_n("?", rating_keys.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -1951,7 +1949,7 @@ pub fn plex_cache_get_artists() -> Result<Vec<PlexCachedArtist>, String> {
             artwork_path: a.artwork_path,
         })
         .collect();
-    artists.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    artists.sort_by_key(|a| a.name.to_lowercase());
     Ok(artists)
 }
 
@@ -2105,6 +2103,7 @@ fn plex_cache_search_tracks_page_in(
     plex_cache_search_tracks_page_filtered_in(conn, query, offset, limit, sort, &[], false, &[])
 }
 
+#[allow(clippy::too_many_arguments)]
 fn plex_cache_search_tracks_page_filtered_in(
     conn: &Connection,
     query: &str,
@@ -2316,8 +2315,7 @@ pub fn plex_cache_get_cached_tracks_by_keys(
         return Ok(Vec::new());
     }
     let conn = open_plex_cache_db()?;
-    let placeholders = std::iter::repeat("?")
-        .take(rating_keys.len())
+    let placeholders = std::iter::repeat_n("?", rating_keys.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -2771,8 +2769,8 @@ pub fn plex_cache_save_tracks(
         .map_err(|e| format!("Failed to start Plex cache tracks transaction: {}", e))?;
 
     // Save existing hydrated quality data before clearing the section
-    let mut hydrated_quality: HashMap<String, (Option<String>, Option<i64>, Option<i64>)> =
-        HashMap::new();
+    type HydratedQuality = (Option<String>, Option<i64>, Option<i64>);
+    let mut hydrated_quality: HashMap<String, HydratedQuality> = HashMap::new();
     {
         let mut stmt = tx
             .prepare(

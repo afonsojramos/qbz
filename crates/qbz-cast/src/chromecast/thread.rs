@@ -277,56 +277,6 @@ fn recv_teardown_reply<T>(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn teardown_reply_preserves_worker_result() {
-        let (sender, receiver) = mpsc::channel();
-        sender.send(Ok::<_, CastError>(7_u8)).unwrap();
-
-        assert_eq!(
-            recv_teardown_reply(receiver, Duration::ZERO, "test-operation").unwrap(),
-            7
-        );
-    }
-
-    #[test]
-    fn teardown_reply_timeout_is_typed_and_sanitized() {
-        let (_sender, receiver) = mpsc::channel::<Result<(), CastError>>();
-
-        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
-        assert!(matches!(
-            result,
-            Err(CastError::Timeout(operation)) if operation == "test-operation"
-        ));
-    }
-
-    #[test]
-    fn teardown_reply_disconnect_is_typed_and_sanitized() {
-        let (sender, receiver) = mpsc::channel::<Result<(), CastError>>();
-        drop(sender);
-
-        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
-        assert!(matches!(
-            result,
-            Err(CastError::Connection(message))
-                if message == "Chromecast worker response unavailable"
-        ));
-    }
-
-    #[test]
-    fn invalidation_fences_every_clone() {
-        let handle = ChromecastHandle::new();
-        let clone = handle.clone();
-
-        handle.invalidate();
-
-        assert!(matches!(clone.play(), Err(CastError::NotConnected)));
-    }
-}
-
 // Google Cast drops a control connection that goes roughly 10s without a
 // heartbeat PING. Ping every 5s — the cadence the protocol expects — so a
 // cast connection left idle between connect and load (e.g. while a track
@@ -455,5 +405,55 @@ fn chromecast_thread_main(receiver: Receiver<CastCommand>) {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn teardown_reply_preserves_worker_result() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(Ok::<_, CastError>(7_u8)).unwrap();
+
+        assert_eq!(
+            recv_teardown_reply(receiver, Duration::ZERO, "test-operation").unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn teardown_reply_timeout_is_typed_and_sanitized() {
+        let (_sender, receiver) = mpsc::channel::<Result<(), CastError>>();
+
+        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
+        assert!(matches!(
+            result,
+            Err(CastError::Timeout(operation)) if operation == "test-operation"
+        ));
+    }
+
+    #[test]
+    fn teardown_reply_disconnect_is_typed_and_sanitized() {
+        let (sender, receiver) = mpsc::channel::<Result<(), CastError>>();
+        drop(sender);
+
+        let result = recv_teardown_reply(receiver, Duration::ZERO, "test-operation");
+        assert!(matches!(
+            result,
+            Err(CastError::Connection(message))
+                if message == "Chromecast worker response unavailable"
+        ));
+    }
+
+    #[test]
+    fn invalidation_fences_every_clone() {
+        let handle = ChromecastHandle::new();
+        let clone = handle.clone();
+
+        handle.invalidate();
+
+        assert!(matches!(clone.play(), Err(CastError::NotConnected)));
     }
 }

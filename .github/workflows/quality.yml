@@ -1,0 +1,136 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path crates/Cargo.toml --all -- --check
+
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev libjack-jackd2-dev \
+            libdbus-1-dev libssl-dev
+
+      # qbz-qt (the Qt/cxx-qt frontend) is excluded on purpose: linting it
+      # needs the same heavy Qt toolchain as build-debian.yml/build-qt-linux.yml
+      # (qt6-*-dev, qt6-base-private-dev, cmake, nasm, clang, ...) — a
+      # "quality" job should stay fast. qbz-qt's own compile warnings are
+      # already gated by every release-*.yml build and by build-debian.yml.
+      - name: Run clippy
+        run: cargo clippy --manifest-path crates/Cargo.toml --workspace --exclude qbz-qt --all-targets -- -D warnings
+
+  security:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install security tools
+        # Pinned so the job's behavior can't silently change on a new
+        # cargo-audit release — bump deliberately alongside .cargo/audit.toml.
+        run: cargo install cargo-audit --locked --version 0.22.2
+
+      - name: Run cargo-audit
+        run: cargo audit --file crates/Cargo.lock
+
+  licenses:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Check dependency licenses
+        run: cargo deny --manifest-path crates/Cargo.toml check licenses
+
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libasound2-dev libjack-jackd2-dev \
+            libdbus-1-dev libssl-dev
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('crates/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v6
+        with:
+          path: crates/target
+          key: ${{ runner.os }}-cargo-build-target-coverage-${{ hashFiles('crates/Cargo.lock') }}
+
+      - name: Generate coverage report
+        # Visibility only, not a merge gate: no --fail-under-* threshold.
+        # qbz-qt excluded — same reasoning as the lint job above, and its
+        # QML-facing behavior isn't exercised by cargo test anyway (see
+        # test-crates.yml's qt-gate job for the real offscreen-boot gate).
+        run: |
+          cargo llvm-cov --manifest-path crates/Cargo.toml --workspace --exclude qbz-qt --profile ci --html --output-dir coverage-html
+          cargo llvm-cov report --manifest-path crates/Cargo.toml --profile ci --summary-only
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage-html
+          retention-days: 30

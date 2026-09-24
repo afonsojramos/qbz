@@ -405,7 +405,7 @@ pub fn entitlement_formats(ids: &[u32]) -> Vec<PurchaseFormatOption> {
     let mut seen = HashSet::new();
     let mut ids: Vec<u32> = ids.iter().copied().filter(|id| seen.insert(*id)).collect();
     // Stable, so two unknown ids keep their wire order relative to each other.
-    ids.sort_by(|a, b| format_rank(*b).cmp(&format_rank(*a)));
+    ids.sort_by_key(|a| std::cmp::Reverse(format_rank(*a)));
     ids.into_iter().map(format_option).collect()
 }
 
@@ -909,6 +909,7 @@ fn purchase_track_file_name(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn purchase_track_target(
     destination: &PurchaseDownloadDestination,
     artist_name: &str,
@@ -944,9 +945,10 @@ fn purchase_track_target(
 /// Ordering & failure semantics (Addendum B.1 — replicated verbatim):
 ///   1. write `target.with_extension("{ext}.part")` → `2. fs::rename` to final
 ///      → `3. mark_purchase_downloaded`.
-///   If the file write/rename SUCCEEDS but the registry write FAILS, this
-///   returns `Err` with the file LEFT ON DISK (orphaned, no registry row). Do
-///   NOT roll back the file or treat the registry failure as success.
+///
+/// If the file write/rename SUCCEEDS but the registry write FAILS, this
+/// returns `Err` with the file LEFT ON DISK (orphaned, no registry row). Do
+/// NOT roll back the file or treat the registry failure as success.
 ///
 /// No collision preflight (Addendum B.3): `.part`→`fs::rename` overwrites any
 /// pre-existing final file or stale `.part` silently.
@@ -2626,7 +2628,7 @@ mod path_contract_tests {
     fn sanitize_does_not_panic_truncating_multibyte_titles() {
         // '本' and '日' are the ones that panicked before the fix.
         for ch in ['é', 'Ω', '本', 'ы', '日'] {
-            let long: String = std::iter::repeat(ch).take(400).collect();
+            let long: String = std::iter::repeat_n(ch, 400).collect();
             let out = sanitize_filename(&long);
             assert!(out.len() <= 200, "cap is bytes: {} bytes", out.len());
             assert!(!out.is_empty());

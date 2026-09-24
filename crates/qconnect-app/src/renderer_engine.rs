@@ -49,8 +49,9 @@ pub trait QconnectRendererEngine: Send + Sync {
     /// following resume would fail with "no audio data available").
     fn has_loaded_audio(&self) -> bool;
     /// Buffer identity may lead the audible track while a decoder prepares it.
-    fn loading_state(&self) -> Option<(u64, qbz_player::player::PlaybackBufferState)> { None }
-
+    fn loading_state(&self) -> Option<(u64, qbz_player::player::PlaybackBufferState)> {
+        None
+    }
 
     // ---- queue / mode (async) ----
     async fn set_repeat_mode(&self, mode: RepeatMode);
@@ -96,13 +97,18 @@ pub trait QconnectRendererEngine: Send + Sync {
     /// Prepare the source with its initial transport state. Implementations
     /// must carry `playing` through buffering and all fallback loaders.
     async fn start_track_stream_with_state(
-        &self, track_id: u64, quality: Quality, duration_secs: u64,
-        start_position_secs: u64, playing: bool,
+        &self,
+        track_id: u64,
+        quality: Quality,
+        duration_secs: u64,
+        start_position_secs: u64,
+        playing: bool,
     ) -> Result<(), String> {
         if !playing {
             return Err("engine does not support preparing paused audio".into());
         }
-        self.start_track_stream(track_id, quality, duration_secs, start_position_secs).await
+        self.start_track_stream(track_id, quality, duration_secs, start_position_secs)
+            .await
     }
 
     // ---- report-back source (the single per-frontend "engine read") ----

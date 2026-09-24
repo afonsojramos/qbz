@@ -82,12 +82,10 @@ impl DeviceDiscovery {
                         let fullname = info.get_fullname().to_string();
                         let id_prop = info.get_property_val_str("id");
                         let id_is_stable = id_prop.is_some();
-                        let id = id_prop
-                            .unwrap_or_else(|| fullname.as_str())
-                            .to_string();
+                        let id = id_prop.unwrap_or(fullname.as_str()).to_string();
                         let name = info
                             .get_property_val_str("fn")
-                            .unwrap_or_else(|| id.as_str())
+                            .unwrap_or(id.as_str())
                             .to_string();
                         let model = info
                             .get_property_val_str("md")
@@ -96,10 +94,12 @@ impl DeviceDiscovery {
 
                         // mdns-sd 0.21 scopes addresses by interface (ScopedIp);
                         // the pick only ever needed the bare IpAddr.
-                        let addrs: std::collections::HashSet<IpAddr> =
-                            info.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
-                        let ip = pick_ip(&addrs)
-                            .unwrap_or_else(|| "127.0.0.1".to_string());
+                        let addrs: std::collections::HashSet<IpAddr> = info
+                            .get_addresses()
+                            .iter()
+                            .map(|a| a.to_ip_addr())
+                            .collect();
+                        let ip = pick_ip(&addrs).unwrap_or_else(|| "127.0.0.1".to_string());
 
                         let device = DiscoveredDevice {
                             id: id.clone(),

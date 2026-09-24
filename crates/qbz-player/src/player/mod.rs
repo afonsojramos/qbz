@@ -10,11 +10,11 @@
 //! Uses a dedicated audio thread since rodio's OutputStream is not Send.
 //! Supports both rodio (PipeWire/Pulse) and direct ALSA (hw: devices).
 
-mod playback_engine;
-mod streaming_source;
 mod disk_playback;
 mod loudness_scan;
 mod normalization;
+mod playback_engine;
+mod streaming_source;
 
 pub mod memory_tuning;
 
@@ -58,6 +58,9 @@ use qbz_audio::{
 use qbz_models::{AssetOrigin, ExternalStreamAsset, Quality, StreamQualityInfo};
 use qbz_qobuz::QobuzClient;
 
+/// (decoded PCM iterator, sample rate, total frames) from `qbz_dsd::open_dsd`.
+type DsdOpenResult = Result<(Box<dyn Iterator<Item = i32> + Send>, u32, u64), String>;
+
 /// Commands sent to the audio thread
 enum AudioCommand {
     /// Play audio data with track ID, duration, and audio specs
@@ -96,7 +99,9 @@ enum AudioCommand {
     /// Resume playback
     Resume { play_gen: u64 },
     /// Stop playback
-    Stop { completed: Option<tokio::sync::oneshot::Sender<()>> },
+    Stop {
+        completed: Option<tokio::sync::oneshot::Sender<()>>,
+    },
     /// Set volume (0.0 - 1.0)
     SetVolume(f32),
     /// Seek to position in seconds
@@ -444,7 +449,9 @@ fn audio_metadata_from_codec_params(
     // sample_rate == 0 || channels == 0`): the streaming sources build
     // `NonZero` from these with an `unwrap`.
     if sample_rate == 0 || channels == 0 {
-        return Err("Invalid signal format in codec params (zero sample rate or channel count)".into());
+        return Err(
+            "Invalid signal format in codec params (zero sample rate or channel count)".into(),
+        );
     }
     Ok(AudioMetadata {
         sample_rate,
@@ -457,14 +464,31 @@ fn audio_metadata_from_codec_params(
 /// True when a cached FLAC is a lower quality than `requested`, so the
 /// cache entry should be bypassed and the track re-fetched. Unparseable
 /// bytes cannot prove compatibility with the requested quality.
-fn cached_quality_below_requested(data: &[u8], requested: Quality, acquisition: Option<qbz_cache::CacheQuality>) -> bool {
-    let Ok(meta) = extract_audio_metadata_full(data) else { return true; };
+fn cached_quality_below_requested(
+    data: &[u8],
+    requested: Quality,
+    acquisition: Option<qbz_cache::CacheQuality>,
+) -> bool {
+    let Ok(meta) = extract_audio_metadata_full(data) else {
+        return true;
+    };
     cached_metadata_below_requested(&meta, requested, acquisition)
 }
 
-fn cached_metadata_below_requested(meta: &AudioMetadata, requested: Quality, acquisition: Option<qbz_cache::CacheQuality>) -> bool {
-    use symphonia::core::codecs::{CODEC_TYPE_MP3, CODEC_TYPE_AAC, CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS};
-    if requested != Quality::Mp3 && matches!(meta.codec, CODEC_TYPE_MP3 | CODEC_TYPE_AAC | CODEC_TYPE_OPUS | CODEC_TYPE_VORBIS) {
+fn cached_metadata_below_requested(
+    meta: &AudioMetadata,
+    requested: Quality,
+    acquisition: Option<qbz_cache::CacheQuality>,
+) -> bool {
+    use symphonia::core::codecs::{
+        CODEC_TYPE_AAC, CODEC_TYPE_MP3, CODEC_TYPE_OPUS, CODEC_TYPE_VORBIS,
+    };
+    if requested != Quality::Mp3
+        && matches!(
+            meta.codec,
+            CODEC_TYPE_MP3 | CODEC_TYPE_AAC | CODEC_TYPE_OPUS | CODEC_TYPE_VORBIS
+        )
+    {
         return true;
     }
     if let Some(acquisition) = acquisition {
@@ -628,9 +652,8 @@ fn create_output_stream_with_config(
             // POLLERR error ~1.7 M times per second on a wedged PCM), and a
             // wedge is latched once for the audio thread to rebuild the
             // stream — see qbz_audio::stream_health.
-            let mut limiter = qbz_audio::stream_health::FloodLimiter::new(
-                qbz_audio::stream_health::LOG_WINDOW,
-            );
+            let mut limiter =
+                qbz_audio::stream_health::FloodLimiter::new(qbz_audio::stream_health::LOG_WINDOW);
             let mut wedge_latched = false;
             match builder
                 .with_supported_config(&supported_config)
@@ -641,9 +664,7 @@ fn create_output_stream_with_config(
                         if suppressed == 0 {
                             log::error!("Audio stream error: {err}");
                         } else {
-                            log::error!(
-                                "Audio stream error: {err} ({suppressed} more suppressed)"
-                            );
+                            log::error!("Audio stream error: {err} ({suppressed} more suppressed)");
                         }
                         state.record_stream_error(format!("Audio stream error: {err}"));
                     }
@@ -1330,11 +1351,8 @@ impl PlaybackBufferReporter {
     }
 
     pub(super) fn report(&self, buffer_state: PlaybackBufferState) {
-        self.state.set_buffer_state_for_play(
-            buffer_state,
-            self.track_id,
-            self.play_generation,
-        );
+        self.state
+            .set_buffer_state_for_play(buffer_state, self.track_id, self.play_generation);
     }
 }
 
@@ -1624,9 +1642,16 @@ impl SharedState {
         intent.0
     }
 
-    fn apply_playing_intent(&self, engine: &PlaybackEngine, generation: u64, playing: bool) -> bool {
+    fn apply_playing_intent(
+        &self,
+        engine: &PlaybackEngine,
+        generation: u64,
+        playing: bool,
+    ) -> bool {
         let intent = self.play_intent.lock().unwrap();
-        if self.shutting_down.load(Ordering::SeqCst) || *intent != (generation, playing) { return false; }
+        if self.shutting_down.load(Ordering::SeqCst) || *intent != (generation, playing) {
+            return false;
+        }
         if playing {
             engine.play();
             self.resume_playback_timer();
@@ -1638,9 +1663,16 @@ impl SharedState {
         true
     }
 
-    fn append_initial_source<S>(&self, engine: &mut PlaybackEngine, source: S,
-        generation: u64, position: u64) -> Result<(), String>
-    where S: Source<Item = f32> + Send + 'static {
+    fn append_initial_source<S>(
+        &self,
+        engine: &mut PlaybackEngine,
+        source: S,
+        generation: u64,
+        position: u64,
+    ) -> Result<(), String>
+    where
+        S: Source<Item = f32> + Send + 'static,
+    {
         let intent = self.play_intent.lock().unwrap();
         if self.shutting_down.load(Ordering::SeqCst) || intent.0 != generation {
             return Err("source installation superseded".into());
@@ -1714,9 +1746,7 @@ impl SharedState {
             return;
         }
         if let Ok(mut slot) = self.buffer_state.lock() {
-            if self.is_current_play(play_generation)
-                && slot.play_generation == play_generation
-            {
+            if self.is_current_play(play_generation) && slot.play_generation == play_generation {
                 *slot = PlaybackBufferSlot {
                     state,
                     track_id,
@@ -1868,17 +1898,13 @@ impl SharedState {
     }
 
     fn cancel_gapless_stream_feeder(&self, track_id: u64) {
-        let slot = self
-            .gapless_stream_feeder
-            .lock()
-            .ok()
-            .and_then(|mut slot| {
-                if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
-                    slot.take()
-                } else {
-                    None
-                }
-            });
+        let slot = self.gapless_stream_feeder.lock().ok().and_then(|mut slot| {
+            if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
+                slot.take()
+            } else {
+                None
+            }
+        });
         if let Some(slot) = slot {
             let _ = slot.cancel_tx.send(true);
             let _ = slot.writer.complete();
@@ -1886,17 +1912,13 @@ impl SharedState {
     }
 
     fn promote_gapless_stream_feeder(&self, track_id: u64) {
-        let pending = self
-            .gapless_stream_feeder
-            .lock()
-            .ok()
-            .and_then(|mut slot| {
-                if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
-                    slot.take()
-                } else {
-                    None
-                }
-            });
+        let pending = self.gapless_stream_feeder.lock().ok().and_then(|mut slot| {
+            if slot.as_ref().map(|s| s.track_id) == Some(track_id) {
+                slot.take()
+            } else {
+                None
+            }
+        });
         let Some(pending) = pending else {
             return;
         };
@@ -2512,7 +2534,10 @@ impl Player {
                  gapless_pending: &mut Option<GaplessPending>,
                  gapless_request_armed: &mut bool| {
                     if thread_state.shutting_down.load(Ordering::SeqCst)
-                        && !matches!(&command, AudioCommand::ReleaseDevice { .. } | AudioCommand::Stop { .. })
+                        && !matches!(
+                            &command,
+                            AudioCommand::ReleaseDevice { .. } | AudioCommand::Stop { .. }
+                        )
                     {
                         return;
                     }
@@ -2641,10 +2666,7 @@ impl Player {
 
                                         match found {
                                             Some(d) if is_device_valid(&d) => {
-                                                log::info!(
-                                                    "Found and validated device: {}",
-                                                    name
-                                                );
+                                                log::info!("Found and validated device: {}", name);
                                                 Some(d)
                                             }
                                             Some(_) => {
@@ -2665,9 +2687,7 @@ impl Player {
                                     };
 
                                     let Some(device) = device else {
-                                        return Err(
-                                            "No audio output device available".to_string()
-                                        );
+                                        return Err("No audio output device available".to_string());
                                     };
 
                                     // Set current device name
@@ -2688,9 +2708,7 @@ impl Player {
 
                                 // Try backend system first (if configured), then fall back to legacy CPAL
                                 // This avoids unnecessary CPAL device enumeration for PipeWire DAC and ALSA Direct
-                                let stream_result = if let Some(settings) =
-                                    thread_settings.lock().ok()
-                                {
+                                let stream_result = if let Ok(settings) = thread_settings.lock() {
                                     match try_init_stream_with_backend(
                                         &settings,
                                         sample_rate,
@@ -2785,7 +2803,7 @@ impl Player {
                                         thread_state.set_stream_error(false);
 
                                         // Set current device name from settings (for backend system)
-                                        if let Some(settings) = thread_settings.lock().ok() {
+                                        if let Ok(settings) = thread_settings.lock() {
                                             if let Some(ref device_name) = settings.output_device {
                                                 thread_state
                                                     .set_current_device(Some(device_name.clone()));
@@ -2875,8 +2893,10 @@ impl Player {
 
                             // Create PlaybackEngine from StreamType
                             let mut engine = match stream {
-                                StreamType::Rodio { sink: mixer_sink, .. } => {
-                                    match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
+                                StreamType::Rodio {
+                                    sink: mixer_sink, ..
+                                } => {
+                                    match PlaybackEngine::new_rodio(mixer_sink.mixer()) {
                                         Ok(e) => {
                                             *consecutive_sink_failures = 0;
                                             thread_state.set_stream_error(false);
@@ -2954,7 +2974,7 @@ impl Player {
                             };
 
                             let volume = f32::from_bits(thread_state.volume.load(Ordering::SeqCst));
-                            apply_engine_volume(&stream_opt, &engine, volume);
+                            apply_engine_volume(stream_opt, &engine, volume);
 
                             let source = match decode_with_fallback(&data) {
                                 Ok(s) => s,
@@ -2979,9 +2999,12 @@ impl Player {
 
                             let start_position_secs = if actual_duration > 0 {
                                 start_position_secs.min(actual_duration)
-                            } else { start_position_secs };
-                            let source: Box<dyn Source<Item = f32> + Send> =
-                                Box::new(source.skip_duration(Duration::from_secs(start_position_secs)));
+                            } else {
+                                start_position_secs
+                            };
+                            let source: Box<dyn Source<Item = f32> + Send> = Box::new(
+                                source.skip_duration(Duration::from_secs(start_position_secs)),
+                            );
 
                             // Start gain BEFORE the first sample (normalization.rs):
                             // cache row > ReplayGain tags > unity while measuring.
@@ -3010,7 +3033,8 @@ impl Player {
                                     sample_rate,
                                     channels,
                                     duration_secs: actual_duration,
-                                    start_frame: start_position_secs.saturating_mul(sample_rate as u64),
+                                    start_frame: start_position_secs
+                                        .saturating_mul(sample_rate as u64),
                                     target_lufs: plan.target_lufs,
                                     gain_atomic,
                                     known_gain: plan.known_gain,
@@ -3018,7 +3042,12 @@ impl Player {
                                 }),
                                 start_position_secs.saturating_mul(sample_rate as u64),
                             );
-                            if let Err(e) = thread_state.append_initial_source(&mut engine, source, play_gen, start_position_secs) {
+                            if let Err(e) = thread_state.append_initial_source(
+                                &mut engine,
+                                source,
+                                play_gen,
+                                start_position_secs,
+                            ) {
                                 log::error!("Failed to append source to engine: {}", e);
                                 thread_state.set_buffer_state_for_play(
                                     PlaybackBufferState::Error,
@@ -3034,13 +3063,17 @@ impl Player {
                                 play_gen,
                             );
 
-                            thread_state.position.store(start_position_secs, Ordering::SeqCst);
+                            thread_state
+                                .position
+                                .store(start_position_secs, Ordering::SeqCst);
                             thread_state
                                 .current_track_id
                                 .store(track_id, Ordering::SeqCst);
 
-                            *pause_suspend_deadline = (!thread_state.is_playing.load(Ordering::SeqCst))
-                                .then(|| Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS));
+                            *pause_suspend_deadline =
+                                (!thread_state.is_playing.load(Ordering::SeqCst)).then(|| {
+                                    Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS)
+                                });
                             *current_engine = Some(engine);
                             log::info!(
                                 "Audio thread: playback started, duration: {}s, normalization: {}",
@@ -3110,7 +3143,10 @@ impl Player {
                             // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                             // survived the PlayStreaming fix, and guessing at the remaining
                             // path has failed twice. Every set/clear now says who did it.
-                            log::info!("[gapless-trace] clear (PlayStreaming) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                            log::info!(
+                                "[gapless-trace] clear (PlayStreaming) pending was {:?}",
+                                gapless_pending.as_ref().map(|p| p.track_id)
+                            );
                             *gapless_pending = None;
                             *gapless_request_armed = false;
                             thread_state.set_gapless_ready(false);
@@ -3227,9 +3263,7 @@ impl Player {
                                     .map(StreamType::rodio)
                                 };
 
-                                let stream_result = if let Some(settings) =
-                                    thread_settings.lock().ok()
-                                {
+                                let stream_result = if let Ok(settings) = thread_settings.lock() {
                                     match try_init_stream_with_backend(
                                         &settings,
                                         sample_rate,
@@ -3359,31 +3393,26 @@ impl Player {
 
                             // Create PlaybackEngine
                             let mut engine = match stream {
-                                StreamType::Rodio { sink: mixer_sink, .. } => {
-                                    match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
-                                        Ok(e) => {
-                                            *consecutive_sink_failures = 0;
-                                            thread_state.set_stream_error(false);
-                                            e
-                                        }
-                                        Err(e) => {
-                                            log::error!(
-                                                "Failed to create engine for streaming: {}",
-                                                e
-                                            );
-                                            *current_streaming_source = None;
-                                            *current_audio_data = None;
-                                            thread_state.set_loaded_audio(false);
-                                            thread_state
-                                                .is_playing
-                                                .store(false, Ordering::SeqCst);
-                                            thread_state.record_stream_error(
-                                                "Failed to create the playback engine for streaming",
-                                            );
-                                            return;
-                                        }
+                                StreamType::Rodio {
+                                    sink: mixer_sink, ..
+                                } => match PlaybackEngine::new_rodio(mixer_sink.mixer()) {
+                                    Ok(e) => {
+                                        *consecutive_sink_failures = 0;
+                                        thread_state.set_stream_error(false);
+                                        e
                                     }
-                                }
+                                    Err(e) => {
+                                        log::error!("Failed to create engine for streaming: {}", e);
+                                        *current_streaming_source = None;
+                                        *current_audio_data = None;
+                                        thread_state.set_loaded_audio(false);
+                                        thread_state.is_playing.store(false, Ordering::SeqCst);
+                                        thread_state.record_stream_error(
+                                            "Failed to create the playback engine for streaming",
+                                        );
+                                        return;
+                                    }
+                                },
                                 StreamType::Direct(alsa_stream) => {
                                     let (hardware_volume, hardware_volume_events) =
                                         direct_hardware_volume_binding(
@@ -3404,7 +3433,7 @@ impl Player {
                             };
 
                             let volume = f32::from_bits(thread_state.volume.load(Ordering::SeqCst));
-                            apply_engine_volume(&stream_opt, &engine, volume);
+                            apply_engine_volume(stream_opt, &engine, volume);
 
                             // Wait for minimum buffer before starting playback.
                             // When start_position_secs > 0 (session resume),
@@ -3417,13 +3446,12 @@ impl Player {
                             let start_wait = Instant::now();
                             let max_wait = Duration::from_secs(60);
 
-                            let bytes_per_sec_estimate: u64 = if duration_secs > 0
-                                && content_length > 0
-                            {
-                                content_length / duration_secs
-                            } else {
-                                200_000
-                            };
+                            let bytes_per_sec_estimate: u64 =
+                                if duration_secs > 0 && content_length > 0 {
+                                    content_length / duration_secs
+                                } else {
+                                    200_000
+                                };
                             let resume_buffer_target: u64 = if start_position_secs > 0 {
                                 bytes_per_sec_estimate
                                     .saturating_mul(start_position_secs.saturating_add(8))
@@ -3578,12 +3606,16 @@ impl Player {
                             *current_gain_atomic = gain_atomic.clone();
                             thread_state.set_normalization_gain(normalization);
 
-                            let disk_resume = source.is_file_backed() && source.is_complete()
+                            let disk_resume = source.is_file_backed()
+                                && source.is_complete()
                                 && start_position_secs > 0;
                             if disk_resume {
-                                if let Err(error) = incremental_source.seek_to(Duration::from_secs(start_position_secs)) {
+                                if let Err(error) = incremental_source
+                                    .seek_to(Duration::from_secs(start_position_secs))
+                                {
                                     log::error!("Cached disk resume seek failed: {error}");
-                                    thread_state.record_stream_error("Cached disk resume seek failed");
+                                    thread_state
+                                        .record_stream_error("Cached disk resume seek failed");
                                     return;
                                 }
                             }
@@ -3643,7 +3675,12 @@ impl Player {
                                 }),
                                 start_position_secs.saturating_mul(actual_sr as u64),
                             );
-                            if let Err(e) = thread_state.append_initial_source(&mut engine, source_to_play, play_gen, start_position_secs) {
+                            if let Err(e) = thread_state.append_initial_source(
+                                &mut engine,
+                                source_to_play,
+                                play_gen,
+                                start_position_secs,
+                            ) {
                                 log::error!("Failed to append streaming source to engine: {}", e);
                                 thread_state.set_buffer_state_for_play(
                                     PlaybackBufferState::Error,
@@ -3661,8 +3698,10 @@ impl Player {
                                 .current_track_id
                                 .store(track_id, Ordering::SeqCst);
 
-                            *pause_suspend_deadline = (!thread_state.is_playing.load(Ordering::SeqCst))
-                                .then(|| Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS));
+                            *pause_suspend_deadline =
+                                (!thread_state.is_playing.load(Ordering::SeqCst)).then(|| {
+                                    Instant::now() + Duration::from_millis(PAUSE_SUSPEND_DELAY_MS)
+                                });
                             *current_engine = Some(engine);
                             log::info!(
                             "Audio thread: streaming playback STARTED in {}ms at {}s (incremental decode active)",
@@ -3710,8 +3749,7 @@ impl Player {
                                 };
                                 let carrier = dop.carrier_rate();
                                 let dsd_rate = dop.dsd_rate();
-                                let duration =
-                                    dop.total_frames() / (carrier.max(1) as u64);
+                                let duration = dop.total_frames() / (carrier.max(1) as u64);
 
                                 // DoP always needs a fresh S32 stream at the
                                 // carrier rate — tear down whatever is open.
@@ -3937,10 +3975,7 @@ impl Player {
                                 // Build the packing matching the ACTIVE
                                 // direct mode (1 = DoP, 2/3 = native BE/LE).
                                 let mode = thread_state.dsd_mode();
-                                let built: Result<
-                                    (Box<dyn Iterator<Item = i32> + Send>, u32, u64),
-                                    String,
-                                > = qbz_dsd::open_dsd(&path)
+                                let built: DsdOpenResult = qbz_dsd::open_dsd(&path)
                                     .map_err(|e| e.to_string())
                                     .and_then(|d| match mode {
                                         1 => qbz_dsd::DopStream::new(d)
@@ -3953,9 +3988,7 @@ impl Player {
                                                         st,
                                                         thread_state.clone(),
                                                     ))
-                                                        as Box<
-                                                            dyn Iterator<Item = i32> + Send,
-                                                        >,
+                                                        as Box<dyn Iterator<Item = i32> + Send>,
                                                     rate,
                                                     frames,
                                                 )
@@ -3970,9 +4003,7 @@ impl Player {
                                                         st,
                                                         thread_state.clone(),
                                                     ))
-                                                        as Box<
-                                                            dyn Iterator<Item = i32> + Send,
-                                                        >,
+                                                        as Box<dyn Iterator<Item = i32> + Send>,
                                                     rate,
                                                     frames,
                                                 )
@@ -4038,17 +4069,31 @@ impl Player {
                             }
                         }
                         AudioCommand::Pause { play_gen } => {
-                            if *thread_state.play_intent.lock().unwrap() != (play_gen, false) { return; }
+                            if *thread_state.play_intent.lock().unwrap() != (play_gen, false) {
+                                return;
+                            }
                             if let Some(ref engine) = *current_engine {
-                                if !thread_state.apply_playing_intent(engine, play_gen, false) { return; }
+                                if !thread_state.apply_playing_intent(engine, play_gen, false) {
+                                    return;
+                                }
                             }
                             thread_state.pause_playback_timer();
                             thread_state.is_playing.store(false, Ordering::SeqCst);
                             // User transport pause releases now, including direct DSD.
                             // Wake blocked decoders without sealing the ongoing download.
-                            if let Some(source) = current_streaming_source.as_ref() { source.interrupt_readers(); }
-                            if let Some(GaplessPending { media: GaplessMedia::Streaming(source), .. }) = gapless_pending.as_ref() { source.interrupt_readers(); }
-                            if let Some(engine) = current_engine.take() { engine.stop(); }
+                            if let Some(source) = current_streaming_source.as_ref() {
+                                source.interrupt_readers();
+                            }
+                            if let Some(GaplessPending {
+                                media: GaplessMedia::Streaming(source),
+                                ..
+                            }) = gapless_pending.as_ref()
+                            {
+                                source.interrupt_readers();
+                            }
+                            if let Some(engine) = current_engine.take() {
+                                engine.stop();
+                            }
                             thread_state.set_hardware_volume_active(false);
                             drop(stream_opt.take());
                             *pause_suspend_deadline = None;
@@ -4058,26 +4103,46 @@ impl Player {
                             thread_state.set_gapless_next_track_id(0);
                             #[cfg(target_os = "linux")]
                             {
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
-                                if let Err(error) = qbz_audio::alsa_backend::resume_suspended_sink() {
-                                    log::warn!("Audio thread: paused, sink recovery pending: {error}");
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
+                                );
+                                if let Err(error) = qbz_audio::alsa_backend::resume_suspended_sink()
+                                {
+                                    log::warn!(
+                                        "Audio thread: paused, sink recovery pending: {error}"
+                                    );
                                 }
                             }
                             log::info!("Audio thread: output device released on pause");
                         }
                         AudioCommand::Resume { play_gen } => {
-                            if *thread_state.play_intent.lock().unwrap() != (play_gen, true) { return; }
+                            if *thread_state.play_intent.lock().unwrap() != (play_gen, true) {
+                                return;
+                            }
                             *pause_suspend_deadline = None;
                             if current_engine.is_none() {
                                 #[cfg(target_os = "linux")]
                                 if let Some(media) = current_direct_dsd.as_ref() {
                                     let resume_pos = thread_state.position.load(Ordering::SeqCst);
-                                    let device = thread_settings.lock().ok().and_then(|s| s.output_device.clone());
-                                    let result = device.ok_or_else(|| "No direct DSD output device configured".to_string())
-                                        .and_then(|device| resume_direct_dsd(media, &device, resume_pos, &thread_state));
+                                    let device = thread_settings
+                                        .lock()
+                                        .ok()
+                                        .and_then(|s| s.output_device.clone());
+                                    let result = device
+                                        .ok_or_else(|| {
+                                            "No direct DSD output device configured".to_string()
+                                        })
+                                        .and_then(|device| {
+                                            resume_direct_dsd(
+                                                media,
+                                                &device,
+                                                resume_pos,
+                                                &thread_state,
+                                            )
+                                        });
                                     match result {
                                         Ok((engine, stream)) => {
-                                            thread_state.apply_playing_intent(&engine, play_gen, true);
+                                            thread_state
+                                                .apply_playing_intent(&engine, play_gen, true);
                                             *current_engine = Some(engine);
                                             *stream_opt = Some(stream);
                                         }
@@ -4089,13 +4154,10 @@ impl Player {
                                     return;
                                 }
                                 // Try to get audio data from regular storage or streaming source
-                                let streaming_source = current_streaming_source.as_ref()
-                                    .cloned();
+                                let streaming_source = current_streaming_source.as_ref().cloned();
                                 let audio_data: Arc<Vec<u8>> = if streaming_source.is_some() {
                                     Arc::new(Vec::new())
-                                } else if let Some(ref data) =
-                                    *current_audio_data
-                                {
+                                } else if let Some(ref data) = *current_audio_data {
                                     data.clone()
                                 } else {
                                     log::warn!(
@@ -4125,18 +4187,18 @@ impl Player {
                                 };
 
                                 let mut engine = match stream {
-                                    StreamType::Rodio { sink: mixer_sink, .. } => {
-                                        match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
-                                            Ok(e) => e,
-                                            Err(e) => {
-                                                log::error!(
-                                                    "Failed to create engine for resume: {}",
-                                                    e
-                                                );
-                                                return;
-                                            }
+                                    StreamType::Rodio {
+                                        sink: mixer_sink, ..
+                                    } => match PlaybackEngine::new_rodio(mixer_sink.mixer()) {
+                                        Ok(e) => e,
+                                        Err(e) => {
+                                            log::error!(
+                                                "Failed to create engine for resume: {}",
+                                                e
+                                            );
+                                            return;
                                         }
-                                    }
+                                    },
                                     StreamType::Direct(alsa_stream) => {
                                         let (hardware_volume, hardware_volume_events) =
                                             direct_hardware_volume_binding(
@@ -4158,24 +4220,37 @@ impl Player {
 
                                 let volume =
                                     f32::from_bits(thread_state.volume.load(Ordering::SeqCst));
-                                apply_engine_volume(&stream_opt, &engine, volume);
+                                apply_engine_volume(stream_opt, &engine, volume);
 
                                 let resume_pos = thread_state.position.load(Ordering::SeqCst);
                                 let source: Result<Box<dyn Source<Item = f32> + Send>, String> =
                                     if let Some(buffered) = streaming_source.as_ref() {
                                         IncrementalStreamingSource::new_for_play(
                                             buffered.clone(),
-                                            PlaybackBufferReporter::new(thread_state.clone(), thread_state.current_track_id(), play_gen),
-                                        ).and_then(|mut source| {
-                                            if resume_pos > 0 { source.seek_to(Duration::from_secs(resume_pos))?; }
-                                            Ok(Box::new(source) as _)
-                                        })
+                                            PlaybackBufferReporter::new(
+                                                thread_state.clone(),
+                                                thread_state.current_track_id(),
+                                                play_gen,
+                                            ),
+                                        )
+                                        .and_then(
+                                            |mut source| {
+                                                if resume_pos > 0 {
+                                                    source
+                                                        .seek_to(Duration::from_secs(resume_pos))?;
+                                                }
+                                                Ok(Box::new(source) as _)
+                                            },
+                                        )
                                     } else {
                                         decode_with_fallback(&audio_data)
                                     };
                                 let source = match source {
                                     Ok(source) => source,
-                                    Err(error) => { log::error!("Failed to decode audio for resume: {error}"); return; }
+                                    Err(error) => {
+                                        log::error!("Failed to decode audio for resume: {error}");
+                                        return;
+                                    }
                                 };
 
                                 // A Resume that rebuilds from streaming data
@@ -4187,9 +4262,7 @@ impl Player {
                                 // BEFORE skip_duration consumes `source` below.
                                 if thread_state.duration.load(Ordering::SeqCst) == 0 {
                                     if let Some(d) = source.total_duration() {
-                                        thread_state
-                                            .duration
-                                            .store(d.as_secs(), Ordering::SeqCst);
+                                        thread_state.duration.store(d.as_secs(), Ordering::SeqCst);
                                     }
                                 }
 
@@ -4215,7 +4288,12 @@ impl Player {
                                         (*current_track_sample_rate).unwrap_or(0) as u64,
                                     ),
                                 );
-                                if let Err(e) = thread_state.append_initial_source(&mut engine, skipped_source, play_gen, resume_pos) {
+                                if let Err(e) = thread_state.append_initial_source(
+                                    &mut engine,
+                                    skipped_source,
+                                    play_gen,
+                                    resume_pos,
+                                ) {
                                     log::error!("Failed to append source for resume: {}", e);
                                     return;
                                 }
@@ -4292,7 +4370,7 @@ impl Player {
                                 .volume
                                 .store(reported_volume.to_bits(), Ordering::SeqCst);
                             if let Some(ref engine) = *current_engine {
-                                apply_engine_volume(&stream_opt, &engine, volume);
+                                apply_engine_volume(stream_opt, engine, volume);
                             }
                             // debug: a slider drag delivers dozens of these per
                             // second — at info they dominated a field log (#555,
@@ -4317,7 +4395,8 @@ impl Player {
                             thread_state.set_gapless_ready(false);
                             thread_state.set_gapless_next_track_id(0);
 
-                            if current_engine.is_none() && current_direct_dsd.is_some()
+                            if current_engine.is_none()
+                                && current_direct_dsd.is_some()
                                 && !thread_state.is_playing()
                             {
                                 thread_state.position.store(position_secs, Ordering::SeqCst);
@@ -4508,18 +4587,18 @@ impl Player {
                             };
 
                             let mut engine = match stream {
-                                StreamType::Rodio { sink: mixer_sink, .. } => {
-                                    match PlaybackEngine::new_rodio(&mixer_sink.mixer()) {
-                                        Ok(e) => e,
-                                        Err(e) => {
-                                            seek_abort(
-                                                &thread_state,
-                                                &format!("rodio engine create failed: {e}"),
-                                            );
-                                            return;
-                                        }
+                                StreamType::Rodio {
+                                    sink: mixer_sink, ..
+                                } => match PlaybackEngine::new_rodio(mixer_sink.mixer()) {
+                                    Ok(e) => e,
+                                    Err(e) => {
+                                        seek_abort(
+                                            &thread_state,
+                                            &format!("rodio engine create failed: {e}"),
+                                        );
+                                        return;
                                     }
-                                }
+                                },
                                 StreamType::Direct(alsa_stream) => {
                                     let (hardware_volume, hardware_volume_events) =
                                         direct_hardware_volume_binding(
@@ -4540,7 +4619,7 @@ impl Player {
                             };
 
                             let volume = f32::from_bits(thread_state.volume.load(Ordering::SeqCst));
-                            apply_engine_volume(&stream_opt, &engine, volume);
+                            apply_engine_volume(stream_opt, &engine, volume);
 
                             // Build the decoded source for the seek. Both
                             // streaming and cached paths use Symphonia's native
@@ -4595,9 +4674,7 @@ impl Player {
                                                 Err(e) => {
                                                     seek_abort(
                                                         &thread_state,
-                                                        &format!(
-                                                            "decode for seek failed: {e}"
-                                                        ),
+                                                        &format!("decode for seek failed: {e}"),
                                                     );
                                                     return;
                                                 }
@@ -4614,9 +4691,7 @@ impl Player {
                                             Err(e) => {
                                                 seek_abort(
                                                     &thread_state,
-                                                    &format!(
-                                                        "decode for seek failed: {e}"
-                                                    ),
+                                                    &format!("decode for seek failed: {e}"),
                                                 );
                                                 return;
                                             }
@@ -4676,8 +4751,16 @@ impl Player {
                             );
                             *pause_suspend_deadline = None;
 
-                            if let Some(source) = current_streaming_source.as_ref() { source.interrupt_readers(); }
-                            if let Some(GaplessPending { media: GaplessMedia::Streaming(source), .. }) = gapless_pending.as_ref() { source.interrupt_readers(); }
+                            if let Some(source) = current_streaming_source.as_ref() {
+                                source.interrupt_readers();
+                            }
+                            if let Some(GaplessPending {
+                                media: GaplessMedia::Streaming(source),
+                                ..
+                            }) = gapless_pending.as_ref()
+                            {
+                                source.interrupt_readers();
+                            }
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
@@ -4718,7 +4801,8 @@ impl Player {
                                         );
                                     }
                                 }
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
+                                );
                             }
 
                             std::thread::sleep(Duration::from_millis(100));
@@ -4752,8 +4836,16 @@ impl Player {
                             // Cancel any deferred drop and tear the stream down NOW so
                             // the device is freed immediately (no warm-stream lingering).
                             *pause_suspend_deadline = None;
-                            if let Some(source) = current_streaming_source.as_ref() { source.interrupt_readers(); }
-                            if let Some(GaplessPending { media: GaplessMedia::Streaming(source), .. }) = gapless_pending.as_ref() { source.interrupt_readers(); }
+                            if let Some(source) = current_streaming_source.as_ref() {
+                                source.interrupt_readers();
+                            }
+                            if let Some(GaplessPending {
+                                media: GaplessMedia::Streaming(source),
+                                ..
+                            }) = gapless_pending.as_ref()
+                            {
+                                source.interrupt_readers();
+                            }
                             if let Some(engine) = current_engine.take() {
                                 engine.stop();
                             }
@@ -4766,7 +4858,8 @@ impl Player {
                             #[cfg(target_os = "linux")]
                             let release_result = {
                                 let result = qbz_audio::alsa_backend::resume_suspended_sink();
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
+                                );
                                 result
                             };
                             #[cfg(not(target_os = "linux"))]
@@ -4775,7 +4868,9 @@ impl Player {
                             // so a later Play / Resume reopens and continues.
                             match &release_result {
                                 Ok(()) => log::info!("Audio thread: output device released"),
-                                Err(error) => log::warn!("Audio thread: PCM released, sink recovery pending: {error}"),
+                                Err(error) => log::warn!(
+                                    "Audio thread: PCM released, sink recovery pending: {error}"
+                                ),
                             }
                             let _ = completed.send(release_result);
                         }
@@ -4887,9 +4982,7 @@ impl Player {
                                 thread_state.set_gapless_ready(false);
                                 return;
                             }
-                            if engine_was_empty
-                                && !thread_state.is_playing.load(Ordering::SeqCst)
-                            {
+                            if engine_was_empty && !thread_state.is_playing.load(Ordering::SeqCst) {
                                 log::info!(
                                     "Gapless: PlayNext landed after track finished — resuming playback-state tracking"
                                 );
@@ -5025,9 +5118,7 @@ impl Player {
                                 thread_state.set_gapless_ready(false);
                                 return;
                             }
-                            if engine_was_empty
-                                && !thread_state.is_playing.load(Ordering::SeqCst)
-                            {
+                            if engine_was_empty && !thread_state.is_playing.load(Ordering::SeqCst) {
                                 thread_state.is_playing.store(true, Ordering::SeqCst);
                             }
 
@@ -5114,8 +5205,9 @@ impl Player {
                                     log::error!(
                                         "Audio thread: could not rebuild the output stream after it wedged ({reason})"
                                     );
-                                    thread_state
-                                        .record_stream_error(format!("Audio output stopped: {reason}"));
+                                    thread_state.record_stream_error(format!(
+                                        "Audio output stopped: {reason}"
+                                    ));
                                     thread_state.pause_playback_timer();
                                     thread_state.is_playing.store(false, Ordering::SeqCst);
                                 }
@@ -5177,7 +5269,9 @@ impl Player {
                                             // The sealed source shares its allocation with the
                                             // active decoder. Promotion is constant-time even
                                             // for a track larger than the entire L1 budget.
-                                            if let Some(full_data) = streaming_src.complete_data_shared() {
+                                            if let Some(full_data) =
+                                                streaming_src.complete_data_shared()
+                                            {
                                                 log::info!(
                                                     "Streaming promotion: sharing full track ({} bytes), enabling cached transition path",
                                                     full_data.len()
@@ -5290,8 +5384,10 @@ impl Player {
                                         );
                                         current_track_sample_rate = Some(pending.sample_rate);
                                         current_track_channels = Some(pending.channels);
-                                        thread_state
-                                            .set_stream_quality(pending.sample_rate, pending.bit_depth);
+                                        thread_state.set_stream_quality(
+                                            pending.sample_rate,
+                                            pending.bit_depth,
+                                        );
                                         thread_state.set_buffer_progress(0.0);
                                         current_normalization_gain = pending.normalization_gain;
                                         current_gain_atomic = pending.gain_atomic.clone();
@@ -5419,9 +5515,8 @@ impl Player {
                                         && thread_state.is_playing.load(Ordering::SeqCst)
                                     {
                                         log::info!("Audio thread: track finished (engine empty)");
-                                        let ended_track_id = thread_state
-                                            .current_track_id
-                                            .load(Ordering::SeqCst);
+                                        let ended_track_id =
+                                            thread_state.current_track_id.load(Ordering::SeqCst);
                                         thread_state.is_playing.store(false, Ordering::SeqCst);
                                         let duration = thread_state.duration.load(Ordering::SeqCst);
                                         thread_state.position.store(duration, Ordering::SeqCst);
@@ -5434,7 +5529,10 @@ impl Player {
                                         // GAPLESS LIFECYCLE TRACE (2026-08-10): the `X -> X` self-transition
                                         // survived the PlayStreaming fix, and guessing at the remaining
                                         // path has failed twice. Every set/clear now says who did it.
-                                        log::info!("[gapless-trace] clear (engine-empty) pending was {:?}", gapless_pending.as_ref().map(|p| p.track_id));
+                                        log::info!(
+                                            "[gapless-trace] clear (engine-empty) pending was {:?}",
+                                            gapless_pending.as_ref().map(|p| p.track_id)
+                                        );
                                         gapless_pending = None;
                                         gapless_request_armed = false;
                                         // Publish only after every stopped/end
@@ -5461,10 +5559,8 @@ impl Player {
                         // Automatic idle suspension leaves direct DSD alone.
                         // Explicit Pause releases it in the command handler;
                         // Resume reconstructs it from current_direct_dsd.
-                        let dop_active = current_engine
-                            .as_ref()
-                            .map(|e| e.is_dop())
-                            .unwrap_or(false);
+                        let dop_active =
+                            current_engine.as_ref().map(|e| e.is_dop()).unwrap_or(false);
                         if stream_opt.is_some() && !dop_active {
                             let now = Instant::now();
                             if now >= deadline {
@@ -5479,7 +5575,8 @@ impl Player {
                                 // previous pw_force_bitperfect gate leaked a forced rate
                                 // for plain (no-passthrough) PipeWire users (#263).
                                 #[cfg(target_os = "linux")]
-                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock();
+                                qbz_audio::pipewire_backend::PipeWireBackend::reset_pipewire_clock(
+                                );
                                 // The exclusive device is now released (stream dropped
                                 // above), so resume any PipeWire sink we suspended for
                                 // exclusive access — self-gating no-op otherwise (#263).
@@ -5560,14 +5657,19 @@ impl Player {
         // 40 % of RAM (issue #660). A disk-cache failure degrades to
         // L1-only rather than aborting player creation.
         let l1_max_bytes = memory_tuning::audio_cache_l1_max_bytes();
-        let storage_directory = settings.lock().ok()
+        let storage_directory = settings
+            .lock()
+            .ok()
             .and_then(|s| s.playback_cache.disk_directory.clone());
         let disk_cache = match storage_directory {
             Some(parent) => std::fs::read_dir(&parent)
                 .map_err(|e| format!("Selected playback storage is unavailable: {e}"))
-                .and_then(|_| qbz_cache::PlaybackCache::with_path(
-                    std::path::PathBuf::from(parent).join("qbz-playback"), 800 * 1024 * 1024,
-                )),
+                .and_then(|_| {
+                    qbz_cache::PlaybackCache::with_path(
+                        std::path::PathBuf::from(parent).join("qbz-playback"),
+                        800 * 1024 * 1024,
+                    )
+                }),
             None => qbz_cache::PlaybackCache::new(800 * 1024 * 1024),
         };
         let audio_cache = match disk_cache {
@@ -5582,7 +5684,12 @@ impl Player {
         };
 
         if let Ok(config) = settings.lock() {
-            set_max_initial_buffer_bytes(config.playback_cache.prefetch_policy(l1_max_bytes).initial_buffer_cap);
+            set_max_initial_buffer_bytes(
+                config
+                    .playback_cache
+                    .prefetch_policy(l1_max_bytes)
+                    .initial_buffer_cap,
+            );
             if let Err(error) = audio_cache.configure(config.playback_cache.clone()) {
                 log::warn!("Invalid playback cache policy, using defaults: {error}");
             }
@@ -5643,7 +5750,8 @@ impl Player {
         quality: Quality,
         start_position_secs: u64,
     ) -> Result<(), String> {
-        self.play_track_with_state(client, track_id, quality, start_position_secs, true).await
+        self.play_track_with_state(client, track_id, quality, start_position_secs, true)
+            .await
     }
 
     pub async fn play_track_with_state(
@@ -5694,7 +5802,14 @@ impl Player {
         if let Some((source, meta, duration)) = self.cached_disk_source(track_id, quality)? {
             self.ensure_loudness_row(client, track_id).await;
             if self.is_current_play(gen) {
-                return self.apply_completed_source(source, meta, duration, track_id, start_position_secs, gen);
+                return self.apply_completed_source(
+                    source,
+                    meta,
+                    duration,
+                    track_id,
+                    start_position_secs,
+                    gen,
+                );
             }
             return Ok(());
         }
@@ -5719,9 +5834,7 @@ impl Player {
         match cmaf_setup {
             Ok(cmaf_info) => {
                 if !self.is_current_play(gen) {
-                    log::info!(
-                        "Player: CMAF setup for track {track_id} superseded (gen {gen})"
-                    );
+                    log::info!("Player: CMAF setup for track {track_id} superseded (gen {gen})");
                     return Ok(());
                 }
                 // Derive stream parameters from init segment metadata.
@@ -5755,8 +5868,7 @@ impl Player {
                 // assume ~10 MB/s if init was too fast to measure reliably).
                 let speed_mbps = if cmaf_info.init_fetch_ms > 0 {
                     let init_bytes = cmaf_info.flac_header.len() as f64 + 4096.0; // rough init size
-                    (init_bytes / (cmaf_info.init_fetch_ms as f64 / 1000.0))
-                        / (1024.0 * 1024.0)
+                    (init_bytes / (cmaf_info.init_fetch_ms as f64 / 1000.0)) / (1024.0 * 1024.0)
                 } else {
                     10.0
                 };
@@ -5790,7 +5902,11 @@ impl Player {
                 let content_key = cmaf_info.content_key;
                 let flac_header = cmaf_info.flac_header;
                 let n_segments = cmaf_info.n_segments;
-                let cache_quality = qbz_cache::CacheQuality::from_acquisition(quality, quality, cmaf_info.format_id);
+                let cache_quality = qbz_cache::CacheQuality::from_acquisition(
+                    quality,
+                    quality,
+                    cmaf_info.format_id,
+                );
                 let cache = self.audio_cache.clone();
                 let feeder_state = self.state.clone();
                 let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
@@ -5814,10 +5930,7 @@ impl Player {
                     {
                         // `false` = cancelled on supersede; already logged by
                         // the feeder itself, and it is not a completion.
-                        Ok(true) => log::info!(
-                            "[CMAF-STREAM COMPLETE] Track {}",
-                            track_id
-                        ),
+                        Ok(true) => log::info!("[CMAF-STREAM COMPLETE] Track {}", track_id),
                         Ok(false) => {}
                         Err(e) => {
                             feeder_state.record_source_failure(track_id, gen);
@@ -5872,11 +5985,25 @@ impl Player {
         log::info!("Player: Got stream URL (format: {})", stream_url.mime_type);
 
         let (source, writer) = self.download_buffered(&stream_url.url).await?;
-        if !self.is_current_play(gen) { return Ok(()); }
-        if !skip_cache {
-            Self::persist_stream(self.audio_cache.clone(), writer, track_id, qbz_cache::CacheQuality::from_acquisition(quality, successful_request, stream_url.format_id)).await?;
+        if !self.is_current_play(gen) {
+            return Ok(());
         }
-        if !self.is_current_play(gen) { return Ok(()); }
+        if !skip_cache {
+            Self::persist_stream(
+                self.audio_cache.clone(),
+                writer,
+                track_id,
+                qbz_cache::CacheQuality::from_acquisition(
+                    quality,
+                    successful_request,
+                    stream_url.format_id,
+                ),
+            )
+            .await?;
+        }
+        if !self.is_current_play(gen) {
+            return Ok(());
+        }
         let (meta, duration) = disk_playback::source_metadata(&source)?;
         self.apply_completed_source(source, meta, duration, track_id, start_position_secs, gen)
     }
@@ -5893,10 +6020,16 @@ impl Player {
     ) -> Result<(), String> {
         let gen = self.state.current_play_generation();
         if let Some((source, meta, duration_secs)) = self.cached_disk_source(track_id, quality)? {
-            self.tx.send(AudioCommand::PlayNextStreaming {
-                source, track_id, sample_rate: meta.sample_rate, channels: meta.channels,
-                bit_depth: meta.bit_depth.unwrap_or(16), duration_secs,
-            }).map_err(|error| format!("failed to queue cached disk source: {error}"))?;
+            self.tx
+                .send(AudioCommand::PlayNextStreaming {
+                    source,
+                    track_id,
+                    sample_rate: meta.sample_rate,
+                    channels: meta.channels,
+                    bit_depth: meta.bit_depth.unwrap_or(16),
+                    duration_secs,
+                })
+                .map_err(|error| format!("failed to queue cached disk source: {error}"))?;
             return Ok(());
         }
 
@@ -5908,18 +6041,50 @@ impl Player {
         let cmaf_info = match qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await {
             Ok(info) => info,
             Err(error) => {
-                log::warn!("[GAPLESS-STREAM] CMAF setup failed: {error}; trying buffered legacy source");
-                let (url, successful_request) = client.get_stream_url_with_acquisition(track_id, quality).await.map_err(|e| e.to_string())?;
+                log::warn!(
+                    "[GAPLESS-STREAM] CMAF setup failed: {error}; trying buffered legacy source"
+                );
+                let (url, successful_request) = client
+                    .get_stream_url_with_acquisition(track_id, quality)
+                    .await
+                    .map_err(|e| e.to_string())?;
                 let (source, writer) = self.download_buffered(&url.url).await?;
-                if !self.is_current_play(gen) { return Err("gapless legacy fetch superseded".into()); }
-                let skip_cache = self.audio_settings.lock().map(|s| s.streaming_only).unwrap_or(false);
-                if !skip_cache { Self::persist_stream(self.audio_cache.clone(), writer, track_id, qbz_cache::CacheQuality::from_acquisition(quality, successful_request, url.format_id)).await?; }
-                if !self.is_current_play(gen) { return Err("gapless legacy fetch superseded".into()); }
+                if !self.is_current_play(gen) {
+                    return Err("gapless legacy fetch superseded".into());
+                }
+                let skip_cache = self
+                    .audio_settings
+                    .lock()
+                    .map(|s| s.streaming_only)
+                    .unwrap_or(false);
+                if !skip_cache {
+                    Self::persist_stream(
+                        self.audio_cache.clone(),
+                        writer,
+                        track_id,
+                        qbz_cache::CacheQuality::from_acquisition(
+                            quality,
+                            successful_request,
+                            url.format_id,
+                        ),
+                    )
+                    .await?;
+                }
+                if !self.is_current_play(gen) {
+                    return Err("gapless legacy fetch superseded".into());
+                }
                 let (meta, duration_secs) = disk_playback::source_metadata(&source)?;
-                return self.tx.send(AudioCommand::PlayNextStreaming {
-                    source, track_id, sample_rate: meta.sample_rate, channels: meta.channels,
-                    bit_depth: meta.bit_depth.unwrap_or(16), duration_secs,
-                }).map_err(|e| e.to_string());
+                return self
+                    .tx
+                    .send(AudioCommand::PlayNextStreaming {
+                        source,
+                        track_id,
+                        sample_rate: meta.sample_rate,
+                        channels: meta.channels,
+                        bit_depth: meta.bit_depth.unwrap_or(16),
+                        duration_secs,
+                    })
+                    .map_err(|e| e.to_string());
             }
         };
         if !self.is_current_play(gen) {
@@ -5964,12 +6129,10 @@ impl Player {
         let (source, writer) = self.streaming_buffer(config, Some(total_flac_size))?;
         let source = Arc::new(source);
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        if !self.state.register_gapless_stream_feeder(
-            track_id,
-            cancel_tx,
-            writer.clone(),
-            gen,
-        ) {
+        if !self
+            .state
+            .register_gapless_stream_feeder(track_id, cancel_tx, writer.clone(), gen)
+        {
             return Err("gapless stream was superseded before download".to_string());
         }
 
@@ -5977,9 +6140,14 @@ impl Player {
         let content_key = cmaf_info.content_key;
         let flac_header = cmaf_info.flac_header;
         let n_segments = cmaf_info.n_segments;
-        let cache_quality = qbz_cache::CacheQuality::from_acquisition(quality, quality, cmaf_info.format_id);
+        let cache_quality =
+            qbz_cache::CacheQuality::from_acquisition(quality, quality, cmaf_info.format_id);
         let cache = self.audio_cache.clone();
-        let skip_cache = self.audio_settings.lock().map(|settings| settings.streaming_only).unwrap_or(false);
+        let skip_cache = self
+            .audio_settings
+            .lock()
+            .map(|settings| settings.streaming_only)
+            .unwrap_or(false);
         tokio::spawn(async move {
             match Self::cmaf_stream_segments(
                 &url_template,
@@ -6080,8 +6248,13 @@ impl Player {
 
         // Already cached, or another prefetch for this id is already
         // running — nothing to do.
-        if self.audio_cache.peek_with_quality(track_id).is_some_and(|(data, acquisition)|
-            !cached_quality_below_requested(&data, quality, acquisition)) {
+        if self
+            .audio_cache
+            .peek_with_quality(track_id)
+            .is_some_and(|(data, acquisition)| {
+                !cached_quality_below_requested(&data, quality, acquisition)
+            })
+        {
             log::debug!("[PREFETCH] Track {track_id} already cached");
             return Ok(());
         }
@@ -6103,30 +6276,63 @@ impl Player {
             return Ok(());
         }
 
-        if self.cached_disk_source(track_id, quality)?.is_some() { return Ok(()); }
+        if self.cached_disk_source(track_id, quality)?.is_some() {
+            return Ok(());
+        }
         let _fetching = disk_playback::PrefetchGuard::new(self.audio_cache.clone(), track_id);
         log::info!("[PREFETCH] Prefetching track {track_id} at {quality:?}");
 
         let cmaf_result = async {
             let info = qbz_qobuz::cmaf::setup_streaming(client, track_id, quality).await?;
-            let size = info.flac_header.len() as u64 + info.segment_table.iter()
-                .map(|segment| segment.byte_len as u64).sum::<u64>();
-            let (_source, writer) = self.streaming_buffer(StreamingConfig::fast_start(), Some(size))?;
+            let size = info.flac_header.len() as u64
+                + info
+                    .segment_table
+                    .iter()
+                    .map(|segment| segment.byte_len as u64)
+                    .sum::<u64>();
+            let (_source, writer) =
+                self.streaming_buffer(StreamingConfig::fast_start(), Some(size))?;
             let (_cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-            Self::cmaf_stream_segments(&info.url_template, info.n_segments, info.content_key,
-                info.flac_header, writer, track_id, self.audio_cache.clone(),
-                qbz_cache::CacheQuality::from_acquisition(quality, quality, info.format_id), false, size, cancel_rx).await?;
+            Self::cmaf_stream_segments(
+                &info.url_template,
+                info.n_segments,
+                info.content_key,
+                info.flac_header,
+                writer,
+                track_id,
+                self.audio_cache.clone(),
+                qbz_cache::CacheQuality::from_acquisition(quality, quality, info.format_id),
+                false,
+                size,
+                cancel_rx,
+            )
+            .await?;
             Ok::<(), String>(())
-        }.await;
+        }
+        .await;
         let result = match cmaf_result {
             Ok(()) => Ok(()),
             Err(error) => {
                 log::warn!("[PREFETCH] CMAF failed for {track_id}: {error}; trying legacy");
                 async {
-                    let (url, successful_request) = client.get_stream_url_with_acquisition(track_id, quality).await.map_err(|e| e.to_string())?;
+                    let (url, successful_request) = client
+                        .get_stream_url_with_acquisition(track_id, quality)
+                        .await
+                        .map_err(|e| e.to_string())?;
                     let (_source, writer) = self.download_buffered(&url.url).await?;
-                    Self::persist_stream(self.audio_cache.clone(), writer, track_id, qbz_cache::CacheQuality::from_acquisition(quality, successful_request, url.format_id)).await
-                }.await
+                    Self::persist_stream(
+                        self.audio_cache.clone(),
+                        writer,
+                        track_id,
+                        qbz_cache::CacheQuality::from_acquisition(
+                            quality,
+                            successful_request,
+                            url.format_id,
+                        ),
+                    )
+                    .await
+                }
+                .await
             }
         };
         match result {
@@ -6235,8 +6441,12 @@ impl Player {
         let started = Instant::now();
         match tokio::task::spawn_blocking(move || loudness_scan::measure_bytes(&shared)).await {
             Ok(Ok(m)) => {
-                self.loudness_cache
-                    .store(track_id, m.lufs, m.true_peak, LoudnessSource::Ebur128Full);
+                self.loudness_cache.store(
+                    track_id,
+                    m.lufs,
+                    m.true_peak,
+                    LoudnessSource::Ebur128Full,
+                );
                 log::info!(
                     "[LOUDNESS] track {track_id}: pre-analysed {:.1} LUFS, true peak {:?}, {} frames in {} ms",
                     m.lufs,
@@ -6286,7 +6496,9 @@ impl Player {
         track_id: u64,
         quality: Quality,
     ) -> Option<Vec<u8>> {
-        if let Some((bytes, _)) = self.cached_data_for_quality(track_id, quality) { return Some(bytes); }
+        if let Some((bytes, _)) = self.cached_data_for_quality(track_id, quality) {
+            return Some(bytes);
+        }
 
         // CMAF full download (Akamai CDN), legacy full download as
         // fallback. Warm L1 so a re-gapless / replay skips the network.
@@ -6296,17 +6508,32 @@ impl Player {
             self.ensure_loudness_row(client, track_id)
         );
         let downloaded = match downloaded {
-            Ok((data, resolved)) => Some((data, qbz_cache::CacheQuality::from_acquisition(quality, quality, resolved.format_id))),
+            Ok((data, resolved)) => Some((
+                data,
+                qbz_cache::CacheQuality::from_acquisition(quality, quality, resolved.format_id),
+            )),
             Err(e) => {
                 log::warn!("[GAPLESS] CMAF failed for track {track_id}: {e}, trying legacy");
-                match client.get_stream_url_with_acquisition(track_id, quality).await {
-                    Ok((stream_url, successful_request)) => match self.download_audio(&stream_url.url).await {
-                        Ok(data) => Some((data, qbz_cache::CacheQuality::from_acquisition(quality, successful_request, stream_url.format_id))),
-                        Err(e) => {
-                            log::warn!("[GAPLESS] Legacy download failed for {track_id}: {e}");
-                            None
+                match client
+                    .get_stream_url_with_acquisition(track_id, quality)
+                    .await
+                {
+                    Ok((stream_url, successful_request)) => {
+                        match self.download_audio(&stream_url.url).await {
+                            Ok(data) => Some((
+                                data,
+                                qbz_cache::CacheQuality::from_acquisition(
+                                    quality,
+                                    successful_request,
+                                    stream_url.format_id,
+                                ),
+                            )),
+                            Err(e) => {
+                                log::warn!("[GAPLESS] Legacy download failed for {track_id}: {e}");
+                                None
+                            }
                         }
-                    },
+                    }
                     Err(e) => {
                         log::warn!("[GAPLESS] No stream URL for {track_id}: {e}");
                         None
@@ -6320,7 +6547,8 @@ impl Player {
                 "[GAPLESS] Track {track_id} downloaded for gapless ({} bytes)",
                 data.len()
             );
-            self.audio_cache.insert_with_quality(track_id, data.clone(), acquisition);
+            self.audio_cache
+                .insert_with_quality(track_id, data.clone(), acquisition);
         } else {
             log::info!("[GAPLESS] Track {track_id} not available, gapless not possible");
         }
@@ -6372,7 +6600,8 @@ impl Player {
         let content_key = cmaf_info.content_key;
         let flac_header = cmaf_info.flac_header;
         let n_segments = cmaf_info.n_segments;
-        let cache_quality = qbz_cache::CacheQuality::from_acquisition(quality, quality, cmaf_info.format_id);
+        let cache_quality =
+            qbz_cache::CacheQuality::from_acquisition(quality, quality, cmaf_info.format_id);
         let cache = self.audio_cache.clone();
         tokio::spawn(async move {
             match Self::cmaf_stream_segments(
@@ -6443,10 +6672,17 @@ impl Player {
             let meta = extract_audio_metadata_full(&bytes).ok()?;
             return Some(ExternalStreamAsset {
                 bytes,
-                content_type: external_content_type("", acquisition.map(|q| q.resolved.id()).unwrap_or(6)),
-                quality: StreamQualityInfo::from_raw(acquisition.map(|q| q.resolved.id()).unwrap_or(0),
-                    Some(meta.sample_rate as f64), meta.bit_depth),
-                duration_secs: None, origin: AssetOrigin::Cache,
+                content_type: external_content_type(
+                    "",
+                    acquisition.map(|q| q.resolved.id()).unwrap_or(6),
+                ),
+                quality: StreamQualityInfo::from_raw(
+                    acquisition.map(|q| q.resolved.id()).unwrap_or(0),
+                    Some(meta.sample_rate as f64),
+                    meta.bit_depth,
+                ),
+                duration_secs: None,
+                origin: AssetOrigin::Cache,
             });
         }
 
@@ -6461,7 +6697,11 @@ impl Player {
                     q.bit_depth
                 );
                 // Warm L1 so a subsequent local replay skips the network.
-                self.audio_cache.insert_with_quality(track_id, bytes.clone(), qbz_cache::CacheQuality::from_acquisition(quality, quality, q.format_id));
+                self.audio_cache.insert_with_quality(
+                    track_id,
+                    bytes.clone(),
+                    qbz_cache::CacheQuality::from_acquisition(quality, quality, q.format_id),
+                );
                 return Some(ExternalStreamAsset {
                     bytes,
                     content_type: "audio/flac".to_string(),
@@ -6477,7 +6717,10 @@ impl Player {
 
         // Fallback: legacy stream URL + plain HTTP download. Quality and MIME
         // come from the resolved StreamUrl (which carries the granted tier).
-        match client.get_stream_url_with_acquisition(track_id, quality).await {
+        match client
+            .get_stream_url_with_acquisition(track_id, quality)
+            .await
+        {
             Ok((stream_url, successful_request)) => {
                 let content_type =
                     external_content_type(&stream_url.mime_type, stream_url.format_id);
@@ -6494,7 +6737,15 @@ impl Player {
                             q.format_id,
                             content_type
                         );
-                        self.audio_cache.insert_with_quality(track_id, bytes.clone(), qbz_cache::CacheQuality::from_acquisition(quality, successful_request, q.format_id));
+                        self.audio_cache.insert_with_quality(
+                            track_id,
+                            bytes.clone(),
+                            qbz_cache::CacheQuality::from_acquisition(
+                                quality,
+                                successful_request,
+                                q.format_id,
+                            ),
+                        );
                         Some(ExternalStreamAsset {
                             bytes,
                             content_type,
@@ -6529,6 +6780,7 @@ impl Player {
     /// `cancel_rx` flips to `true` when a newer play intent supersedes this
     /// stream (see `SharedState::cancel_stream_feeder`). Returns `Ok(true)`
     /// on real completion, `Ok(false)` when cancelled.
+    #[allow(clippy::too_many_arguments)]
     async fn cmaf_stream_segments(
         url_template: &str,
         n_segments: u8,
@@ -6578,11 +6830,7 @@ impl Player {
         for seg_idx in 1..=n_segments {
             let seg_url = url_template.replace("$SEGMENT$", &seg_idx.to_string());
             let fetch_tag = format!("CMAF-STREAM track {track_id} seg {seg_idx}");
-            let fetch = qbz_qobuz::cmaf::fetch_cdn_bytes_with_retry(
-                &client,
-                &seg_url,
-                &fetch_tag,
-            );
+            let fetch = qbz_qobuz::cmaf::fetch_cdn_bytes_with_retry(&client, &seg_url, &fetch_tag);
             let seg_data = tokio::select! {
                 biased;
                 // Superseded by a newer play (or stop): drop the in-flight
@@ -6692,35 +6940,51 @@ impl Player {
         self.play_data_with_state(data, track_id, true)
     }
 
-    pub fn play_data_with_state(&self, data: Vec<u8>, track_id: u64, playing: bool) -> Result<(), String> {
+    pub fn play_data_with_state(
+        &self,
+        data: Vec<u8>,
+        track_id: u64,
+        playing: bool,
+    ) -> Result<(), String> {
         self.play_data_at(data, track_id, 0, playing)
     }
 
     /// Install downloaded audio at its requested position and transport state.
-    pub fn play_data_at(&self, data: Vec<u8>, track_id: u64, position: u64, playing: bool) -> Result<(), String> {
+    pub fn play_data_at(
+        &self,
+        data: Vec<u8>,
+        track_id: u64,
+        position: u64,
+        playing: bool,
+    ) -> Result<(), String> {
         let gen = self.begin_play_with_state(playing);
         self.apply_play_data_at(data, track_id, position, gen)
     }
 
     /// Send `Play` without bumping generation (used by `play_track` after
     /// its own `begin_play` + supersede checks).
-    fn apply_play_data_at(&self, data: Vec<u8>, track_id: u64, start_position_secs: u64, play_gen: u64) -> Result<(), String> {
+    fn apply_play_data_at(
+        &self,
+        data: Vec<u8>,
+        track_id: u64,
+        start_position_secs: u64,
+        play_gen: u64,
+    ) -> Result<(), String> {
         log::info!(
             "Player: Playing {} bytes of audio data for track {}",
             data.len(),
             track_id
         );
 
-        if !self.is_current_play(play_gen) { return Err("play superseded before source preparation".into()); }
+        if !self.is_current_play(play_gen) {
+            return Err("play superseded before source preparation".into());
+        }
         self.state.begin_buffering(track_id, play_gen);
 
         // Extract audio metadata (sample rate, channels, bit depth) - fast header-only read
         let meta = extract_audio_metadata_full(&data).map_err(|e| {
-            self.state.set_buffer_state_for_play(
-                PlaybackBufferState::Error,
-                track_id,
-                play_gen,
-            );
+            self.state
+                .set_buffer_state_for_play(PlaybackBufferState::Error, track_id, play_gen);
             format!("Failed to extract audio metadata: {}", e)
         })?;
 
@@ -6842,9 +7106,7 @@ impl Player {
                         return self
                             .tx
                             .send(AudioCommand::PlayDsdNative { path, track_id })
-                            .map_err(|e| {
-                                format!("Failed to send native DSD play command: {}", e)
-                            });
+                            .map_err(|e| format!("Failed to send native DSD play command: {}", e));
                     }
                     let carrier = qbz_dsd::dop_carrier_rate(info.dsd_rate);
                     // Ask the platform that owns the device. On Windows the
@@ -6872,10 +7134,9 @@ impl Player {
                     #[cfg(windows)]
                     let rate_ok = false;
                     #[cfg(not(windows))]
-                    let rate_ok =
-                        qbz_audio::alsa_backend::get_device_supported_rates(&device)
-                            .map(|r| r.contains(&carrier))
-                            .unwrap_or(true);
+                    let rate_ok = qbz_audio::alsa_backend::get_device_supported_rates(&device)
+                        .map(|r| r.contains(&carrier))
+                        .unwrap_or(true);
                     if rate_ok {
                         log::info!(
                             "Player: DSD track {} — {} via DoP ({} Hz carrier)",
@@ -7038,6 +7299,7 @@ impl Player {
     /// `start_position_secs` > 0 turns this into a session-resume play
     /// (#315): the audio thread waits for enough buffer to cover the
     /// offset and pre-skips decoder output up to that point.
+    #[allow(clippy::too_many_arguments)]
     pub fn play_streaming(
         &self,
         track_id: u64,
@@ -7064,6 +7326,7 @@ impl Player {
     /// already did their own `begin_play` + supersede checks, like
     /// `play_dsd_file`; a mid-intent bump here would invalidate a strictly
     /// newer play that started in the meantime).
+    #[allow(clippy::too_many_arguments)]
     fn apply_play_streaming(
         &self,
         track_id: u64,
@@ -7123,6 +7386,7 @@ impl Player {
 
     /// Play from streaming source with dynamic buffer based on measured speed.
     /// `start_position_secs` > 0 signals session resume (see `play_streaming`).
+    #[allow(clippy::too_many_arguments)]
     pub fn play_streaming_dynamic(
         &self,
         track_id: u64,
@@ -7134,9 +7398,20 @@ impl Player {
         duration_secs: u64,
         start_position_secs: u64,
     ) -> Result<BufferWriter, String> {
-        self.play_streaming_dynamic_with_state(track_id, sample_rate, channels, bit_depth, content_length, speed_mbps, duration_secs, start_position_secs, true)
+        self.play_streaming_dynamic_with_state(
+            track_id,
+            sample_rate,
+            channels,
+            bit_depth,
+            content_length,
+            speed_mbps,
+            duration_secs,
+            start_position_secs,
+            true,
+        )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn play_streaming_dynamic_with_state(
         &self,
         track_id: u64,
@@ -7167,6 +7442,7 @@ impl Player {
     /// `play_track`'s CMAF path, which already holds a generation token; a
     /// mid-intent bump here would invalidate a strictly newer play that
     /// started in the meantime).
+    #[allow(clippy::too_many_arguments)]
     fn apply_play_streaming_dynamic(
         &self,
         track_id: u64,
@@ -7214,9 +7490,7 @@ impl Player {
         let bps = content_length / duration_secs.max(1);
         let floor = (user_secs as u64).saturating_mul(bps) as usize;
         let ladder_bytes = config.initial_buffer_bytes;
-        config.initial_buffer_bytes = ladder_bytes
-            .max(floor)
-            .clamp(256 * 1024, 8 * 1024 * 1024);
+        config.initial_buffer_bytes = ladder_bytes.max(floor).clamp(256 * 1024, 8 * 1024 * 1024);
         if config.initial_buffer_bytes != ladder_bytes {
             log::info!(
                 "Dynamic buffer: user floor {}s x {} B/s → {}KB initial buffer (ladder gave {}KB)",
@@ -7229,7 +7503,9 @@ impl Player {
 
         let (source, writer) = self.streaming_buffer(config, Some(content_length))?;
         let source = Arc::new(source);
-        if !self.is_current_play(play_gen) { return Err("stream superseded before source preparation".into()); }
+        if !self.is_current_play(play_gen) {
+            return Err("stream superseded before source preparation".into());
+        }
         self.state.begin_buffering(track_id, play_gen);
 
         self.tx
@@ -7278,10 +7554,12 @@ impl Player {
             .header("User-Agent", "Mozilla/5.0")
             .send()
             .await
-            .map_err(|e| format!(
-                "Failed to fetch audio: {}",
-                crate::remote_stream::describe_reqwest_error(&e)
-            ))?;
+            .map_err(|e| {
+                format!(
+                    "Failed to fetch audio: {}",
+                    crate::remote_stream::describe_reqwest_error(&e)
+                )
+            })?;
 
         if !response.status().is_success() {
             return Err(format!("HTTP error: {}", response.status()));
@@ -7289,13 +7567,12 @@ impl Player {
 
         log::info!("Response received, reading bytes...");
 
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|e| format!(
+        let bytes = response.bytes().await.map_err(|e| {
+            format!(
                 "Failed to read audio bytes: {}",
                 crate::remote_stream::describe_reqwest_error(&e)
-            ))?;
+            )
+        })?;
 
         log::info!("Cached {} bytes", bytes.len());
         Ok(bytes.to_vec())
@@ -7304,14 +7581,18 @@ impl Player {
     /// Pause playback
     pub fn pause(&self) -> Result<(), String> {
         self.tx
-            .send(AudioCommand::Pause { play_gen: self.state.request_playing(false) })
+            .send(AudioCommand::Pause {
+                play_gen: self.state.request_playing(false),
+            })
             .map_err(|e| format!("Failed to send pause command: {}", e))
     }
 
     /// Resume playback
     pub fn resume(&self) -> Result<(), String> {
         self.tx
-            .send(AudioCommand::Resume { play_gen: self.state.request_playing(true) })
+            .send(AudioCommand::Resume {
+                play_gen: self.state.request_playing(true),
+            })
             .map_err(|e| format!("Failed to send resume command: {}", e))
     }
 
@@ -7339,9 +7620,13 @@ impl Player {
         let _ = self.begin_play();
         self.state.seal_stream_feeder();
         let (completed, receiver) = tokio::sync::oneshot::channel();
-        self.tx.send(AudioCommand::Stop { completed: Some(completed) })
+        self.tx
+            .send(AudioCommand::Stop {
+                completed: Some(completed),
+            })
             .map_err(|e| format!("Failed to send stop command: {e}"))?;
-        tokio::time::timeout(Duration::from_secs(10), receiver).await
+        tokio::time::timeout(Duration::from_secs(10), receiver)
+            .await
             .map_err(|_| "Timed out waiting for playback memory release".to_string())?
             .map_err(|_| "Audio thread closed before playback memory release".to_string())?;
         self.audio_cache.evict_all_memory();
@@ -7433,11 +7718,17 @@ impl Player {
     }
 
     pub fn playback_storage_directory(&self) -> Option<std::path::PathBuf> {
-        self.audio_cache.get_playback_cache().map(|cache| cache.cache_dir().clone())
+        self.audio_cache
+            .get_playback_cache()
+            .map(|cache| cache.cache_dir().clone())
     }
 
     pub fn playback_prefetch_policy(&self) -> qbz_models::playback_cache::PlaybackPrefetchPolicy {
-        let policy = self.audio_settings.lock().map(|s| s.playback_cache.clone()).unwrap_or_default();
+        let policy = self
+            .audio_settings
+            .lock()
+            .map(|s| s.playback_cache.clone())
+            .unwrap_or_default();
         policy.prefetch_policy(self.audio_cache.stats().recommended_size_bytes)
     }
 
@@ -7446,16 +7737,29 @@ impl Player {
         &self,
         policy: qbz_models::playback_cache::PlaybackCacheSettings,
     ) -> Result<(), String> {
-        let mut settings = self.audio_settings.lock().map_err(|_| "Failed to lock audio settings")?;
+        let mut settings = self
+            .audio_settings
+            .lock()
+            .map_err(|_| "Failed to lock audio settings")?;
         self.audio_cache.configure(policy.clone())?;
-        set_max_initial_buffer_bytes(policy.prefetch_policy(self.audio_cache.stats().recommended_size_bytes).initial_buffer_cap);
+        set_max_initial_buffer_bytes(
+            policy
+                .prefetch_policy(self.audio_cache.stats().recommended_size_bytes)
+                .initial_buffer_cap,
+        );
         settings.playback_cache = policy;
         Ok(())
     }
 
     pub fn reload_settings(&self, settings: AudioSettings) -> Result<(), String> {
-        self.audio_cache.configure(settings.playback_cache.clone())?;
-        set_max_initial_buffer_bytes(settings.playback_cache.prefetch_policy(self.audio_cache.stats().recommended_size_bytes).initial_buffer_cap);
+        self.audio_cache
+            .configure(settings.playback_cache.clone())?;
+        set_max_initial_buffer_bytes(
+            settings
+                .playback_cache
+                .prefetch_policy(self.audio_cache.stats().recommended_size_bytes)
+                .initial_buffer_cap,
+        );
         if let Ok(mut current_settings) = self.audio_settings.lock() {
             *current_settings = settings;
             Ok(())
@@ -7502,15 +7806,9 @@ impl Player {
             buffer_progress: self.state.get_buffer_progress(),
             buffer_state,
             buffer_track_id,
-            engine_empty_generation: self
-                .state
-                .engine_empty_generation
-                .load(Ordering::SeqCst),
+            engine_empty_generation: self.state.engine_empty_generation.load(Ordering::SeqCst),
             engine_empty_track_id: self.state.engine_empty_track_id.load(Ordering::SeqCst),
-            source_failure_generation: self
-                .state
-                .source_failure_generation
-                .load(Ordering::SeqCst),
+            source_failure_generation: self.state.source_failure_generation.load(Ordering::SeqCst),
             source_failure_track_id: self.state.source_failure_track_id.load(Ordering::SeqCst),
         }
     }
@@ -7586,13 +7884,12 @@ pub fn external_content_type(mime: &str, format_id: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AudioMetadata, cached_metadata_below_requested, cached_quality_below_requested};
-    use qbz_models::Quality;
     use super::compute_needs_new_stream;
-    use super::{wedge_recovery, WedgeRecovery, WEDGE_REBUILD_BACKOFF};
     use super::external_content_type;
+    use super::{cached_metadata_below_requested, cached_quality_below_requested, AudioMetadata};
     #[cfg(target_os = "linux")]
     use super::{hardware_volume_event_callback, reported_volume_after_command};
+    use super::{wedge_recovery, WedgeRecovery, WEDGE_REBUILD_BACKOFF};
     use super::{
         BufferedMediaSource, DsdErrorReport, PlaybackBufferReporter, PlaybackBufferState,
         SharedState, StreamingConfig,
@@ -7601,35 +7898,95 @@ mod tests {
     use qbz_audio::alsa_hardware_volume::{
         AlsaMixerControlId, HardwareVolumeEvent, HardwareVolumeSnapshot,
     };
+    use qbz_models::Quality;
     use std::sync::atomic::Ordering;
 
     #[test]
     fn best_96khz_master_is_reused_only_with_matching_acquisition() {
-        let meta = AudioMetadata { sample_rate: 96_000, channels: 2, bit_depth: Some(24),
-            codec: symphonia::core::codecs::CODEC_TYPE_FLAC };
+        let meta = AudioMetadata {
+            sample_rate: 96_000,
+            channels: 2,
+            bit_depth: Some(24),
+            codec: symphonia::core::codecs::CODEC_TYPE_FLAC,
+        };
         let highest = qbz_cache::CacheQuality::from_resolved(Quality::UltraHiRes, 27);
         let limited = qbz_cache::CacheQuality::from_resolved(Quality::HiRes, 7);
-        assert!(!cached_metadata_below_requested(&meta, Quality::UltraHiRes, highest));
-        assert!(cached_metadata_below_requested(&meta, Quality::UltraHiRes, limited));
-        assert!(cached_metadata_below_requested(&meta, Quality::UltraHiRes, None));
-        assert!(!cached_metadata_below_requested(&meta, Quality::HiRes, limited));
-        assert!(cached_quality_below_requested(b"corrupt", Quality::UltraHiRes, highest));
+        assert!(!cached_metadata_below_requested(
+            &meta,
+            Quality::UltraHiRes,
+            highest
+        ));
+        assert!(cached_metadata_below_requested(
+            &meta,
+            Quality::UltraHiRes,
+            limited
+        ));
+        assert!(cached_metadata_below_requested(
+            &meta,
+            Quality::UltraHiRes,
+            None
+        ));
+        assert!(!cached_metadata_below_requested(
+            &meta,
+            Quality::HiRes,
+            limited
+        ));
+        assert!(cached_quality_below_requested(
+            b"corrupt",
+            Quality::UltraHiRes,
+            highest
+        ));
     }
 
     #[test]
     fn successful_request_reuses_lower_rate_master_but_not_explicit_fallback() {
         for (rate, depth, format) in [(96_000, 24, 7), (44_100, 16, 6)] {
-            let meta = AudioMetadata { sample_rate: rate, channels: 2, bit_depth: Some(depth),
-                codec: symphonia::core::codecs::CODEC_TYPE_FLAC };
-            let acquired = qbz_cache::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::UltraHiRes, format);
-            assert!(!cached_metadata_below_requested(&meta, Quality::UltraHiRes, acquired));
-            let fallback = qbz_cache::CacheQuality::from_acquisition(Quality::UltraHiRes, Quality::from_id(format).unwrap(), format);
-            assert!(cached_metadata_below_requested(&meta, Quality::UltraHiRes, fallback));
+            let meta = AudioMetadata {
+                sample_rate: rate,
+                channels: 2,
+                bit_depth: Some(depth),
+                codec: symphonia::core::codecs::CODEC_TYPE_FLAC,
+            };
+            let acquired = qbz_cache::CacheQuality::from_acquisition(
+                Quality::UltraHiRes,
+                Quality::UltraHiRes,
+                format,
+            );
+            assert!(!cached_metadata_below_requested(
+                &meta,
+                Quality::UltraHiRes,
+                acquired
+            ));
+            let fallback = qbz_cache::CacheQuality::from_acquisition(
+                Quality::UltraHiRes,
+                Quality::from_id(format).unwrap(),
+                format,
+            );
+            assert!(cached_metadata_below_requested(
+                &meta,
+                Quality::UltraHiRes,
+                fallback
+            ));
             let old = qbz_cache::CacheQuality::from_resolved(Quality::UltraHiRes, format);
-            assert!(cached_metadata_below_requested(&meta, Quality::UltraHiRes, old));
-            assert!(cached_quality_below_requested(b"corrupt", Quality::UltraHiRes, acquired));
-            let lossy = AudioMetadata { codec: symphonia::core::codecs::CODEC_TYPE_MP3, ..meta };
-            assert!(cached_metadata_below_requested(&lossy, Quality::UltraHiRes, acquired));
+            assert!(cached_metadata_below_requested(
+                &meta,
+                Quality::UltraHiRes,
+                old
+            ));
+            assert!(cached_quality_below_requested(
+                b"corrupt",
+                Quality::UltraHiRes,
+                acquired
+            ));
+            let lossy = AudioMetadata {
+                codec: symphonia::core::codecs::CODEC_TYPE_MP3,
+                ..meta
+            };
+            assert!(cached_metadata_below_requested(
+                &lossy,
+                Quality::UltraHiRes,
+                acquired
+            ));
         }
     }
 
@@ -7818,7 +8175,9 @@ mod tests {
         let mut params = CodecParameters::new();
         params.for_codec(CODEC_TYPE_FLAC).with_sample_rate(0);
         assert!(super::audio_metadata_from_codec_params(&params).is_err());
-        params.with_sample_rate(44100).with_channels(Channels::empty());
+        params
+            .with_sample_rate(44100)
+            .with_channels(Channels::empty());
         assert!(super::audio_metadata_from_codec_params(&params).is_err());
         params.with_channels(Channels::FRONT_LEFT | Channels::FRONT_RIGHT);
         let meta = super::audio_metadata_from_codec_params(&params).unwrap();
@@ -8049,18 +8408,12 @@ mod tests {
         let state = SharedState::new();
         let (_, current_writer) =
             BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
-        let (_, next_writer) =
-            BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
+        let (_, next_writer) = BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
         let (current_tx, current_rx) = tokio::sync::watch::channel(false);
         let (next_tx, next_rx) = tokio::sync::watch::channel(false);
         let generation = state.current_play_generation();
         state.register_stream_feeder(1, current_tx, current_writer, generation);
-        assert!(state.register_gapless_stream_feeder(
-            2,
-            next_tx,
-            next_writer,
-            generation
-        ));
+        assert!(state.register_gapless_stream_feeder(2, next_tx, next_writer, generation));
 
         state.cancel_stream_feeder();
 
@@ -8074,12 +8427,7 @@ mod tests {
         let (_, writer) = BufferedMediaSource::new(StreamingConfig::fast_start(), Some(1024));
         let (cancel_tx, _cancel_rx) = tokio::sync::watch::channel(false);
         let generation = state.current_play_generation();
-        assert!(state.register_gapless_stream_feeder(
-            42,
-            cancel_tx,
-            writer,
-            generation
-        ));
+        assert!(state.register_gapless_stream_feeder(42, cancel_tx, writer, generation));
 
         state.promote_gapless_stream_feeder(42);
 

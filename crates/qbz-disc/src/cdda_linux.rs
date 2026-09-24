@@ -177,10 +177,7 @@ pub fn read_toc(dev: &Path) -> Result<Toc, CdError> {
     // track, or the lead-out for the last one. The TOC does not carry lengths.
     let mut tracks = Vec::with_capacity(raw_tracks.len());
     for (i, &(number, start_lsn, is_audio)) in raw_tracks.iter().enumerate() {
-        let next = raw_tracks
-            .get(i + 1)
-            .map(|t| t.1)
-            .unwrap_or(leadout_lsn);
+        let next = raw_tracks.get(i + 1).map(|t| t.1).unwrap_or(leadout_lsn);
         tracks.push(TocTrack {
             number,
             start_lsn,
@@ -301,7 +298,7 @@ pub fn looks_byte_swapped(pcm: &[u8]) -> bool {
         let mut n = 0u32;
         let mut prev: Option<i16> = None;
         // Left channel only: 4 bytes per frame, take the first pair.
-        for f in pcm.chunks_exact(4) {
+        for f in pcm.as_chunks::<4>().0 {
             let s = if swap {
                 i16::from_be_bytes([f[0], f[1]])
             } else {
@@ -377,7 +374,10 @@ mod tests {
     #[test]
     fn a_data_track_is_never_offered_as_audio() {
         // Enhanced CD: three songs then a data track.
-        let t = toc(&[(1, 0, true), (2, 20_000, true), (3, 40_000, false)], 60_000);
+        let t = toc(
+            &[(1, 0, true), (2, 20_000, true), (3, 40_000, false)],
+            60_000,
+        );
         assert_eq!(t.tracks.len(), 3);
         assert_eq!(t.audio_tracks().count(), 2);
         assert!(t.audio_tracks().all(|x| x.number != 3));
@@ -437,12 +437,20 @@ mod tests {
             pcm.extend_from_slice(&s.to_le_bytes()); // L
             pcm.extend_from_slice(&s.to_le_bytes()); // R
         }
-        assert!(!looks_byte_swapped(&pcm), "little-endian audio flagged as swapped");
+        assert!(
+            !looks_byte_swapped(&pcm),
+            "little-endian audio flagged as swapped"
+        );
 
         let swapped: Vec<u8> = pcm
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .flat_map(|p| [p[1], p[0]])
             .collect();
-        assert!(looks_byte_swapped(&swapped), "byte-swapped audio not detected");
+        assert!(
+            looks_byte_swapped(&swapped),
+            "byte-swapped audio not detected"
+        );
     }
 }

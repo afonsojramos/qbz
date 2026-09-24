@@ -44,12 +44,12 @@ use serde::Serialize;
 // Per-section controllers. Declared HERE (not in main.rs) so the settings
 // controller can be split by concern without touching the app root: a
 // `mod x;` in `settings_qt.rs` resolves to `src/settings_qt/x.rs`.
+mod appearance_profile;
 pub mod devtools;
 pub mod import_export;
 pub mod library;
-mod appearance_profile;
-mod playback_storage;
 pub mod offline;
+mod playback_storage;
 
 // ---------------------------------------------------------------------------
 // Stores (shared files with the Slint app)
@@ -1705,8 +1705,20 @@ const QCONNECT_CONFLICT_POLICY_LABELS: &[&str] = &[
 // Appearance option tables (AppearanceSettings.slint / ui_prefs.rs).
 // 3 and 4 paint the desktop wallpaper (wallpaper_qt.rs): behind the window,
 // or through the Blurred-art atmosphere pass.
-const APP_BACKGROUND_LABELS: &[&str] = &["Off", "Ambient", "Blurred art", "Wallpaper", "Wallpaper, blurred"];
-const APP_BACKGROUND_VALUES: &[&str] = &["off", "ambient", "blurred", "wallpaper", "wallpaper-blurred"];
+const APP_BACKGROUND_LABELS: &[&str] = &[
+    "Off",
+    "Ambient",
+    "Blurred art",
+    "Wallpaper",
+    "Wallpaper, blurred",
+];
+const APP_BACKGROUND_VALUES: &[&str] = &[
+    "off",
+    "ambient",
+    "blurred",
+    "wallpaper",
+    "wallpaper-blurred",
+];
 const LANGUAGE_LABELS: &[&str] = &[
     "Auto",
     "English",
@@ -2754,11 +2766,17 @@ pub async fn publish_snapshot() {
             buffer_seconds: audio_settings.stream_buffer_seconds as i32,
             streaming_only: audio_settings.streaming_only,
             playback_cache: audio_settings.playback_cache.clone(),
-            playback_memory_profile: audio_settings.playback_cache.selected_profile().as_str().into(),
+            playback_memory_profile: audio_settings
+                .playback_cache
+                .selected_profile()
+                .as_str()
+                .into(),
             appearance_profile: appearance_profile::selected(),
             playback_memory_apply_busy: crate::playback_qt::memory_apply_busy(),
             playback_storage: playback_storage::snapshot(),
-            playback_cache_usage: crate::APP.get().map(|r| r.core().player().playback_cache_stats()),
+            playback_cache_usage: crate::APP
+                .get()
+                .map(|r| r.core().player().playback_cache_stats()),
             retry_behaviors: RETRY_BEHAVIOR_LABELS
                 .iter()
                 .map(|l| qbz_i18n::t(l))
@@ -3571,7 +3589,11 @@ pub(crate) async fn reconcile_alsa_hardware_volume(
 
 pub async fn settings_bool(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &str, value: bool) {
     if key == "playback-cache-dynamic" {
-        update_playback_cache(|p| { p.make_custom(); p.dynamic = value; Ok(()) });
+        update_playback_cache(|p| {
+            p.make_custom();
+            p.dynamic = value;
+            Ok(())
+        });
         publish_snapshot().await;
         return;
     }
@@ -4486,7 +4508,10 @@ pub async fn settings_slider(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
         let blur = wallpaper_blur_from_percent(value);
         // Written from the whole percent as f64: an f32 widened on the way to
         // JSON would store 0.62 as 0.6200000047683716.
-        save_pref("wallpaper_blur", serde_json::json!(f64::from(value.clamp(0, 100)) / 100.0));
+        save_pref(
+            "wallpaper_blur",
+            serde_json::json!(f64::from(value.clamp(0, 100)) / 100.0),
+        );
         crate::shell_bridge::ui(move |mut b| b.as_mut().set_wallpaper_blur(blur));
     }
     if key == "buffer-seconds" {
@@ -4499,13 +4524,18 @@ pub async fn settings_slider(runtime: &Arc<AppRuntime<LoggingAdapter>>, key: &st
     publish_snapshot().await;
 }
 
-fn update_playback_cache(change: impl FnOnce(&mut qbz_models::playback_cache::PlaybackCacheSettings) -> Result<(), String>) {
+fn update_playback_cache(
+    change: impl FnOnce(&mut qbz_models::playback_cache::PlaybackCacheSettings) -> Result<(), String>,
+) {
     let result = with_audio(|store| {
         let mut settings = store.get_settings()?;
         change(&mut settings.playback_cache)?;
         store.set_playback_cache(&settings.playback_cache)?;
         if let Some(runtime) = crate::APP.get() {
-            runtime.core().player().configure_playback_cache(settings.playback_cache)?;
+            runtime
+                .core()
+                .player()
+                .configure_playback_cache(settings.playback_cache)?;
         }
         Ok(())
     });
@@ -4522,23 +4552,34 @@ fn update_playback_cache(change: impl FnOnce(&mut qbz_models::playback_cache::Pl
 pub async fn settings_string(key: &str, value: String) {
     match key {
         "playback-memory-profile" => update_playback_cache(|policy| {
-            policy.select_profile(qbz_models::playback_cache::PlaybackMemoryProfile::parse(&value)?);
+            policy.select_profile(qbz_models::playback_cache::PlaybackMemoryProfile::parse(
+                &value,
+            )?);
             Ok(())
         }),
         "playback-cache-min" | "playback-cache-max" => {
             update_playback_cache(|policy| {
-                let limit = if value.trim().is_empty() { None } else {
-                    Some(value.trim().parse::<u32>().map_err(|_| "Playback cache limits must be between 16 and 16384 MiB".to_string())?)
+                let limit = if value.trim().is_empty() {
+                    None
+                } else {
+                    Some(value.trim().parse::<u32>().map_err(|_| {
+                        "Playback cache limits must be between 16 and 16384 MiB".to_string()
+                    })?)
                 };
                 policy.make_custom();
-                if key == "playback-cache-min" { policy.min_mib = limit; } else { policy.max_mib = limit; }
+                if key == "playback-cache-min" {
+                    policy.min_mib = limit;
+                } else {
+                    policy.max_mib = limit;
+                }
                 Ok(())
             });
         }
         "playback-cache-reset" => update_playback_cache(|policy| {
-            policy.select_profile(qbz_models::playback_cache::PlaybackMemoryProfile::Auto); Ok(())
+            policy.select_profile(qbz_models::playback_cache::PlaybackMemoryProfile::Auto);
+            Ok(())
         }),
-        "playback-cache-refresh" => {},
+        "playback-cache-refresh" => {}
         "appearance-profile" => appearance_profile::apply(&value),
         "playback-storage-folder" => playback_storage::set(value).await,
         "playback-storage-browse" => playback_storage::browse().await,
@@ -4547,7 +4588,7 @@ pub async fn settings_string(key: &str, value: String) {
                 log::warn!("[playback-memory] Apply failed: {error}");
                 crate::toast_qt::error(qbz_i18n::t(&error));
             }
-        },
+        }
 
         "qconnect-device-name" => {
             let trimmed = value.trim().to_string();

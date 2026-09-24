@@ -108,10 +108,7 @@ pub fn parse(bytes: &[u8], filename: &str) -> Result<ImportPlaylist, PlaylistImp
         return Err(PlaylistImportError::JsonShapeUnrecognized);
     };
 
-    let arr = best
-        .array
-        .as_array()
-        .expect("candidate is always an array");
+    let arr = best.array.as_array().expect("candidate is always an array");
     let mut tracks: Vec<ImportTrack> = Vec::with_capacity(arr.len().min(MAX_TRACKS));
     for elem in arr.iter() {
         if tracks.len() >= MAX_TRACKS {
@@ -212,13 +209,7 @@ fn locate<'a>(
             // This object's own name/title labels any array it holds.
             let here = scalar_name(node);
             for (_k, v) in map.iter() {
-                locate(
-                    v,
-                    depth + 1,
-                    budget,
-                    best,
-                    here.as_deref().or(parent_name),
-                );
+                locate(v, depth + 1, budget, best, here.as_deref().or(parent_name));
                 if *budget == 0 {
                     return;
                 }
@@ -577,7 +568,10 @@ mod tests {
     #[test]
     fn isrc_is_normalized_to_the_bare_form() {
         let doc = r#"[{"title":"A","artist":"X","isrc":"US-KO1-16-00123"}]"#;
-        assert_eq!(p(doc).unwrap().tracks[0].isrc.as_deref(), Some("USKO11600123"));
+        assert_eq!(
+            p(doc).unwrap().tracks[0].isrc.as_deref(),
+            Some("USKO11600123")
+        );
         // Junk in an isrc field is dropped, not passed through — it would
         // otherwise misfire the matcher's score-1.0 short circuit.
         let junk = r#"[{"title":"A","artist":"X","isrc":"not-an-isrc"}]"#;
@@ -597,7 +591,10 @@ mod tests {
     #[test]
     fn no_track_shaped_array_fails_loud() {
         let doc = r#"{"settings":{"volume":80},"paths":["/a","/b"]}"#;
-        assert!(matches!(p(doc), Err(PlaylistImportError::JsonShapeUnrecognized)));
+        assert!(matches!(
+            p(doc),
+            Err(PlaylistImportError::JsonShapeUnrecognized)
+        ));
     }
 
     #[test]
