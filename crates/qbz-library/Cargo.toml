@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Local music library management for QBZ - scanning, indexing, metadata extraction"
 authors = ["blitzkriegfc"]
+license = "MIT"
 
 [dependencies]
 # Logging
