@@ -1484,3 +1484,112 @@ async fn request_restore(coordinator: Option<&DaemonDelegationCoordinator>, gene
             .await;
     }
 }
+
+#[cfg(test)]
+mod restore_task_tests {
+    use super::*;
+
+    fn release() -> DeferredActivationRelease {
+        DeferredActivationRelease::new(None, None, None)
+    }
+
+    #[test]
+    fn recover_lock_survives_a_poisoned_mutex() {
+        let mutex = Arc::new(StdMutex::new(1_u32));
+        let poisoner = Arc::clone(&mutex);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoner.lock().unwrap();
+            panic!("poison the lock");
+        })
+        .join();
+        assert!(mutex.is_poisoned());
+        assert_eq!(*recover_lock(&mutex), 1);
+    }
+
+    #[test]
+    fn task_ids_are_strictly_increasing() {
+        let a = next_owner_restore_task_id();
+        let b = next_owner_restore_task_id();
+        assert!(b > a);
+    }
+
+    #[tokio::test]
+    async fn tracked_restore_publishes_its_result_after_the_start_barrier() {
+        let (mut task, start) = spawn_tracked_owner_restore(async { Ok(()) }, release());
+        assert!(task.is_pending());
+        start.send(()).unwrap();
+        assert_eq!(wait_for_owner_restore_completion(&mut task).await, Ok(()));
+        assert!(task.mutation_finished.load(Ordering::Acquire));
+        assert!(!task.is_pending());
+    }
+
+    #[tokio::test]
+    async fn tracked_restore_propagates_worker_errors() {
+        let (mut task, start) = spawn_tracked_owner_restore(async { Err("boom") }, release());
+        start.send(()).unwrap();
+        assert_eq!(
+            wait_for_owner_restore_completion(&mut task).await,
+            Err("boom")
+        );
+    }
+
+    #[tokio::test]
+    async fn dropping_the_start_barrier_cancels_the_restore() {
+        let (mut task, start) = spawn_tracked_owner_restore(async { Ok(()) }, release());
+        drop(start);
+        assert_eq!(
+            wait_for_owner_restore_completion(&mut task).await,
+            Err("owner-playback-restore-cancelled")
+        );
+    }
+
+    #[tokio::test]
+    async fn aborted_restore_reports_cancellation() {
+        let (mut task, _start) = spawn_tracked_owner_restore(async { Ok(()) }, release());
+        task.abort.abort();
+        assert_eq!(
+            wait_for_owner_restore_completion(&mut task).await,
+            Err("owner-playback-restore-cancelled")
+        );
+    }
+
+    #[tokio::test]
+    async fn install_accepts_into_an_empty_slot_and_rejects_a_live_overlap() {
+        let slot = StdMutex::new(None);
+        let (first, first_start) = spawn_tracked_owner_restore(
+            async {
+                std::future::pending::<()>().await;
+                Ok(())
+            },
+            release(),
+        );
+        let first_id = first.id;
+        assert!(install_owner_restore_task(&slot, first));
+
+        let (second, _second_start) = spawn_tracked_owner_restore(async { Ok(()) }, release());
+        assert!(!install_owner_restore_task(&slot, second));
+        assert_eq!(recover_lock(&slot).as_ref().map(|t| t.id), Some(first_id));
+        drop(first_start);
+    }
+
+    #[tokio::test]
+    async fn finished_task_is_discarded_and_replaceable() {
+        let slot = StdMutex::new(None);
+        let (mut task, start) = spawn_tracked_owner_restore(async { Ok(()) }, release());
+        let id = task.id;
+        assert!(install_owner_restore_task(&slot, task.clone()));
+        start.send(()).unwrap();
+        wait_for_owner_restore_completion(&mut task).await.unwrap();
+
+        // clear_if with a stale id must leave the slot alone.
+        clear_owner_restore_task_if(&slot, id + 1_000_000);
+        assert!(recover_lock(&slot).is_some());
+        // clear_if with the matching id empties it.
+        clear_owner_restore_task_if(&slot, id);
+        assert!(recover_lock(&slot).is_none());
+
+        assert!(install_owner_restore_task(&slot, task));
+        discard_completed_owner_restore_task(&slot);
+        assert!(recover_lock(&slot).is_none());
+    }
+}

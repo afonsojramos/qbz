@@ -187,3 +187,39 @@ fn publish(
     });
     let _ = bus.send(event);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_fans_out_to_both_buses() {
+        let (bus, mut bus_rx) = broadcast::channel(4);
+        let (owner_bus, mut owner_rx) = broadcast::channel(4);
+        publish(
+            &bus,
+            &owner_bus,
+            None,
+            CoreEvent::VolumeChanged { volume: 0.5 },
+        );
+        assert!(matches!(
+            bus_rx.try_recv(),
+            Ok(CoreEvent::VolumeChanged { .. })
+        ));
+        let stamped = owner_rx.try_recv().expect("owner bus event");
+        assert!(stamped.owner_token.is_none());
+        assert!(matches!(stamped.event, CoreEvent::VolumeChanged { .. }));
+    }
+
+    #[test]
+    fn publish_without_subscribers_does_not_panic() {
+        let (bus, _) = broadcast::channel::<CoreEvent>(1);
+        let (owner_bus, _) = broadcast::channel::<AuthorityStampedEvent>(1);
+        publish(
+            &bus,
+            &owner_bus,
+            None,
+            CoreEvent::VolumeChanged { volume: 0.0 },
+        );
+    }
+}

@@ -126,7 +126,7 @@ jobs:
         # test-crates.yml's qt-gate job for the real offscreen-boot gate).
         run: |
           cargo llvm-cov --manifest-path crates/Cargo.toml --workspace --exclude qbz-qt --profile ci --html --output-dir coverage-html
-          cargo llvm-cov report --manifest-path crates/Cargo.toml --profile ci --summary-only
+          cargo llvm-cov report --manifest-path crates/Cargo.toml --profile ci --summary-only --fail-under-lines 60
 
       - name: Upload HTML coverage report
         uses: actions/upload-artifact@v7

@@ -318,3 +318,65 @@ pub fn spawn_queue_cloud_publish(
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn track(id: u64, source: Option<&str>, is_local: bool) -> QueueTrack {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "title": "t",
+            "artist": "a",
+            "album": "al",
+            "duration_secs": 1,
+            "is_local": is_local,
+            "source": source,
+        }))
+        .expect("valid queue track")
+    }
+
+    #[test]
+    fn projection_of_empty_queue_is_empty() {
+        assert_eq!(resolvable_queue_projection(&[], None), (vec![], None, 0));
+    }
+
+    #[test]
+    fn projection_keeps_resolvable_tracks_and_maps_current_index() {
+        let tracks = [track(1, None, false), track(2, None, false)];
+        assert_eq!(
+            resolvable_queue_projection(&tracks, Some(1)),
+            (vec![1, 2], Some(1), 0)
+        );
+    }
+
+    #[test]
+    fn projection_drops_local_and_zero_id_tracks() {
+        let tracks = [
+            track(0, None, false),
+            track(5, Some("local"), true),
+            track(7, None, false),
+        ];
+        let (kept, start, dropped) = resolvable_queue_projection(&tracks, Some(0));
+        assert_eq!(kept, vec![7]);
+        assert_eq!(start, Some(0));
+        assert_eq!(dropped, 2);
+    }
+
+    #[test]
+    fn projection_start_falls_back_to_last_when_current_is_past_the_end() {
+        let tracks = [track(1, None, false), track(2, None, false)];
+        let (kept, start, _) = resolvable_queue_projection(&tracks, Some(9));
+        assert_eq!(kept, vec![1, 2]);
+        assert_eq!(start, Some(1));
+    }
+
+    #[test]
+    fn projection_with_nothing_resolvable_has_no_start() {
+        let tracks = [track(0, None, false)];
+        assert_eq!(
+            resolvable_queue_projection(&tracks, None),
+            (vec![], None, 1)
+        );
+    }
+}
