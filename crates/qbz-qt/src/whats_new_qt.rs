@@ -2,7 +2,7 @@
 //! of `crates/qbz/src/whats_new.rs`.
 //!
 //! On open, fetches the GitHub release whose tag matches the running version
-//! (`https://api.github.com/repos/vicrodh/qbz/releases/tags/v{version}`) off
+//! (`https://api.github.com/repos/afonsojramos/qbz/releases/tags/v{version}`) off
 //! the UI thread, parses its markdown `body` into a flat block model, and
 //! publishes it as `QbzAbout.whatsNewJson`. There is NO on-disk cache and no
 //! retry: closing and reopening re-fetches, exactly like the reference.
@@ -49,7 +49,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::about_bridge::ui;
 
-const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/vicrodh/qbz/releases";
+const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/afonsojramos/qbz/releases";
 
 /// Block kinds, shared with the Slint model (`whats_new.rs:24-28`).
 const KIND_SECTION: i32 = 0;
@@ -669,12 +669,12 @@ mod tests {
     #[test]
     fn a_whole_line_link_becomes_a_clickable_link_block() {
         let (blocks, _) = render_markdown(
-            "[Read the guide](https://github.com/vicrodh/qbz/wiki)\n  - [Nested](https://n.dev)\n",
+            "[Read the guide](https://github.com/afonsojramos/qbz/wiki)\n  - [Nested](https://n.dev)\n",
         );
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].kind, KIND_LINK);
         assert_eq!(blocks[0].text, "Read the guide");
-        assert_eq!(blocks[0].url, "https://github.com/vicrodh/qbz/wiki");
+        assert_eq!(blocks[0].url, "https://github.com/afonsojramos/qbz/wiki");
         // A bullet whose whole content is a link is a link too, NOT a bullet.
         assert_eq!(blocks[1].kind, KIND_LINK);
         assert_eq!(blocks[1].url, "https://n.dev");
