@@ -49,7 +49,7 @@ impl RemoteControlSettingsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open remote control settings database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| {
                 format!(
                     "Failed to enable WAL for remote control settings database: {}",
@@ -305,7 +305,7 @@ impl AllowedOriginsStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open allowed origins database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| format!("Failed to enable WAL for allowed origins database: {}", e))?;
 
         conn.execute_batch(

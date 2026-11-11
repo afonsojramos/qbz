@@ -21,7 +21,7 @@
 //! All fields stay serde-tolerant (`Option` / `#[serde(default)]`) — the
 //! endpoint is a beta-era delta and may still move.
 
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Accept either a JSON string or a JSON number and normalize to `String`.
 ///
@@ -62,15 +62,16 @@ pub struct QobuzLyricsUrls {
     /// URL to the original-language lyrics document (Qobuz CDN host).
     #[serde(default)]
     pub lyrics_url: Option<String>,
-    /// Present only when the `translation` query param was sent AND a matching
-    /// translation exists (yaml:208-213). We never send `translation` in v1,
-    /// so this stays `None` (confirmed absent in the live capture).
+    /// Present only when the `language` query param was sent AND a matching
+    /// translation exists (yaml:208-213). Absent when no translation was
+    /// requested (confirmed absent in the live capture) or none is available
+    /// for the requested language.
     #[serde(default)]
     pub translation_requested: Option<QobuzLyricsTranslation>,
 }
 
 /// Translation pointer inside [`QobuzLyricsUrls`] (yaml `LyricsTranslationDto`, `:221-231`).
-/// Unverified live (v1 never requests translations); kept yaml-shaped + tolerant.
+/// Kept yaml-shaped + tolerant.
 #[derive(Debug, Clone, Deserialize)]
 pub struct QobuzLyricsTranslation {
     #[serde(default)]
@@ -92,7 +93,8 @@ pub struct QobuzLyricsDocument {
     /// ISO 639-1 codes a translation exists for (e.g. `["pt","de","fr","es","it"]`).
     #[serde(default)]
     pub translation_langs: Vec<String>,
-    /// Publisher copyright entries with applicability zones.
+    /// Publisher copyright entries with applicability zones. Parsed but never
+    /// enforced (owner decision 2026-07-22: no zone/copyright gating).
     #[serde(default)]
     pub publishers: Vec<QobuzLyricsPublisher>,
     /// Songwriter credits as a single display string.
@@ -101,6 +103,31 @@ pub struct QobuzLyricsDocument {
     /// The actual lyrics content (the yaml's "LyricsContentDto" union).
     #[serde(default)]
     pub original: Option<QobuzLyricsContent>,
+    /// Translated lyrics content (NEW in API v10) — same union shape as
+    /// `original`. LIVE WIRE (verified 2026-07-22): when `language` is
+    /// requested and available, the step-1 `lyrics_url` itself points at the
+    /// TRANSLATED document (`<id>-<lang>.json`), which carries ONLY this
+    /// `translation` block and no `original` — the client must fetch the
+    /// original document separately and merge. `translation_requested` was
+    /// not observed in practice (kept as a fallback source only).
+    #[serde(default)]
+    pub translation: Option<QobuzLyricsContent>,
+}
+
+/// Merge a translation-only document into its original document (v10 live
+/// wire: a `language` request returns a document carrying ONLY `translation`).
+/// Moves the `translation` block over and unions `translation_langs`.
+/// `original` keeps its own content/writers/publishers.
+pub fn merge_translation_into(
+    original: &mut QobuzLyricsDocument,
+    mut translated: QobuzLyricsDocument,
+) {
+    original.translation = translated.translation.take();
+    for lang in translated.translation_langs.drain(..) {
+        if !original.translation_langs.contains(&lang) {
+            original.translation_langs.push(lang);
+        }
+    }
 }
 
 /// One publisher credit inside [`QobuzLyricsDocument`] (live-only; not in the yaml).
@@ -118,8 +145,9 @@ pub struct QobuzLyricsPublisher {
 /// Live discriminator is `"wsync"` (word-synced — richer than the yaml's
 /// `"lsync"` guess: per-word timestamps inside each line). `"lsync"` is kept
 /// as an alias in case line-only documents exist in the catalog (same shape
-/// minus `words`, which defaults to empty).
-#[derive(Debug, Clone, Deserialize)]
+/// minus `words`, which defaults to empty). `Serialize` exists so the lyrics
+/// cache can persist a document's embedded translation verbatim.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum QobuzLyricsContent {
     /// Time-synced lyrics; line + per-word timestamps, ms from track start.
@@ -154,6 +182,14 @@ impl QobuzLyricsContent {
             QobuzLyricsContent::Plain { lines, .. } => lines.len(),
         }
     }
+
+    /// ISO 639-1 of the content's language, when the document carries it.
+    pub fn lang(&self) -> Option<&str> {
+        match self {
+            QobuzLyricsContent::Synced { lang, .. } => lang.as_deref(),
+            QobuzLyricsContent::Plain { lang, .. } => lang.as_deref(),
+        }
+    }
 }
 
 /// One synced line.
@@ -162,7 +198,7 @@ impl QobuzLyricsContent {
 /// required): instrumental-gap separator lines come as `{"line":"","words":[]}`
 /// with NO `start`/`end` at all — both must be `Option`. Regular lines carry
 /// line-level `start`/`end` plus per-word stamps (lyrics-doc-wsync.json).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QobuzLyricsLine {
     #[serde(default)]
     pub line: String,
@@ -178,7 +214,7 @@ pub struct QobuzLyricsLine {
 }
 
 /// One word inside a synced line (live-only; not in the yaml).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QobuzLyricsWord {
     #[serde(default)]
     pub word: String,
@@ -193,7 +229,7 @@ pub struct QobuzLyricsWord {
 /// One plain line. Live wire form is an object `{"line": "..."}`
 /// (lyrics-doc-plain.json); the yaml guessed bare strings (`:287-303`) —
 /// accept both.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct QobuzLyricsPlainLine {
     pub line: String,
 }
@@ -229,8 +265,18 @@ mod tests {
     // synced/plain docs are truncated to a few lines here to avoid vendoring
     // full copyrighted lyrics in the repo — the STRUCTURE is verbatim).
     const URL_RESPONSE: &str = include_str!("../tests/fixtures/lyrics-url-response.json");
+    const URL_RESPONSE_TRANSLATION: &str =
+        include_str!("../tests/fixtures/lyrics-url-response-translation.json");
     const DOC_WSYNC: &str = include_str!("../tests/fixtures/lyrics-doc-wsync.json");
     const DOC_PLAIN: &str = include_str!("../tests/fixtures/lyrics-doc-plain.json");
+    const DOC_WSYNC_TRANSLATION: &str =
+        include_str!("../tests/fixtures/lyrics-doc-wsync-translation.json");
+    const DOC_LSYNC_TRANSLATION: &str =
+        include_str!("../tests/fixtures/lyrics-doc-lsync-translation.json");
+    const DOC_PLAIN_TRANSLATION: &str =
+        include_str!("../tests/fixtures/lyrics-doc-plain-translation.json");
+    const DOC_TRANSLATION_ONLY: &str =
+        include_str!("../tests/fixtures/lyrics-doc-translation-only.json");
     const MISS_RESPONSE: &str = include_str!("../tests/fixtures/lyrics-miss-response.json");
 
     #[test]
@@ -318,6 +364,178 @@ mod tests {
         let urls: QobuzLyricsUrls = serde_json::from_str(json).expect("parse string-id variant");
         assert_eq!(urls.track_id.as_deref(), Some("1"));
         assert_eq!(urls.album_id.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn deserialize_lyrics_url_response_with_translation_requested() {
+        // v10: when a `language` was requested and a translation exists, the
+        // envelope carries the `translation_requested` pointer (yaml
+        // `LyricsTranslationDto`).
+        let urls: QobuzLyricsUrls =
+            serde_json::from_str(URL_RESPONSE_TRANSLATION).expect("parse translation envelope");
+        assert_eq!(urls.track_id.as_deref(), Some("266725027"));
+        let requested = urls
+            .translation_requested
+            .expect("translation_requested present");
+        assert_eq!(requested.lang.as_deref(), Some("es"));
+        assert!(requested
+            .lyrics_url
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("https://"));
+    }
+
+    #[test]
+    fn deserialize_document_with_wsync_translation() {
+        let doc: QobuzLyricsDocument =
+            serde_json::from_str(DOC_WSYNC_TRANSLATION).expect("parse wsync+translation document");
+        assert_eq!(doc.translation_langs.len(), 5);
+
+        let original = doc.original.expect("original present");
+        assert!(original.is_synced());
+        assert_eq!(original.lang(), Some("en"));
+
+        let translation = doc.translation.expect("embedded translation present");
+        assert!(translation.is_synced());
+        assert_eq!(translation.lang(), Some("es"));
+        match &translation {
+            QobuzLyricsContent::Synced { lines, .. } => {
+                assert_eq!(lines.len(), 3);
+                assert_eq!(lines[0].line, "Primera linea traducida");
+                assert_eq!(lines[0].words.len(), 3);
+                assert_eq!(lines[0].words[2].word, "traducida");
+                assert!(lines[1].start.is_none(), "gap line without stamps");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn deserialize_document_with_lsync_translation() {
+        // Line-synced variant: lsync alias on BOTH original and translation,
+        // no per-word stamps.
+        let doc: QobuzLyricsDocument =
+            serde_json::from_str(DOC_LSYNC_TRANSLATION).expect("parse lsync+translation document");
+        let original = doc.original.expect("original present");
+        assert!(original.is_synced());
+        let translation = doc.translation.expect("translation present");
+        match &translation {
+            QobuzLyricsContent::Synced { lang, lines } => {
+                assert_eq!(lang.as_deref(), Some("fr"));
+                assert_eq!(lines.len(), 2);
+                assert!(lines[0].words.is_empty());
+                assert_eq!(lines[1].start, Some(5000));
+            }
+            _ => panic!("expected synced translation"),
+        }
+    }
+
+    #[test]
+    fn deserialize_document_with_plain_translation() {
+        let doc: QobuzLyricsDocument =
+            serde_json::from_str(DOC_PLAIN_TRANSLATION).expect("parse plain+translation document");
+        let original = doc.original.expect("original present");
+        assert!(!original.is_synced());
+        let translation = doc.translation.expect("translation present");
+        match &translation {
+            QobuzLyricsContent::Plain { lang, lines } => {
+                assert_eq!(lang.as_deref(), Some("de"));
+                assert_eq!(lines.len(), 2);
+                assert_eq!(lines[0].line, "Einfache Uebersetzung eins");
+            }
+            _ => panic!("expected plain translation"),
+        }
+    }
+
+    #[test]
+    fn document_without_translation_stays_none() {
+        // 9.x back-compat: existing captures have no `translation` member.
+        for fixture in [DOC_WSYNC, DOC_PLAIN] {
+            let doc: QobuzLyricsDocument =
+                serde_json::from_str(fixture).expect("parse 9.x document");
+            assert!(doc.translation.is_none());
+        }
+    }
+
+    #[test]
+    fn empty_translation_langs_means_feature_off() {
+        // Feature-off document: no translations offered at all.
+        let json = r#"{"track_id": 1, "translation_langs": [],
+            "original": {"type": "plain", "lang": "en", "lines": [{"line": "hi"}]}}"#;
+        let doc: QobuzLyricsDocument = serde_json::from_str(json).expect("parse");
+        assert!(doc.translation_langs.is_empty());
+        assert!(doc.translation.is_none());
+
+        // Missing member entirely behaves the same.
+        let json = r#"{"track_id": 1,
+            "original": {"type": "plain", "lang": "en", "lines": [{"line": "hi"}]}}"#;
+        let doc: QobuzLyricsDocument = serde_json::from_str(json).expect("parse");
+        assert!(doc.translation_langs.is_empty());
+    }
+
+    #[test]
+    fn deserialize_translation_only_document() {
+        // v10 LIVE WIRE (verified 2026-07-22, track 266725027 with
+        // language=es): a translation request returns a document carrying
+        // ONLY `translation` — no `original` at all.
+        let doc: QobuzLyricsDocument = serde_json::from_str(DOC_TRANSLATION_ONLY)
+            .expect("parse translation-only document");
+        assert!(doc.original.is_none(), "no original on the translated doc");
+        assert_eq!(doc.translation_langs.len(), 5);
+        let translation = doc.translation.expect("translation present");
+        assert!(translation.is_synced(), "lsync alias maps to Synced");
+        assert_eq!(translation.lang(), Some("es"));
+        match &translation {
+            QobuzLyricsContent::Synced { lines, .. } => {
+                assert_eq!(lines.len(), 4);
+                assert!(lines[1].start.is_none(), "gap line without stamps");
+                assert_eq!(lines[2].line, "Podría comerme a esa chica para el almuerzo");
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn merge_translation_into_original_document() {
+        // The get_lyrics merge path: original doc (9.x shape) + translation-
+        // only doc combine into one bilingual document.
+        let mut original: QobuzLyricsDocument =
+            serde_json::from_str(DOC_WSYNC).expect("parse original document");
+        assert!(original.translation.is_none());
+        let translated: QobuzLyricsDocument =
+            serde_json::from_str(DOC_TRANSLATION_ONLY).expect("parse translation-only document");
+
+        merge_translation_into(&mut original, translated);
+
+        assert!(original.original.is_some(), "original content kept");
+        let translation = original.translation.expect("merged translation");
+        assert_eq!(translation.lang(), Some("es"));
+        // translation_langs unioned WITHOUT duplicates (both fixtures carry
+        // the same 5 codes).
+        assert_eq!(original.translation_langs.len(), 5);
+        let mut sorted = original.translation_langs.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), original.translation_langs.len());
+        // Writers/publishers stay the original document's.
+        assert!(original.writers.is_some());
+    }
+
+    #[test]
+    fn content_serializes_back_to_wire_shape() {
+        // The lyrics cache persists an embedded translation verbatim, so the
+        // content union must round-trip through serde.
+        let doc: QobuzLyricsDocument =
+            serde_json::from_str(DOC_WSYNC_TRANSLATION).expect("parse");
+        let translation = doc.translation.expect("translation present");
+        let json = serde_json::to_string(&translation).expect("serialize");
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(value["type"], "wsync");
+        assert_eq!(value["lang"], "es");
+        assert_eq!(value["lines"][0]["words"][0]["word"], "Primera");
+        let back: QobuzLyricsContent = serde_json::from_str(&json).expect("re-parse");
+        assert_eq!(back.lang(), Some("es"));
+        assert_eq!(back.line_count(), 3);
     }
 
     #[test]

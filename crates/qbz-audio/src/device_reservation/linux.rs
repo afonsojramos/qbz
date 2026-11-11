@@ -16,7 +16,10 @@
 //!    property; if our priority is higher, call `RequestRelease(our_priority)`
 //!    on the holder. If that returns `true`, retry `RequestName` with
 //!    `DO_NOT_QUEUE | REPLACE_EXISTING`.
-//! 4. Anything else (zbus error, refusal, equal-or-lower priority) -> err.
+//! 4. Refusal or equal-or-greater priority -> `HigherPriorityHolder` (the
+//!    only fatal outcome). Any other failure (bus unavailable, name denied,
+//!    holder unreachable, lost re-acquire race) -> degraded no-op guard;
+//!    the PCM open + EBUSY backoff ladder arbitrate the device (#508/#534).
 //!
 //! On `Drop`, an active guard releases the bus name. A *degraded* guard
 //! (returned when the session bus is unavailable) is a no-op on `Drop`.
@@ -74,15 +77,15 @@ impl DeviceReservation {
     ///
     /// Returns:
     /// - `Ok(active_guard)` once we own the bus name.
-    /// - `Ok(degraded_guard)` if the session bus is unreachable. The caller
-    ///   should treat playback as "no reservation, but proceed normally".
-    /// - `Err(InvalidDevice)` for unparseable device strings.
-    /// - `Err(HigherPriorityHolder { .. })` if another app refuses to
-    ///   release, or holds at equal-or-greater priority.
-    /// - `Err(DbusError(_))` for protocol-level zbus failures we can't
-    ///   downgrade (e.g. malformed bus name, reply marshaling failure).
-    /// - `Err(AlsaError(_))` for ALSA enumeration failures while resolving
-    ///   symbolic card names like `hw:CARD=DacMagic`.
+    /// - `Ok(degraded_guard)` for every non-cooperative failure: unparseable
+    ///   device strings, an unreachable session bus, a denied `RequestName`
+    ///   (confined sandbox bus, #534), or contention resolution failing for
+    ///   any reason other than the holder refusing. The caller treats these
+    ///   as "no reservation, but proceed normally" — the PCM open and its
+    ///   EBUSY backoff ladder arbitrate the device (#508).
+    /// - `Err(HigherPriorityHolder { .. })` — the only fatal outcome: a
+    ///   cooperative holder refused to release, or holds at
+    ///   equal-or-greater priority.
     ///
     /// # Tight coupling rule (load-bearing — do not violate)
     ///
@@ -157,7 +160,27 @@ impl DeviceReservation {
             }
         };
 
-        match try_acquire_name(&connection, &bus_name, false)? {
+        // RequestName itself can be denied by the bus policy — under Snap
+        // confinement the mediated session bus refuses ownership of the
+        // org.freedesktop.ReserveDevice1.* names (#534). That must not be
+        // fatal: degrade to no reservation and let the PCM open proceed,
+        // exactly like the bus-unavailable case above.
+        let reply = match try_acquire_name(&connection, &bus_name, false) {
+            Ok(reply) => reply,
+            Err(e) => {
+                log::warn!(
+                    "[reservation] could not request name {} (confined session \
+                     bus?): {}. Proceeding without D-Bus reservation (degraded).",
+                    bus_name,
+                    e
+                );
+                return Ok(Self {
+                    state: ReservationState::Degraded,
+                });
+            }
+        };
+
+        match reply {
             // Either we just took ownership, or we already owned this name on
             // this same connection (idempotent for Lifetime-A nested under
             // Lifetime-B in Task 5).
@@ -178,7 +201,27 @@ impl DeviceReservation {
             // RequestNameReply is exhaustively matched and the contention
             // logic handles it identically to Exists.
             RequestNameReply::Exists | RequestNameReply::InQueue => {
-                resolve_contention(&connection, &bus_name, &object_path, app_device_name)
+                match resolve_contention(&connection, &bus_name, &object_path, app_device_name) {
+                    Ok(res) => Ok(res),
+                    // A cooperative higher-priority holder (DAW / pro-audio app)
+                    // refused to release: honor it — the one deliberate fatal case.
+                    Err(e @ ReservationError::HigherPriorityHolder { .. }) => Err(e),
+                    // Anything else (holder proxy unreachable, RequestRelease call
+                    // failed, lost re-acquire race): degrade — the PCM open plus its
+                    // EBUSY backoff ladder is the real arbiter, exactly like the
+                    // request_name-failure path above (#508/#534).
+                    Err(e) => {
+                        log::warn!(
+                            "[reservation] contention resolution for {} failed: {}. \
+                             Proceeding without D-Bus reservation (degraded).",
+                            bus_name,
+                            e
+                        );
+                        Ok(Self {
+                            state: ReservationState::Degraded,
+                        })
+                    }
+                }
             }
         }
     }
@@ -268,9 +311,8 @@ fn try_acquire_name(
     bus_name: &str,
     replace: bool,
 ) -> Result<RequestNameReply, ReservationError> {
-    let proxy = DBusProxy::new(conn).map_err(|e| {
-        ReservationError::DbusError(format!("DBusProxy::new failed: {}", e))
-    })?;
+    let proxy = DBusProxy::new(conn)
+        .map_err(|e| ReservationError::DbusError(format!("DBusProxy::new failed: {}", e)))?;
     let well_known: WellKnownName<'_> = bus_name.try_into().map_err(|e| {
         ReservationError::DbusError(format!("invalid bus name '{}': {}", bus_name, e))
     })?;
@@ -309,9 +351,8 @@ fn resolve_contention(
     // it twice for back-to-back property reads has been observed to cost an
     // extra GetAll round trip on some bus daemons; one proxy is both faster
     // and clearer.
-    let holder_proxy = open_holder_proxy(conn, bus_name, object_path).map_err(|e| {
-        ReservationError::DbusError(format!("Proxy::new for holder failed: {}", e))
-    })?;
+    let holder_proxy = open_holder_proxy(conn, bus_name, object_path)
+        .map_err(|e| ReservationError::DbusError(format!("Proxy::new for holder failed: {}", e)))?;
 
     // Default to 0 if the holder is uncooperative or doesn't expose Priority.
     // Rationale: PulseAudio/PipeWire are the most common holders and run at
@@ -638,10 +679,7 @@ mod tests {
         ] {
             match parse_card_index(s) {
                 Ok(_) | Err(ReservationError::InvalidDevice(_)) => {}
-                Err(other) => panic!(
-                    "unexpected error variant for {:?}: {:?}",
-                    s, other
-                ),
+                Err(other) => panic!("unexpected error variant for {:?}: {:?}", s, other),
             }
         }
     }

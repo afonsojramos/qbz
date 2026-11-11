@@ -42,5 +42,5 @@ pub use musicbrainz::{MusicBrainzClient, MusicBrainzConfig};
 pub use remote_metadata::{
     discogs_extended_to_search_result, discogs_full_to_metadata,
     musicbrainz_full_to_metadata, musicbrainz_release_to_search_result, RemoteAlbumMetadata,
-    RemoteAlbumSearchResult, RemoteProvider, RemoteTrackMetadata,
+    RemoteAlbumSearchResult, RemoteArtistCredit, RemoteProvider, RemoteTrackMetadata,
 };

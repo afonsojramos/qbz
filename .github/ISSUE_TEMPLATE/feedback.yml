@@ -1,6 +1,5 @@
 name: Feedback
 description: General feedback, UX thoughts, or non-bug discussion
-title: "[Feedback] "
 labels: ["feedback"]
 body:
   - type: dropdown
@@ -11,6 +10,7 @@ body:
         - ""
         - Linux
         - macOS
+        - Windows
     validations:
       required: false
 

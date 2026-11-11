@@ -86,7 +86,11 @@ const PROBES: &[ProbeEndpoint] = &[
         expect: ProbeExpect::Status204,
     },
     ProbeEndpoint {
-        url: "https://www.msftconnecttest.com/connecttest.txt",
+        // Microsoft NCSI defines this probe as plain HTTP. HTTPS is not a
+        // supported equivalent: the CDN can answer with an Akamai certificate
+        // that is not valid for www.msftconnecttest.com, producing a rustls
+        // error before the strict body check can run.
+        url: "http://www.msftconnecttest.com/connecttest.txt",
         expect: ProbeExpect::BodyContains("Microsoft Connect Test"),
     },
 ];
@@ -594,5 +598,22 @@ mod tests {
         assert!(ipv6_has_default_route(with_default));
         assert!(!ipv6_has_default_route(non_default));
         assert!(!ipv6_has_default_route(lo_default));
+    }
+
+    #[test]
+    fn microsoft_ncsi_probe_uses_its_defined_http_transport() {
+        let endpoint = PROBES
+            .iter()
+            .find(|endpoint| {
+                matches!(
+                    endpoint.expect,
+                    ProbeExpect::BodyContains("Microsoft Connect Test")
+                )
+            })
+            .expect("Microsoft NCSI probe");
+        assert_eq!(
+            endpoint.url,
+            "http://www.msftconnecttest.com/connecttest.txt"
+        );
     }
 }

@@ -11,5 +11,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
-prost = "0.13"
+prost = "0.14"
 uuid = { version = "1", features = ["v4"] }

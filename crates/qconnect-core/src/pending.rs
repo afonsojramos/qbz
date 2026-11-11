@@ -17,6 +17,8 @@ pub struct PendingQueueAction {
     #[serde(default)]
     pub is_set_active_renderer_action: bool,
     #[serde(default)]
+    pub is_queue_load_tracks_action: bool,
+    #[serde(default)]
     pub expected_active_renderer_id: Option<i32>,
     pub concurrency_error: bool,
     pub sent_at_ms: u64,

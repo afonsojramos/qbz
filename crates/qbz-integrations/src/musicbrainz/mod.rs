@@ -26,6 +26,7 @@
 //! ```
 
 mod client;
+pub mod identity;
 mod models;
 
 #[cfg(feature = "cache")]

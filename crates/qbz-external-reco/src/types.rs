@@ -76,6 +76,11 @@ pub struct AlbumReco {
     pub artwork_url: String,
     #[serde(default)]
     pub subtitle: String,
+    /// Genre name from the resolving Qobuz album — feeds the card hover
+    /// overlay. Defaulted for backward compatibility with cached JSON
+    /// written before the field existed.
+    #[serde(default)]
+    pub genre: String,
     #[serde(default = "default_source")]
     pub source: RecoSource,
 }

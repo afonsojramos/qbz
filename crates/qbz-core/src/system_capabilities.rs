@@ -141,14 +141,55 @@ pub fn pressure_from_figures(mem_available_kb: u64, mem_total_kb: u64) -> Memory
     }
 }
 
-/// Read /proc/meminfo and return a pressure snapshot relative to the
-/// detected MemoryProfile. Returns None on platforms without
-/// /proc/meminfo or when the file is unreadable.
+/// Windows' answer to `/proc/meminfo`: total and available physical memory,
+/// both in KiB, from `GlobalMemoryStatusEx`.
+///
+/// W14. Without this the profile falls back to the top tier and
+/// `read_memory_pressure` returns `None` forever, so the memory watchdog is
+/// blind on Windows and the prefetch/buffer tiers never step down on a small
+/// machine. `ullAvailPhys` is the closest analogue to `MemAvailable`: both
+/// mean "what a new allocation can expect without swapping".
+#[cfg(windows)]
+fn global_memory_status_kb() -> Option<(u64, u64)> {
+    use windows_sys::Win32::System::SystemInformation::{
+        GlobalMemoryStatusEx, MEMORYSTATUSEX,
+    };
+
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..unsafe { std::mem::zeroed() }
+    };
+
+    // SAFETY: `status` is a live, correctly sized MEMORYSTATUSEX whose
+    // `dwLength` is set as the API requires; the call only writes into it.
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return None;
+    }
+
+    // The fields are bytes; the rest of this module speaks KiB.
+    Some((status.ullTotalPhys / 1024, status.ullAvailPhys / 1024))
+}
+
+/// Read the platform's memory figures and return a pressure snapshot relative
+/// to the detected MemoryProfile. Returns None on platforms with neither
+/// `/proc/meminfo` nor `GlobalMemoryStatusEx`, or when the source is
+/// unreadable.
 pub fn read_memory_pressure() -> Option<MemoryPressure> {
-    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let mem_available_kb = parse_meminfo_available_kb(&content)?;
-    let profile = memory_profile();
-    Some(pressure_from_figures(mem_available_kb, profile.mem_total_kb))
+    #[cfg(windows)]
+    {
+        let (_total_kb, avail_kb) = global_memory_status_kb()?;
+        let profile = memory_profile();
+        return Some(pressure_from_figures(avail_kb, profile.mem_total_kb));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let mem_available_kb = parse_meminfo_available_kb(&content)?;
+        let profile = memory_profile();
+        Some(pressure_from_figures(mem_available_kb, profile.mem_total_kb))
+    }
 }
 
 /// Pure detection given `/proc/meminfo` content. Falls back to Normal
@@ -164,6 +205,17 @@ pub fn detect_profile_from_meminfo(content: &str) -> MemoryProfile {
 /// profile on platforms without `/proc/meminfo` (macOS, Windows) or when
 /// the file is unreadable for any reason.
 fn detect_profile() -> MemoryProfile {
+    #[cfg(windows)]
+    {
+        // Same Normal-fallback contract as the meminfo path: a probe we could
+        // not run must never throttle the machine.
+        return match global_memory_status_kb() {
+            Some((total_kb, _avail_kb)) => MemoryProfile::from_total_kb(total_kb),
+            None => MemoryProfile::from_total_kb(u64::MAX),
+        };
+    }
+
+    #[cfg(not(windows))]
     match std::fs::read_to_string("/proc/meminfo") {
         Ok(content) => detect_profile_from_meminfo(&content),
         Err(_) => MemoryProfile::from_total_kb(u64::MAX),
