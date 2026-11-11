@@ -1026,7 +1026,7 @@ fn embed_windows_resources() {
     res.set_manifest_file("../../packaging/windows/qbz.exe.manifest");
     res.set("ProductName", "QBZ");
     res.set("FileDescription", "QBZ — Qobuz hi-res player");
-    res.set("LegalCopyright", "MIT — github.com/vicrodh/qbz");
+    res.set("LegalCopyright", "MIT — github.com/afonsojramos/qbz");
     res.compile().expect("windows resource");
 }
 

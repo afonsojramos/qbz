@@ -1,5 +1,1 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Questions and troubleshooting
-    url: https://github.com/vicrodh/qbz/discussions
-    about: Ask for help or discuss QBZ without opening a bug report.
+blank_issues_enabled: true

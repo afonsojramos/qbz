@@ -5,7 +5,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="Native Qobuz client for Linux with bit-perfect playback"
 arch=(x86_64)
-url="https://github.com/vicrodh/qbz"
+url="https://github.com/afonsojramos/qbz"
 license=(MIT)
 # v2.0+ (Slint/winit binary): no webkit/gtk/appindicator/node.
 depends=(
@@ -34,7 +34,7 @@ optdepends=(
   'pipewire-pulse: PulseAudio compatibility'
   'vulkan-driver: GPU-accelerated rendering (wgpu)'
 )
-source=("https://github.com/vicrodh/qbz/archive/refs/tags/v${pkgver}.tar.gz")
+source=("https://github.com/afonsojramos/qbz/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('SKIP')
 
 build() {

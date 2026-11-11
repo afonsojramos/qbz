@@ -70,7 +70,7 @@ default-members = ["qbz-qt"]
 version = "2.1.2"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/vicrodh/qbz"
+repository = "https://github.com/afonsojramos/qbz"
 
 [workspace.dependencies]
 # Async runtime

@@ -4,7 +4,7 @@ pkgver=0.0.0
 pkgrel=1
 pkgdesc="Native hi-fi Qobuz desktop player for Linux"
 arch=('x86_64' 'aarch64')
-url="https://github.com/vicrodh/qbz"
+url="https://github.com/afonsojramos/qbz"
 license=('MIT')
 depends=('qt6-base>=6.8' 'qt6-declarative>=6.8' 'qt6-svg>=6.8' 'qt6-wayland' 'alsa-lib' 'xdg-utils')
 makedepends=('rust' 'cmake' 'nasm' 'jack')
@@ -19,8 +19,8 @@ optdepends=(
 provides=('qbz')
 conflicts=('qbz-bin' 'qbz-git')
 source=(
-    "${pkgname}-${pkgver}.tar.gz::https://github.com/vicrodh/qbz/archive/refs/tags/v${pkgver}.tar.gz"
-    "${pkgname}-${pkgver}-cargo-vendor.tar.xz::https://github.com/vicrodh/qbz/releases/download/v${pkgver}/qbz-${pkgver}-cargo-vendor.tar.xz"
+    "${pkgname}-${pkgver}.tar.gz::https://github.com/afonsojramos/qbz/archive/refs/tags/v${pkgver}.tar.gz"
+    "${pkgname}-${pkgver}-cargo-vendor.tar.xz::https://github.com/afonsojramos/qbz/releases/download/v${pkgver}/qbz-${pkgver}-cargo-vendor.tar.xz"
 )
 sha256sums=('SKIP' 'SKIP')
 

@@ -52,7 +52,7 @@
           version = qbzVersion;
 
           src = pkgs.fetchurl {
-            url = "https://github.com/vicrodh/qbz/releases/download/v${qbzVersion}/${asset.name}";
+            url = "https://github.com/afonsojramos/qbz/releases/download/v${qbzVersion}/${asset.name}";
             inherit (asset) hash;
           };
 
@@ -110,7 +110,7 @@
           meta = with pkgs.lib; {
             description = "Native, full-featured hi-fi Qobuz desktop player for Linux";
             homepage = "https://qbz.lol";
-            downloadPage = "https://github.com/vicrodh/qbz/releases";
+            downloadPage = "https://github.com/afonsojramos/qbz/releases";
             license = licenses.mit;
             mainProgram = "qbz";
             platforms = [ "x86_64-linux" "aarch64-linux" ];

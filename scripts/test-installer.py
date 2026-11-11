@@ -30,7 +30,7 @@ class InstallerTest(unittest.TestCase):
         (self.root/'package').write_bytes(self.payload)
         self.asset = {
             'name':'QBZ_2.1.2_amd64.AppImage',
-            'browser_download_url':'https://github.com/vicrodh/qbz/releases/download/v2.1.2/QBZ_2.1.2_amd64.AppImage',
+            'browser_download_url':'https://github.com/afonsojramos/qbz/releases/download/v2.1.2/QBZ_2.1.2_amd64.AppImage',
             'digest':'sha256:'+hashlib.sha256(self.payload).hexdigest(),
             'size':len(self.payload),
         }
@@ -42,11 +42,11 @@ import os,sys,pathlib,shutil
 args=sys.argv[1:]; root=pathlib.Path(os.environ['INSTALLER_FIXTURE'])
 out=pathlib.Path(args[args.index('--output')+1]); url=args[-1]
 with (root/'requests').open('a') as f: f.write(url+'\\n')
-if url.startswith('https://api.github.com/repos/vicrodh/qbz/releases/'):
+if url.startswith('https://api.github.com/repos/afonsojramos/qbz/releases/'):
     shutil.copyfile(root/'release.json',out)
-elif url=='https://github.com/vicrodh/qbz/releases/download/v2.1.2/QBZ_2.1.2_amd64.AppImage':
+elif url=='https://github.com/afonsojramos/qbz/releases/download/v2.1.2/QBZ_2.1.2_amd64.AppImage':
     shutil.copyfile(root/'package',out)
-elif url=='https://qbz.lol/assets/brand/64x64.png': out.write_bytes(b'icon fixture')
+elif url=='https://raw.githubusercontent.com/afonsojramos/qbz/main/packaging/icons/64x64.png': out.write_bytes(b'icon fixture')
 else: raise SystemExit('Unexpected URL: '+url)
 ''')
         (self.bin/'curl').chmod(0o755)
@@ -128,7 +128,7 @@ else: raise SystemExit('Unexpected URL: '+url)
             with self.subTest(system=system,arch=arch):
                 self.env.update(FIXTURE_OS=system,FIXTURE_ARCH=arch)
                 self.asset['name']=name
-                self.asset['browser_download_url']='https://github.com/vicrodh/qbz/releases/download/v2.1.2/'+name
+                self.asset['browser_download_url']='https://github.com/afonsojramos/qbz/releases/download/v2.1.2/'+name
                 r=self.run_installer('--check')
                 self.assertEqual(r.returncode,0,r.stderr)
                 self.assertIn(name,r.stdout)

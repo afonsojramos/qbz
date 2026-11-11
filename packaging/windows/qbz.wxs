@@ -66,9 +66,9 @@
     <Icon Id="QbzIcon.ico" SourceFile="$(var.IconPath)" />
     <Property Id="ARPPRODUCTICON" Value="QbzIcon.ico" />
     <Property Id="ARPCOMMENTS"
-              Value="QBZ $(var.FullVersion) — experimental, unsupported Windows build. WASAPI Exclusive supports bit-perfect output on compatible devices; System Default uses shared mode. https://github.com/vicrodh/qbz" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/vicrodh/qbz" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/vicrodh/qbz/issues" />
+              Value="QBZ $(var.FullVersion) — experimental, unsupported Windows build. WASAPI Exclusive supports bit-perfect output on compatible devices; System Default uses shared mode. https://github.com/afonsojramos/qbz" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/afonsojramos/qbz" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/afonsojramos/qbz/issues" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
     <!-- WiX 5 does not expose PerUserProgramFilesFolder as a legal

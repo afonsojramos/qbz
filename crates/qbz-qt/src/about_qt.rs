@@ -222,7 +222,7 @@ fn snapshot_doc() -> Doc {
         platform_label: platform_label(),
         build_date: build_date(),
         build_commit: build_commit(),
-        release_url: format!("https://github.com/vicrodh/qbz/releases/tag/v{version}"),
+        release_url: format!("https://github.com/afonsojramos/qbz/releases/tag/v{version}"),
         codename: CODENAME,
         author_name: AUTHOR_HANDLE,
         author_url: profile_url(AUTHOR_HANDLE),
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(
             doc.release_url,
             format!(
-                "https://github.com/vicrodh/qbz/releases/tag/v{}",
+                "https://github.com/afonsojramos/qbz/releases/tag/v{}",
                 app_version()
             )
         );

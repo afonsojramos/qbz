@@ -17,14 +17,14 @@ platform: linux
 version: ${QBZ_VERSION}
 section: sound
 priority: optional
-maintainer: Victor Rodriguez <vicrodh@users.noreply.github.com>
+maintainer: Afonso Jorge Ramos <afonsojramos@users.noreply.github.com>
 description: |
   QBZ headless daemon — Qobuz player for servers, Raspberry Pi and
   other appliances. TUI setup wizard, QConnect renderer/receiver, local
   library, offline cache. Includes an optional systemd user unit and can
   generate service definitions for systemd, OpenRC, or runit.
 vendor: QBZ
-homepage: https://github.com/vicrodh/qbz
+homepage: https://github.com/afonsojramos/qbz
 license: MIT
 # qbz already contains this daemon and unit, so installing both packages
 # would otherwise create file conflicts at transaction time.

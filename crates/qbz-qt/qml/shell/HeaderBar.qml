@@ -1580,7 +1580,7 @@ Rectangle {
                 label: QbzSession.tr("Documentation", QbzSession.trRev)
                 onClicked: {
                     appMenu.close()
-                    QbzShell.openExternalUrl("https://github.com/vicrodh/qbz/wiki")
+                    QbzShell.openExternalUrl("https://github.com/afonsojramos/qbz/wiki")
                 }
             }
             // Slint order continues (HeaderBar.slint:1213-1240): Report an

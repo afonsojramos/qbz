@@ -24,9 +24,9 @@
   <developer id="com.blitzfc">
     <name>QBZ Contributors</name>
   </developer>
-  <url type="homepage">https://github.com/vicrodh/qbz</url>
-  <url type="bugtracker">https://github.com/vicrodh/qbz/issues</url>
-  <url type="vcs-browser">https://github.com/vicrodh/qbz</url>
+  <url type="homepage">https://github.com/afonsojramos/qbz</url>
+  <url type="bugtracker">https://github.com/afonsojramos/qbz/issues</url>
+  <url type="vcs-browser">https://github.com/afonsojramos/qbz</url>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <branding>
@@ -41,31 +41,31 @@
   <screenshots>
     <screenshot type="default">
       <caption xml:lang="en">Home and discovery view</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/home-discover.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/home-discover.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Immersive cover flow mode</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-cover-flow.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-cover-flow.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Immersive line-bed playback view</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-line-bed.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/immersive-line-bed.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Artist page with editorial enrichment</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/enriched-artist-page.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/enriched-artist-page.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Local library view</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/local-library.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/local-library.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Hi-Fi DAC setup wizard</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/hifi-wizard.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/hifi-wizard.png</image>
     </screenshot>
     <screenshot>
       <caption xml:lang="en">Audio settings — backend, device, and quality</caption>
-      <image>https://raw.githubusercontent.com/vicrodh/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/default-settings.png</image>
+      <image>https://raw.githubusercontent.com/afonsojramos/qbz/5f759514d35d4f07bec531c09a5384baea7fc073/packaging/flatpak/screenshots/default-settings.png</image>
     </screenshot>
   </screenshots>
   <releases>

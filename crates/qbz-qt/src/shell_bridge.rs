@@ -1573,7 +1573,7 @@ impl qbz_shell::QbzShell {
         // Same URL the reference opens (crates/qbz/src/main.rs:14619-14624):
         // the repo's bug-report template, no prefilled body.
         if let Err(e) =
-            open::that("https://github.com/vicrodh/qbz/issues/new?template=bug_report.yml")
+            open::that("https://github.com/afonsojramos/qbz/issues/new?template=bug_report.yml")
         {
             log::warn!("[qbz-qt] could not open the issue template: {e}");
         }

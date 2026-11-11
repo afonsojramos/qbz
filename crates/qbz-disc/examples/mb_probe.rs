@@ -8,7 +8,7 @@ async fn main() {
     println!("URL: {url}");
 
     let client = reqwest::Client::builder()
-        .user_agent(concat!("QBZ/", env!("CARGO_PKG_VERSION"), " (https://github.com/vicrodh/qbz)"))
+        .user_agent(concat!("QBZ/", env!("CARGO_PKG_VERSION"), " (https://github.com/afonsojramos/qbz)"))
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .expect("client");
