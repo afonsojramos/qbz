@@ -16,8 +16,8 @@
 #   QBZ_${VERSION}_amd64.deb / QBZ-${VERSION}-1.x86_64.rpm / QBZ_${VERSION}_amd64.AppImage
 #   qbzd_${VERSION}_amd64.deb / qbzd-${VERSION}-1.x86_64.rpm / qbzd-${VERSION}-linux-amd64.tar.gz
 #   qbz-${VERSION}-cargo-vendor.tar.xz (architecture-neutral, x86_64 workflow only)
-# — release-aur.yml, release-gentoo.yml, qbz-apt, qbz-rpm, the updater
-# manifest and the website consume these names.
+# — the updater manifest, the one-line installer and the Nix flake consume
+# these names.
 #
 # release-linux-aarch64.yml is this file with the four ARCH_* values changed,
 # except that x86_64 publishes the architecture-neutral Cargo vendor asset.
@@ -279,8 +279,8 @@ jobs:
       # The BARE binary. Its consumers (AUR, Gentoo, Flathub) provide Qt.
       - name: Build AUR/Gentoo tarball
         run: |
-          # CONTRACT: release-aur.yml, the Gentoo binary ebuild, qbz-apt and
-          # the website hard-code this name and internal layout.
+          # CONTRACT: the AUR PKGBUILDs and Gentoo ebuilds in packaging/ and the
+          # Nix flake hard-code this name and internal layout.
           TARBALL_DIR="qbz_${VERSION}_${DEB_ARCH}"
           mkdir -p "tarball-staging/${TARBALL_DIR}/icons/hicolor"/{32x32,48x48,64x64,128x128,256x256,512x512}/apps
           cp qbz "tarball-staging/${TARBALL_DIR}/qbz"
@@ -341,23 +341,3 @@ jobs:
           files: dist/*
           prerelease: ${{ needs.version.outputs.prerelease }}
           make_latest: ${{ needs.version.outputs.prerelease == 'true' && 'false' || 'true' }}
-
-      - name: Trigger APT repo update
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.APT_REPO_TOKEN }}
-          repository: vicrodh/qbz-apt
-          event-type: new-release
-          client-payload: '{"tag": "${{ github.ref_name }}"}'
-
-      # Our own signed RPM repo. This is intentionally required: a bad token
-      # must not leave the stable RPM channel stale without failing release CI.
-      - name: Trigger RPM repo update
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: peter-evans/repository-dispatch@v4
-        with:
-          token: ${{ secrets.APT_REPO_TOKEN }}
-          repository: vicrodh/qbz-rpm
-          event-type: new-release
-          client-payload: '{"tag": "${{ github.ref_name }}"}'

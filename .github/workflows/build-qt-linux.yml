@@ -1,5 +1,5 @@
 # Linux build of the Qt frontend — ONE recipe, reused by every Linux release
-# workflow (release-linux, release-linux-aarch64, release-snap, release-flatpak)
+# workflow (release-linux, release-linux-aarch64, release-flatpak)
 # via `workflow_call`, and dispatchable on its own as the pre-flight ("does the
 # release recipe still build; publish nothing") — the job build-slint.yml used
 # to do. The 2026-07-04 lesson was two copies of the same recipe drifting apart;
