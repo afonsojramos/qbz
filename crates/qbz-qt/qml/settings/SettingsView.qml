@@ -263,123 +263,182 @@ Item {
                     }
                 }
 
-                Column {
+                // Ends above the pinned "Share logs" row and scrolls when the
+                // open ADVANCED fold no longer fits, instead of running under it.
+                Flickable {
+                    id: subNavFlick
                     anchors.top: parent.top
+                    anchors.bottom: shareLogs.top
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.leftMargin: 24
                     anchors.rightMargin: 12
                     anchors.topMargin: 4
-                    spacing: 4
+                    anchors.bottomMargin: 8
+                    contentWidth: width
+                    contentHeight: subNavCol.height
+                    clip: true
+                    interactive: contentHeight > height
+                    boundsBehavior: Flickable.StopAtBounds
 
-                    SubNavItem {
-                        name: "volume-2"
-                        label: QbzSession.tr("Audio", QbzSession.trRev)
-                        active: root.section === 0
-                        onClicked: QbzBridge.settingsSetSection(0)
+                    // Opening the fold scrolls its rows into view, keeping the
+                    // Advanced row on screen. Waits for the column to grow,
+                    // which happens after advancedOpen changes.
+                    property bool revealAdvanced: false
+                    Connections {
+                        target: root
+                        function onAdvancedOpenChanged() {
+                            subNavFlick.revealAdvanced = root.advancedOpen
+                        }
                     }
-                    SubNavItem {
-                        name: "play-fill"
-                        label: QbzSession.tr("Playback", QbzSession.trRev)
-                        active: root.section === 1
-                        onClicked: QbzBridge.settingsSetSection(1)
+                    // Keyboard focus on a row scrolled out of view brings it
+                    // back, as the panel's flick does for its controls.
+                    function revealFocusItem(item) {
+                        var ancestor = item
+                        while (ancestor && ancestor !== subNavCol)
+                            ancestor = ancestor.parent
+                        if (!item || ancestor !== subNavCol)
+                            return
+                        const point = item.mapToItem(contentItem, 0, 0)
+                        if (point.y < contentY)
+                            contentY = Math.max(0, point.y)
+                        else if (point.y + item.height > contentY + height)
+                            contentY = Math.min(Math.max(0, contentHeight - height),
+                                                point.y + item.height - height)
                     }
-                    SubNavItem {
-                        name: "paintbrush-vertical"
-                        label: QbzSession.tr("Appearance", QbzSession.trRev)
-                        active: root.section === 2
-                        onClicked: QbzBridge.settingsSetSection(2)
+                    Connections {
+                        target: root.Window.window
+                        function onActiveFocusItemChanged() {
+                            const win = root.Window.window
+                            Qt.callLater(function () {
+                                subNavFlick.revealFocusItem(win ? win.activeFocusItem : null)
+                            })
+                        }
                     }
-                    SubNavItem {
-                        name: "compass"
-                        label: QbzSession.tr("Navigation", QbzSession.trRev)
-                        active: root.section === 10
-                        onClicked: QbzBridge.settingsSetSection(10)
-                    }
-                    SubNavItem {
-                        name: "hard-drive"
-                        label: QbzSession.tr("Local Library", QbzSession.trRev)
-                        active: root.section === 4
-                        onClicked: QbzBridge.settingsSetSection(4)
-                    }
-                    SubNavItem {
-                        name: "cloud-download"
-                        label: QbzSession.tr("Offline", QbzSession.trRev)
-                        active: root.section === 3
-                        onClicked: QbzBridge.settingsSetSection(3)
-                    }
-                    SubNavItem {
-                        name: "unplug"
-                        label: QbzSession.tr("Integrations", QbzSession.trRev)
-                        active: root.section === 6
-                        onClicked: QbzBridge.settingsSetSection(6)
-                    }
-                    SubNavItem {
-                        name: "refresh-cw"
-                        label: QbzSession.tr("Updates", QbzSession.trRev)
-                        active: root.section === 12
-                        onClicked: QbzBridge.settingsSetSection(12)
-                    }
-                    // Sandboxed installs only (Flatpak / Snap permissions).
-                    SubNavItem {
-                        visible: root.sandboxed
-                        name: "info"
-                        label: (root.doc.dev || ({})).installMethod === "snap"
-                            ? QbzSession.tr("Snap", QbzSession.trRev)
-                            : QbzSession.tr("Flatpak", QbzSession.trRev)
-                        active: root.section === 8
-                        onClicked: QbzBridge.settingsSetSection(8)
+                    onContentHeightChanged: {
+                        if (!revealAdvanced) {
+                            returnToBounds()
+                            return
+                        }
+                        revealAdvanced = false
+                        contentY = Math.max(0, Math.min(advancedRow.y, contentHeight - height))
                     }
 
-                    // The ADVANCED fold: a disclosure row, not a section. It
-                    // reads as active while it is closed over the selected
-                    // page, so the column never shows nothing selected.
-                    SubNavItem {
-                        name: "sliders-horizontal"
-                        trailing: root.advancedOpen ? "chevron-down" : "chevron-right"
-                        label: QbzSession.tr("Advanced", QbzSession.trRev)
-                        active: !root.advancedOpen && root.advancedSections.indexOf(root.section) >= 0
-                        onClicked: root.advancedOpen = !root.advancedOpen
-                    }
-                    SubNavItem {
-                        visible: root.advancedOpen
-                        indent: 16
-                        name: "blind-eye"
-                        label: QbzSession.tr("Blacklist", QbzSession.trRev)
-                        active: root.section === 5
-                        onClicked: QbzBridge.settingsSetSection(5)
-                    }
-                    SubNavItem {
-                        visible: root.advancedOpen
-                        indent: 16
-                        name: "database"
-                        label: QbzSession.tr("Storage", QbzSession.trRev)
-                        active: root.section === 13
-                        onClicked: QbzBridge.settingsSetSection(13)
-                    }
-                    SubNavItem {
-                        visible: root.advancedOpen
-                        indent: 16
-                        name: "import"
-                        label: QbzSession.tr("Import / Export", QbzSession.trRev)
-                        active: root.section === 9
-                        onClicked: QbzBridge.settingsSetSection(9)
-                    }
-                    SubNavItem {
-                        visible: root.advancedOpen
-                        indent: 16
-                        name: "bug"
-                        label: QbzSession.tr("Developer", QbzSession.trRev)
-                        active: root.section === 7
-                        onClicked: QbzBridge.settingsSetSection(7)
-                    }
-                    SubNavItem {
-                        visible: root.advancedOpen && QbzOrbit.enabled
-                        indent: 16
-                        name: "compass"
-                        label: "Orbit"
-                        active: root.section === 11
-                        onClicked: QbzBridge.settingsSetSection(11)
+                    Column {
+                        id: subNavCol
+                        width: subNavFlick.width
+                        spacing: 4
+
+                        SubNavItem {
+                            name: "volume-2"
+                            label: QbzSession.tr("Audio", QbzSession.trRev)
+                            active: root.section === 0
+                            onClicked: QbzBridge.settingsSetSection(0)
+                        }
+                        SubNavItem {
+                            name: "play-fill"
+                            label: QbzSession.tr("Playback", QbzSession.trRev)
+                            active: root.section === 1
+                            onClicked: QbzBridge.settingsSetSection(1)
+                        }
+                        SubNavItem {
+                            name: "paintbrush-vertical"
+                            label: QbzSession.tr("Appearance", QbzSession.trRev)
+                            active: root.section === 2
+                            onClicked: QbzBridge.settingsSetSection(2)
+                        }
+                        SubNavItem {
+                            name: "compass"
+                            label: QbzSession.tr("Navigation", QbzSession.trRev)
+                            active: root.section === 10
+                            onClicked: QbzBridge.settingsSetSection(10)
+                        }
+                        SubNavItem {
+                            name: "hard-drive"
+                            label: QbzSession.tr("Local Library", QbzSession.trRev)
+                            active: root.section === 4
+                            onClicked: QbzBridge.settingsSetSection(4)
+                        }
+                        SubNavItem {
+                            name: "cloud-download"
+                            label: QbzSession.tr("Offline", QbzSession.trRev)
+                            active: root.section === 3
+                            onClicked: QbzBridge.settingsSetSection(3)
+                        }
+                        SubNavItem {
+                            name: "unplug"
+                            label: QbzSession.tr("Integrations", QbzSession.trRev)
+                            active: root.section === 6
+                            onClicked: QbzBridge.settingsSetSection(6)
+                        }
+                        SubNavItem {
+                            name: "refresh-cw"
+                            label: QbzSession.tr("Updates", QbzSession.trRev)
+                            active: root.section === 12
+                            onClicked: QbzBridge.settingsSetSection(12)
+                        }
+                        // Sandboxed installs only (Flatpak / Snap permissions).
+                        SubNavItem {
+                            visible: root.sandboxed
+                            name: "info"
+                            label: (root.doc.dev || ({})).installMethod === "snap"
+                                ? QbzSession.tr("Snap", QbzSession.trRev)
+                                : QbzSession.tr("Flatpak", QbzSession.trRev)
+                            active: root.section === 8
+                            onClicked: QbzBridge.settingsSetSection(8)
+                        }
+
+                        // The ADVANCED fold: a disclosure row, not a section. It
+                        // reads as active while it is closed over the selected
+                        // page, so the column never shows nothing selected.
+                        SubNavItem {
+                            id: advancedRow
+                            name: "sliders-horizontal"
+                            trailing: root.advancedOpen ? "chevron-down" : "chevron-right"
+                            label: QbzSession.tr("Advanced", QbzSession.trRev)
+                            active: !root.advancedOpen && root.advancedSections.indexOf(root.section) >= 0
+                            onClicked: root.advancedOpen = !root.advancedOpen
+                        }
+                        SubNavItem {
+                            visible: root.advancedOpen
+                            indent: 16
+                            name: "blind-eye"
+                            label: QbzSession.tr("Blacklist", QbzSession.trRev)
+                            active: root.section === 5
+                            onClicked: QbzBridge.settingsSetSection(5)
+                        }
+                        SubNavItem {
+                            visible: root.advancedOpen
+                            indent: 16
+                            name: "database"
+                            label: QbzSession.tr("Storage", QbzSession.trRev)
+                            active: root.section === 13
+                            onClicked: QbzBridge.settingsSetSection(13)
+                        }
+                        SubNavItem {
+                            visible: root.advancedOpen
+                            indent: 16
+                            name: "import"
+                            label: QbzSession.tr("Import / Export", QbzSession.trRev)
+                            active: root.section === 9
+                            onClicked: QbzBridge.settingsSetSection(9)
+                        }
+                        SubNavItem {
+                            visible: root.advancedOpen
+                            indent: 16
+                            name: "bug"
+                            label: QbzSession.tr("Developer", QbzSession.trRev)
+                            active: root.section === 7
+                            onClicked: QbzBridge.settingsSetSection(7)
+                        }
+                        SubNavItem {
+                            visible: root.advancedOpen && QbzOrbit.enabled
+                            indent: 16
+                            name: "compass"
+                            label: "Orbit"
+                            active: root.section === 11
+                            onClicked: QbzBridge.settingsSetSection(11)
+                        }
                     }
                 }
 
@@ -387,6 +446,7 @@ Item {
                 // sub-nav (people filing issues could not find it under
                 // Developer). Opens the on-disk log — see DeveloperSettings.
                 Column {
+                    id: shareLogs
                     anchors.bottom: parent.bottom
                     anchors.left: parent.left
                     anchors.right: parent.right
