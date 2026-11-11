@@ -69,6 +69,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="2.2.0" date="2026-11-11">
+      <description>
+        <p>QBZ moves to its new home at github.com/afonsojramos/qbz. Updates, release notes and in-app links now use the new repository, and updates are signed with a new release key. The app is otherwise the same as 2.1.2.</p>
+      </description>
+    </release>
     <release version="2.1.2" date="2026-09-16">
       <description>
         <p>Second maintenance release for the 2.1 line, and the largest so far: QBZ stops deciding for you. Playback memory becomes a profile you choose, volume normalization is rebuilt on the loudness values Qobuz ships, and every on-disk cache lives in one Storage section.</p>
