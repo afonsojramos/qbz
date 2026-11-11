@@ -291,6 +291,30 @@ Item {
                             subNavFlick.revealAdvanced = root.advancedOpen
                         }
                     }
+                    // Keyboard focus on a row scrolled out of view brings it
+                    // back, as the panel's flick does for its controls.
+                    function revealFocusItem(item) {
+                        var ancestor = item
+                        while (ancestor && ancestor !== subNavCol)
+                            ancestor = ancestor.parent
+                        if (!item || ancestor !== subNavCol)
+                            return
+                        const point = item.mapToItem(contentItem, 0, 0)
+                        if (point.y < contentY)
+                            contentY = Math.max(0, point.y)
+                        else if (point.y + item.height > contentY + height)
+                            contentY = Math.min(Math.max(0, contentHeight - height),
+                                                point.y + item.height - height)
+                    }
+                    Connections {
+                        target: root.Window.window
+                        function onActiveFocusItemChanged() {
+                            const win = root.Window.window
+                            Qt.callLater(function () {
+                                subNavFlick.revealFocusItem(win ? win.activeFocusItem : null)
+                            })
+                        }
+                    }
                     onContentHeightChanged: {
                         if (!revealAdvanced) {
                             returnToBounds()
