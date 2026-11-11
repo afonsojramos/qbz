@@ -3,15 +3,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/github-vicrodh%2Fqbz-0b0b0b?style=flat-square&logo=github" alt="GitHub repo" /></a>
-  <a href="https://github.com/vicrodh/qbz/releases"><img src="https://img.shields.io/github/v/release/vicrodh/qbz?style=flat-square" alt="Release" /></a>
-  <a href="https://aur.archlinux.org/packages/qbz-bin"><img src="https://img.shields.io/aur/version/qbz-bin?style=flat-square&logo=archlinux" alt="AUR" /></a>
-  <a href="https://snapcraft.io/qbz-player"><img src="https://img.shields.io/badge/snap-qbz--player-0b0b0b?style=flat-square&logo=snapcraft" alt="Snap" /></a>
-  <a href="https://flathub.org/apps/com.blitzfc.qbz"><img src="https://img.shields.io/flathub/v/com.blitzfc.qbz?style=flat-square&logo=flathub" alt="Flathub" /></a>
-  <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/github/license/vicrodh/qbz?style=flat-square" alt="License" /></a>
-  <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/platform-Linux-0b0b0b?style=flat-square&logo=linux" alt="Platform" /></a>
-  <a href="https://github.com/vicrodh/qbz"><img src="https://img.shields.io/badge/macOS-stable-0b0b0b?style=flat-square&logo=apple" alt="macOS (stable)" /></a>
-  <a href="https://github.com/vicrodh/qbz/releases"><img src="https://img.shields.io/badge/Windows-experimental-0b0b0b?style=flat-square" alt="Windows (experimental)" /></a>
+  <a href="https://github.com/afonsojramos/qbz"><img src="https://img.shields.io/badge/github-afonsojramos%2Fqbz-0b0b0b?style=flat-square&logo=github" alt="GitHub repo" /></a>
+  <a href="https://github.com/afonsojramos/qbz/releases"><img src="https://img.shields.io/github/v/release/afonsojramos/qbz?style=flat-square" alt="Release" /></a>
+  <a href="https://github.com/afonsojramos/qbz"><img src="https://img.shields.io/github/license/afonsojramos/qbz?style=flat-square" alt="License" /></a>
+  <a href="https://github.com/afonsojramos/qbz"><img src="https://img.shields.io/badge/platform-Linux-0b0b0b?style=flat-square&logo=linux" alt="Platform" /></a>
+  <a href="https://github.com/afonsojramos/qbz"><img src="https://img.shields.io/badge/macOS-stable-0b0b0b?style=flat-square&logo=apple" alt="macOS (stable)" /></a>
+  <a href="https://github.com/afonsojramos/qbz/releases"><img src="https://img.shields.io/badge/Windows-experimental-0b0b0b?style=flat-square" alt="Windows (experimental)" /></a>
 </p>
 
 <p align="center">
@@ -129,22 +126,22 @@ another module, and it didn't go well.
 ### One-line installer (Linux and macOS, from 2.1.2)
 
 ```bash
-curl -fsSL https://qbz.lol/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/afonsojramos/qbz/main/scripts/install.sh | bash
 ```
 
-Installs the official AppImage on Linux or the upstream `.app` in
+Installs the AppImage on Linux or the `.app` from GitHub Releases in
 `~/Applications` on macOS, for the current user. It detects Intel/AMD or ARM64,
 verifies the package SHA-256 against GitHub's release metadata, and preserves
 existing installations from other sources. Future updates use **Settings →
 Updates** in QBZ. Linux needs curl and Python 3 or jq; the launcher works without
-FUSE. The existing glibc requirements still apply. The macOS package uses the
-upstream ad-hoc signature; the notarized community channel remains available below.
+FUSE. The existing glibc requirements still apply. The macOS package is ad-hoc
+signed; the notarized build in the macOS section below avoids the Gatekeeper prompt.
 
 To inspect the script before running it, or remove this installation while
 keeping personal data:
 
 ```bash
-curl -fsSL https://qbz.lol/install.sh -o qbz-install.sh
+curl -fsSL https://raw.githubusercontent.com/afonsojramos/qbz/main/scripts/install.sh -o qbz-install.sh
 less qbz-install.sh
 bash qbz-install.sh --check
 bash qbz-install.sh
@@ -152,29 +149,13 @@ bash qbz-install.sh
 bash qbz-install.sh --uninstall
 ```
 
-### Arch Linux (AUR)
+### Flatpak
 
-Install the prebuilt packages (recommended):
-
-```bash
-yay -S qbz-bin     # desktop player; or: paru -S qbz-bin
-yay -S qbzd-bin    # optional headless daemon; or: paru -S qbzd-bin
-```
-
-To build from source instead:
+Download the x86_64 bundle from [Releases](https://github.com/afonsojramos/qbz/releases)
+and install it:
 
 ```bash
-yay -S qbz         # desktop player; or: paru -S qbz
-yay -S qbzd        # optional headless daemon; or: paru -S qbzd
-```
-
-Pick either the source or `-bin` variant in each pair; both variants provide
-the same package and therefore conflict with each other.
-
-### Flatpak (Flathub)
-
-```bash
-flatpak install flathub com.blitzfc.qbz
+flatpak install --user ./qbz_<version>_x86_64.flatpak
 ```
 
 > **Audiophiles:** bit-perfect works in Flatpak. The sandbox needs one
@@ -190,97 +171,40 @@ flatpak install flathub com.blitzfc.qbz
 > copyable commands, and the HiFi Wizard covers the rest. Your host audio stack
 > still has to be configured correctly.
 
-### Snap
+### Debian, Ubuntu, Fedora and openSUSE
+
+Download the `.deb` or `.rpm` for your architecture from
+[Releases](https://github.com/afonsojramos/qbz/releases) and install it:
 
 ```bash
-sudo snap install qbz-player
-sudo snap connect qbz-player:alsa
-sudo snap connect qbz-player:pipewire
+sudo apt install ./QBZ_<version>_amd64.deb        # Debian / Ubuntu / Mint
+sudo dnf install ./QBZ-<version>-1.x86_64.rpm     # Fedora
+sudo zypper install ./QBZ-<version>-1.x86_64.rpm  # openSUSE
 ```
 
-> **Note:** After installing, connect ALSA and PipeWire interfaces for full
-> audio support. MPRIS media keys work out of the box.
-
-### APT (Debian / Ubuntu / Mint)
-
-```bash
-curl -fsSL https://vicrodh.github.io/qbz-apt/qbz-archive-keyring.gpg | gpg --dearmor | sudo tee /usr/share/keyrings/qbz-archive-keyring.gpg > /dev/null
-cat <<EOF | sudo tee /etc/apt/sources.list.d/qbz.sources
-Types: deb
-URIs: https://vicrodh.github.io/qbz-apt
-Suites: stable
-Components: main
-Architectures: $(dpkg --print-architecture)
-Signed-By: /usr/share/keyrings/qbz-archive-keyring.gpg
-EOF
-sudo apt update && sudo apt install qbz
-```
+The `qbzd` packages install the headless daemon only. There is no package
+repository, so these installs do not update automatically.
 
 > **x86_64:** glibc 2.35+ (Ubuntu 22.04+, Debian 12+, Mint 21+).
 > **arm64 (desktop app):** glibc 2.39+ (Ubuntu 24.04+, Debian 13+) — the Qt
 > arm64 build needs it; Raspberry Pi OS *bookworm* is 2.36, so use `qbzd`
-> there (2.35+, see below). For older systems, check Flatpak or Snap runtime
-> support. The arm64 AppImage has the same glibc 2.39 minimum as the native
+> there (2.35+, see below). For older systems, check the Flatpak bundle's
+> runtime support. The arm64 AppImage has the same glibc 2.39 minimum as the native
 > packages.
 
-### RPM (Fedora / openSUSE)
+### Arch Linux and Gentoo
 
-Add the signed QBZ repository and install with DNF:
-
-```bash
-sudo curl --fail --location \
-  --output /etc/yum.repos.d/qbz.repo \
-  https://vicrodh.github.io/qbz-rpm/qbz.repo
-sudo dnf install qbz       # desktop player, including qbzd
-# or: sudo dnf install qbzd  # headless daemon only
-```
-
-On openSUSE, use the same repository definition with Zypper:
-
-```bash
-sudo curl --fail --location \
-  --output /etc/zypp/repos.d/qbz.repo \
-  https://vicrodh.github.io/qbz-rpm/qbz.repo
-sudo zypper refresh qbz
-sudo zypper install qbz    # or: sudo zypper install qbzd
-```
-
-The signing-key fingerprint is published on the
-[repository landing page](https://vicrodh.github.io/qbz-rpm/). Individual RPM
-files also remain available from [Releases](https://github.com/vicrodh/qbz/releases).
-
-> **x86_64:** glibc 2.35+ (Fedora 36+, openSUSE Leap 15.6+ / Tumbleweed).
-> **arm64 (desktop app):** glibc 2.39+ (Fedora 40+). `qbzd` packages stay at
-> 2.35+ on both architectures.
-
-### Gentoo
-
-```bash
-eselect repository add qbz-overlay git https://github.com/vicrodh/qbz-overlay.git
-emerge --sync qbz-overlay
-emerge media-sound/qbz-bin    # prebuilt binary (recommended)
-# or
-emerge media-sound/qbz        # build from source
-```
-
-For a headless installation, choose the matching daemon package:
-
-```bash
-emerge media-sound/qbzd-bin   # prebuilt binary (recommended)
-# or
-emerge media-sound/qbzd       # build from source
-```
-
-`qbzd` does not require systemd. The ebuild detects systemd, OpenRC or runit
-and prints the appropriate post-install command; the daemon can generate
-service definitions for all three init systems.
+There are no AUR packages or Gentoo overlay. Use the AppImage, or build
+locally from the `PKGBUILD`s in `packaging/aur/` or the ebuild templates in
+`packaging/gentoo/` after setting the version you want (`pkgver` in a
+`PKGBUILD`, the file name of an ebuild).
 
 ### NixOS / Nix
 
 Add the flake input to your `flake.nix`:
 
 ```nix
-inputs.qbz.url = "github:vicrodh/qbz";
+inputs.qbz.url = "github:afonsojramos/qbz";
 ```
 
 **NixOS (system-wide):**
@@ -305,11 +229,9 @@ inputs.qbz.url = "github:vicrodh/qbz";
 }
 ```
 
-> QBZ is also available in [nixpkgs](https://github.com/NixOS/nixpkgs) as `qbz`.
-
 ### AppImage
 
-Download from [Releases](https://github.com/vicrodh/qbz/releases):
+Download from [Releases](https://github.com/afonsojramos/qbz/releases):
 `chmod +x QBZ.AppImage && ./QBZ.AppImage`
 
 ### macOS
@@ -320,9 +242,9 @@ backends; macOS plays through its own CoreAudio backend, including a Core Audio
 Direct passthrough path for bit-perfect output. Casting (Chromecast/DLNA) and
 Qobuz Connect work on macOS as well.
 
-**Recommended — signed and notarized:** Afonso Ramos independently maintains a
-[Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz), which installs
-without requiring a manual Gatekeeper bypass:
+**Recommended — signed and notarized:** the
+[Homebrew Cask](https://github.com/afonsojramos/homebrew-qbz) installs without
+requiring a manual Gatekeeper bypass:
 
 ```bash
 brew install --cask afonsojramos/qbz/qbz
@@ -330,18 +252,15 @@ brew install --cask afonsojramos/qbz/qbz
 
 You can also download the Apple Silicon or Intel DMG from the
 [signed macOS releases](https://github.com/afonsojramos/qbz-macos/releases/latest).
-These builds use the upstream QBZ application without recompiling it:
-[@afonsojramos](https://github.com/afonsojramos) replaces its ad-hoc signature
-and DMG container, then notarizes the result. This community-maintained signing
-and distribution is the recommended way to install QBZ on macOS, and the macOS
-version would likely not exist in its current form without Afonso's work. The
-mirror publishes the source commit, original checksums, and signed checksums
-for each release; see its
+These builds take the DMG from each QBZ release without recompiling it,
+replace its ad-hoc signature and DMG container, then notarize the result. Each
+signed release records the source commit, original checksums, and signed
+checksums; see the
 [trust and provenance documentation](https://github.com/afonsojramos/qbz-macos#trust-and-provenance).
 
-**Official upstream alternative — ad-hoc signed, not notarized:** if you prefer
-the artifact produced directly by the QBZ project, download the Apple Silicon
-or Intel DMG from [QBZ Releases](https://github.com/vicrodh/qbz/releases) and
+**Alternative — ad-hoc signed, not notarized:** if you prefer the artifact
+produced directly by the release build, download the Apple Silicon
+or Intel DMG from [QBZ Releases](https://github.com/afonsojramos/qbz/releases) and
 drag QBZ into Applications. Because the project has no Apple Developer
 subscription, Gatekeeper blocks its first run. On recent macOS versions
 (Sequoia / 15 and later), unlock it using either route:
@@ -366,17 +285,18 @@ Launch checks are optional and preserve existing preferences. GitHub release
 notifications wait until a stable release is at least 12 hours old. Manual checks find new stable
 releases immediately and report network errors separately from “up to date”.
 
-AppImage and upstream macOS `.app` installations can download and install
-signed updates from QBZ. Close and reopen the app after installation. macOS
-builds signed by another distributor, including the notarized community
+AppImage and ad-hoc signed macOS `.app` installations can download and
+install signed updates from QBZ. Close and reopen the app after installation. macOS
+builds signed by another distributor, including the notarized Homebrew
 builds, keep their original update channel. The one-line installer uses these
 same update paths. Flatpak checks and updates its own installed ref through the
 Flatpak portal, including progress, cancellation and already-deployed updates
 that only need a restart. Permission changes require the system software manager.
 Windows MSI installations stage a signed MSI and run Windows Installer after
 QBZ closes, then reopen the app. The installer never requests a machine restart.
-For Snap, APT/RPM, AUR, Gentoo, Nix, Homebrew and other manual installs, update through the original
-installation source; its package may arrive after the GitHub release.
+For `.deb` and `.rpm` packages, Nix, Homebrew and other manual installs,
+update through the original installation source; its package may arrive after
+the GitHub release.
 
 ## Features
 
@@ -564,7 +484,7 @@ arm64 desktop app's 2.39, so a trimmed Pi image stays a valid target.
   required
 
 Full manual:
-**[Headless Daemon (qbzd) — Wiki](https://github.com/vicrodh/qbz/wiki/Headless-Daemon)**
+**[Headless Daemon (qbzd) — Wiki](https://github.com/afonsojramos/qbz/wiki/Headless-Daemon)**
 
 ## Kiosk mode
 
@@ -782,7 +702,7 @@ can be found. WiX and .NET are only needed to build the MSI installer.
 On Linux and macOS:
 
 ```bash
-git clone https://github.com/vicrodh/qbz.git && cd qbz
+git clone https://github.com/afonsojramos/qbz.git && cd qbz
 NORUN=1 ./scripts/qt-run.sh
 ./crates/target/release/qbz
 ```
@@ -833,10 +753,9 @@ hosted Cloudflare Workers proxy (`qbz-api-proxy.blitzkriegfc.workers.dev`) that
 holds all credentials server-side. Both pre-built releases and source builds use
 it out of the box — **no API keys or `.env` file required**.
 
-If you want to run against your own proxy (for development, or if you fork
-QBZ), the proxy source lives at
-[`vicrodh/qbz-api-proxy`](https://github.com/vicrodh/qbz-api-proxy). Deploy it
-with `wrangler deploy` and then edit the `*_PROXY_URL` constants in
+The proxy's source repository is no longer published. To run against your
+own Cloudflare Worker, deploy one that serves the same routes and then edit the
+`*_PROXY_URL` constants in
 `crates/qbz-integrations/src/lastfm/client.rs`,
 `crates/qbz-integrations/src/discogs/mod.rs`,
 `crates/qbz-playlist-import/src/providers/tidal.rs` and
@@ -890,7 +809,7 @@ just as appreciated.
 ## Reporting a problem
 
 Having trouble with the app? Please report it in the
-[issue tracker](https://github.com/vicrodh/qbz/issues).
+[issue tracker](https://github.com/afonsojramos/qbz/issues).
 
 What makes a problem solvable: a title that names the actual symptom, the logs,
 and a screenshot when it is something you can see. QBZ ships a tool for the logs
@@ -922,7 +841,7 @@ suggestions, requests and issue reports.
 Using AI tools does not mean I ask an LLM for every feature or change that
 crosses my mind, and it does not mean every request for a change or a new
 feature gets accepted without analysis. I go out of my way to avoid that rabbit
-hole — have a look at the [issues](https://github.com/vicrodh/qbz/issues). So if
+hole — have a look at the [issues](https://github.com/afonsojramos/qbz/issues). So if
 you come up with something new, help me by explaining it and justifying it. If I
 don't understand it, it is very unlikely to go in, because I cannot measure it
 or test it properly.
@@ -954,7 +873,7 @@ it came from a model, that is not for you either.
 ## Documentation
 
 User guides, audio configuration, integrations and troubleshooting:
-**[QBZ Wiki](https://github.com/vicrodh/qbz/wiki)** (work in progress).
+**[QBZ Wiki](https://github.com/afonsojramos/qbz/wiki)** (work in progress).
 
 ## Contributing
 
