@@ -42,7 +42,7 @@ impl FavoritesPreferencesStore {
         let db_path = dir.join(db_name);
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open favorites preferences database: {}", e))?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| format!("Failed to set WAL mode on favorites preferences: {}", e))?;
 
         conn.execute(

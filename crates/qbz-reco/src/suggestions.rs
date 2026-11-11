@@ -8,15 +8,12 @@
 //! 4. Search Qobuz for top tracks by those artists
 //! 5. Return suggested tracks with optional reasons
 //!
-//! Ported 1:1 from the Tauri `artist_vectors::suggestions`. Only the API client
-//! types are swapped (`crate::api::{QobuzClient, Track}` →
-//! `qbz_qobuz::QobuzClient` / `qbz_models::Track`); the `Arc<tokio::Mutex/RwLock>`
-//! ownership is kept (the store/cache hold `!Sync` rusqlite connections, so each
-//! guard is dropped before every `.await`, exactly like `builder.rs`). Step 3
+//! The `Arc<tokio::Mutex/RwLock>` ownership from the original Tauri engine is
+//! kept because the store/cache contain `!Sync` rusqlite connections. Step 3
 //! ranks candidates by summed relationship weight via
-//! `store.get_all_related_artists`, NOT cosine similarity (epic decision D3); the
-//! Step-2 `compute_playlist_vector` is kept because production still uses it as
-//! the empty-vector gate (it only sums + normalizes — it never `find_nearest`s).
+//! `store.get_all_related_artists`, NOT cosine similarity (epic decision D3).
+//! Step 2 remains only as the empty-vector gate, while Qobuz identity resolution
+//! is ID/cache-first and validated against context collected from playlist seeds.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -27,6 +24,10 @@ use serde::{Deserialize, Serialize};
 use qbz_models::Track;
 use qbz_qobuz::QobuzClient;
 
+use crate::artist_guardrail::{
+    normalize_name, resolve_candidate, resolve_seed_context, validate_candidate, ArtistLookup,
+    ProductionArtistLookup, SeedContext,
+};
 use crate::builder::ArtistVectorBuilder;
 use crate::sparse_vector::SparseVector;
 use crate::store::ArtistVectorStore;
@@ -110,6 +111,8 @@ pub struct SuggestionsEngine {
     builder: Arc<ArtistVectorBuilder>,
     /// Qobuz client for track search
     qobuz_client: Arc<RwLock<Option<QobuzClient>>>,
+    /// Identity-first artist lookup, replaceable with an in-memory fake in tests.
+    artist_lookup: Arc<dyn ArtistLookup>,
     /// Configuration
     config: SuggestionConfig,
 }
@@ -122,12 +125,24 @@ impl SuggestionsEngine {
         qobuz_client: Arc<RwLock<Option<QobuzClient>>>,
         config: SuggestionConfig,
     ) -> Self {
+        let artist_lookup = Arc::new(ProductionArtistLookup::new(
+            qobuz_client.clone(),
+            builder.musicbrainz_cache(),
+            builder.musicbrainz_client(),
+        ));
         Self {
             store,
             builder,
             qobuz_client,
+            artist_lookup,
             config,
         }
+    }
+
+    /// Replace production artist lookups, primarily for deterministic tests.
+    pub fn with_artist_lookup(mut self, artist_lookup: Arc<dyn ArtistLookup>) -> Self {
+        self.artist_lookup = artist_lookup;
+        self
     }
 
     /// Generate suggestions for a playlist
@@ -208,6 +223,11 @@ impl SuggestionsEngine {
             });
         }
 
+        // Resolve playlist identity once. Every related candidate is validated
+        // against these seed genre/tag/neighbourhood facts, never a global list.
+        let seed_context =
+            resolve_seed_context(self.artist_lookup.as_ref(), playlist_artists).await;
+
         // 3. Find related artists (using direct relationships, not vector similarity)
         log::debug!("[SuggestionsEngine] Step 3: Finding related artists");
         let step3_start = Instant::now();
@@ -256,7 +276,13 @@ impl SuggestionsEngine {
                 playlist_artist_limit
             );
             let tracks = self
-                .search_artist_tracks_with_limit(mbid, Some(name), 1.0, playlist_artist_limit)
+                .search_artist_tracks_with_limit(
+                    mbid,
+                    Some(name),
+                    1.0,
+                    playlist_artist_limit,
+                    &seed_context,
+                )
                 .await;
             log::info!(
                 "[SuggestionsEngine] Step 4a: Found {} tracks for '{}'",
@@ -308,7 +334,12 @@ impl SuggestionsEngine {
 
             // Search Qobuz for tracks by this related artist
             let tracks = self
-                .search_artist_tracks(&artist.mbid, artist.name.as_deref(), artist.similarity)
+                .search_artist_tracks(
+                    &artist.mbid,
+                    artist.name.as_deref(),
+                    artist.similarity,
+                    &seed_context,
+                )
                 .await;
 
             for mut track in tracks {
@@ -356,83 +387,41 @@ impl SuggestionsEngine {
             );
             let step4c_start = Instant::now();
 
-            // Get client for Qobuz API calls
-            let guard__ = self.qobuz_client.read().await;
-            let client = guard__
-                .as_ref()
-                .ok_or_else(|| "No active session - please log in".to_string())?;
-
-            // For each playlist artist, get their Qobuz similar artists
             let mut qobuz_similar_ids: HashSet<u64> = HashSet::new();
+            for &similar_id in seed_context.neighbourhood_ids() {
+                if !qobuz_similar_ids.insert(similar_id) {
+                    continue;
+                }
+                let Some(similar_artist) = self.artist_lookup.artist_by_id(similar_id).await else {
+                    continue;
+                };
+                if !validate_candidate(
+                    self.artist_lookup.as_ref(),
+                    &similar_artist,
+                    None,
+                    &seed_context,
+                )
+                .await
+                {
+                    continue;
+                }
 
-            for (_mbid, name) in playlist_artists {
-                // First, find the Qobuz artist ID for this playlist artist
-                if let Some((qobuz_id, _)) = self.validate_qobuz_artist(&client, name).await {
-                    // Get similar artists from Qobuz (up to 10 per playlist artist)
-                    match client.get_similar_artists(qobuz_id, 10, 0).await {
-                        Ok(similar_page) => {
-                            for similar_artist in similar_page.items {
-                                // Skip if we've already processed this artist
-                                if qobuz_similar_ids.contains(&similar_artist.id) {
-                                    continue;
-                                }
-                                qobuz_similar_ids.insert(similar_artist.id);
+                if !source_artists.contains(&similar_artist.name) {
+                    source_artists.push(similar_artist.name.clone());
+                }
 
-                                // Check genre compatibility
-                                if self
-                                    .has_incompatible_genre(
-                                        &client,
-                                        similar_artist.id,
-                                        &similar_artist.name,
-                                    )
-                                    .await
-                                {
-                                    log::debug!(
-                                        "[SuggestionsEngine] Skipping Qobuz similar '{}' - incompatible genre",
-                                        similar_artist.name
-                                    );
-                                    continue;
-                                }
+                let tracks = self
+                    .search_artist_tracks_by_qobuz_id(similar_artist.id, &similar_artist.name, 0.8)
+                    .await;
 
-                                if !source_artists.contains(&similar_artist.name) {
-                                    source_artists.push(similar_artist.name.clone());
-                                }
-
-                                // Search tracks for this similar artist (use empty MBID since we have Qobuz ID)
-                                let tracks = self
-                                    .search_artist_tracks_by_qobuz_id(
-                                        &client,
-                                        similar_artist.id,
-                                        &similar_artist.name,
-                                        0.8, // High similarity since Qobuz says they're similar
-                                    )
-                                    .await;
-
-                                for mut track in tracks {
-                                    if exclude_track_ids.contains(&track.track_id) {
-                                        continue;
-                                    }
-
-                                    if include_reasons {
-                                        track.reason = Some(format!("Similar to {} (Qobuz)", name));
-                                    }
-
-                                    all_tracks.push(track);
-                                }
-
-                                // Stop if we have enough
-                                if all_tracks.len() >= self.config.max_pool_size {
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "[SuggestionsEngine] Failed to get Qobuz similar artists for '{}': {}",
-                                name, e
-                            );
-                        }
+                for mut track in tracks {
+                    if exclude_track_ids.contains(&track.track_id) {
+                        continue;
                     }
+                    if include_reasons {
+                        track.reason = Some("Similar to your playlist (Qobuz)".to_string());
+                    }
+                    all_tracks.push(track);
                 }
 
                 if all_tracks.len() >= self.config.max_pool_size {
@@ -448,24 +437,7 @@ impl SuggestionsEngine {
             );
         }
 
-        // 5. Deduplicate by title+artist (keeps highest similarity version)
-        let mut seen_titles: HashSet<String> = HashSet::new();
-        all_tracks.retain(|track| {
-            let key = format!(
-                "{}|{}",
-                track.title.to_lowercase(),
-                track.artist_name.to_lowercase()
-            );
-            seen_titles.insert(key)
-        });
-
-        // 6. Shuffle tracks for variety (so same artist doesn't dominate)
-        use rand::seq::SliceRandom;
-        let mut rng = rand::rng();
-        all_tracks.shuffle(&mut rng);
-
-        // 7. Limit pool size
-        all_tracks.truncate(self.config.max_pool_size);
+        all_tracks = rank_dedup_and_truncate(all_tracks, self.config.max_pool_size);
 
         Ok(SuggestionResult {
             tracks: all_tracks,
@@ -502,26 +474,31 @@ impl SuggestionsEngine {
         artist_mbid: &str,
         artist_name: Option<&str>,
         similarity: f32,
+        seed_context: &SeedContext,
     ) -> Vec<SuggestedTrack> {
         self.search_artist_tracks_with_limit(
             artist_mbid,
             artist_name,
             similarity,
             self.config.tracks_per_artist,
+            seed_context,
         )
         .await
     }
 
     /// Search Qobuz for tracks by Qobuz artist ID (more reliable when we already validated the artist)
-    /// Takes client reference to avoid deadlock when caller already holds the lock
     async fn search_artist_tracks_by_qobuz_id(
         &self,
-        client: &QobuzClient,
         qobuz_artist_id: u64,
         artist_name: &str,
         similarity: f32,
     ) -> Vec<SuggestedTrack> {
         let limit = self.config.tracks_per_artist;
+        let guard = self.qobuz_client.read().await;
+        let Some(client) = guard.as_ref() else {
+            log::warn!("[SuggestionsEngine] No active Qobuz session; skipping");
+            return Vec::new();
+        };
 
         // Search by artist name but verify tracks belong to this specific Qobuz artist ID
         match client
@@ -605,15 +582,15 @@ impl SuggestionsEngine {
 
     /// Search Qobuz for tracks by an artist with custom limit
     ///
-    /// First validates that the artist EXISTS in Qobuz (has a dedicated artist page).
-    /// This prevents false matches for session musicians who don't have their own catalog
-    /// (e.g., "Martin Lopez" drummer returning tracks from unrelated "Martin Lopez" artists).
+    /// Resolves the artist by ID/cache before any text fallback, then requires
+    /// seed-relative genre or tag evidence before searching for tracks.
     async fn search_artist_tracks_with_limit(
         &self,
         artist_mbid: &str,
         artist_name: Option<&str>,
         similarity: f32,
         limit: usize,
+        seed_context: &SeedContext,
     ) -> Vec<SuggestedTrack> {
         let search_query = match artist_name {
             Some(name) => name.to_string(),
@@ -630,31 +607,50 @@ impl SuggestionsEngine {
             }
         };
 
-        let guard__ = self.qobuz_client.read().await;
-        let Some(client) = guard__.as_ref() else {
-            log::warn!("[SuggestionsEngine] No active Qobuz session; skipping");
-            return Vec::new();
-        };
-
-        // Step 1: Validate artist exists in Qobuz with their own catalog
-        // This prevents searching for session musicians who don't have artist pages
-        let validated_artist = self.validate_qobuz_artist(&client, &search_query).await;
-
-        if validated_artist.is_none() {
+        // Resolve identity before taking the client lock: the production lookup
+        // uses the same lock for its direct-ID/cache-first checks.
+        let validated_artist =
+            if let Some(seed_artist) = seed_context.resolved_seed(artist_mbid, &search_query) {
+                let candidate_mbid = (!artist_mbid.starts_with("qobuz:")).then_some(artist_mbid);
+                validate_candidate(
+                    self.artist_lookup.as_ref(),
+                    seed_artist,
+                    candidate_mbid,
+                    seed_context,
+                )
+                .await
+                .then(|| seed_artist.clone())
+            } else {
+                resolve_candidate(
+                    self.artist_lookup.as_ref(),
+                    artist_mbid,
+                    &search_query,
+                    seed_context,
+                )
+                .await
+            };
+        let Some(validated_artist) = validated_artist else {
             log::info!(
-                "[SuggestionsEngine] Skipping '{}' - no Qobuz artist page found or incompatible genre",
+                "[SuggestionsEngine] Skipping '{}' - identity could not be validated against playlist seeds",
                 search_query
             );
             return Vec::new();
-        }
+        };
 
-        let (qobuz_artist_id, qobuz_artist_name) = validated_artist.unwrap();
+        let qobuz_artist_id = validated_artist.id;
+        let qobuz_artist_name = validated_artist.name;
         log::info!(
             "[SuggestionsEngine] Validated '{}' -> Qobuz artist '{}' (ID: {})",
             search_query,
             qobuz_artist_name,
             qobuz_artist_id
         );
+
+        let guard = self.qobuz_client.read().await;
+        let Some(client) = guard.as_ref() else {
+            log::warn!("[SuggestionsEngine] No active Qobuz session; skipping");
+            return Vec::new();
+        };
 
         // Step 2: Search for tracks by artist name
         // Fetch many more since search results include tracks where the artist appears,
@@ -694,260 +690,6 @@ impl SuggestionsEngine {
             Err(e) => {
                 log::warn!("Failed to search tracks for {}: {}", search_query, e);
                 Vec::new()
-            }
-        }
-    }
-
-    /// Validate that an artist exists in Qobuz with their own catalog AND compatible genre
-    ///
-    /// Returns Some((artist_id, artist_name)) if found, None otherwise.
-    /// This prevents false matches for:
-    /// - Session musicians without their own page (e.g., "Martin Lopez" drummer)
-    /// - Names that match different artists (e.g., Latin "Martin Mendez" vs bassist)
-    /// - Artists with incompatible genres (bachata/merengue artist vs metal drummer)
-    async fn validate_qobuz_artist(
-        &self,
-        client: &QobuzClient,
-        name: &str,
-    ) -> Option<(u64, String)> {
-        // Normalize name for comparison (removes accents: å→a, é→e, etc.)
-        let name_normalized = normalize_name(name);
-
-        // Search Qobuz for artist - try original name first
-        let mut results = match client.search_artists(name, 10, 0, None).await {
-            Ok(r) => r,
-            Err(e) => {
-                log::warn!(
-                    "[SuggestionsEngine] Artist search failed for '{}': {}",
-                    name,
-                    e
-                );
-                return None;
-            }
-        };
-
-        // If no results and name has accents, also try normalized name
-        // e.g., "Mikael Åkerfeldt" -> "Mikael Akerfeldt"
-        if results.items.is_empty() && name != name_normalized {
-            log::debug!(
-                "[SuggestionsEngine] No results for '{}', trying normalized '{}'",
-                name,
-                name_normalized
-            );
-            if let Ok(r) = client.search_artists(&name_normalized, 10, 0, None).await {
-                results = r;
-            }
-        }
-
-        // Look for exact name match (comparing normalized versions)
-        let mut candidate: Option<(u64, String)> = None;
-
-        for artist in &results.items {
-            let artist_normalized = normalize_name(&artist.name);
-
-            // Exact match (after accent normalization)
-            // This allows "Mikael Åkerfeldt" to match "Mikael Akerfeldt"
-            if artist_normalized == name_normalized && artist.albums_count.unwrap_or(0) > 0 {
-                candidate = Some((artist.id, artist.name.clone()));
-                break;
-            }
-        }
-
-        // Also try "The X" variant (e.g., "Beatles" -> "The Beatles")
-        if candidate.is_none() {
-            let the_name_normalized = format!("the {}", name_normalized);
-            for artist in &results.items {
-                let artist_normalized = normalize_name(&artist.name);
-                if artist_normalized == the_name_normalized && artist.albums_count.unwrap_or(0) > 0
-                {
-                    candidate = Some((artist.id, artist.name.clone()));
-                    break;
-                }
-            }
-        }
-
-        // If we found a candidate, verify their genre is compatible
-        if let Some((artist_id, artist_name)) = candidate {
-            if self
-                .has_incompatible_genre(client, artist_id, &artist_name)
-                .await
-            {
-                log::info!(
-                    "[SuggestionsEngine] Rejecting '{}' (ID: {}) - incompatible genre detected",
-                    artist_name,
-                    artist_id
-                );
-                return None;
-            }
-            return Some((artist_id, artist_name));
-        }
-
-        None
-    }
-
-    /// Check if an artist has incompatible genres (bachata, merengue, k-pop, etc.)
-    ///
-    /// Fetches a few albums and checks their genres against a blocklist.
-    /// Returns true if incompatible, false if compatible or unknown.
-    async fn has_incompatible_genre(
-        &self,
-        client: &QobuzClient,
-        artist_id: u64,
-        artist_name: &str,
-    ) -> bool {
-        // Incompatible genre keywords - these would never appear in a rock/metal context
-        // NOTE: We force English locale when fetching, so only English names needed
-        const INCOMPATIBLE_GENRES: &[&str] = &[
-            // Latin/Tropical
-            "bachata",
-            "merengue",
-            "reggaeton",
-            "salsa",
-            "cumbia",
-            "vallenato",
-            "latin pop",
-            "latin music",
-            "tropical",
-            "urbano",
-            "regional mexican",
-            "latin", // Generic Latin parent genre
-            // Asian pop
-            "k-pop",
-            "kpop",
-            "j-pop",
-            "jpop",
-            "mandopop",
-            "cantopop",
-            "c-pop",
-            // European folk/schlager
-            "schlager",
-            "chanson",
-            "french chanson",
-            "volksmusik",
-            // Religious
-            "gospel",
-            "christian",
-            "worship",
-            "religious",
-            "spiritual",
-            // Children/Family
-            "children",
-            "nursery",
-            "lullaby",
-            "kids",
-            // Electronic/Dance (club-oriented)
-            "trance",
-            "techno",
-            "house",
-            "edm",
-            "dubstep",
-            "drum and bass",
-            "hardstyle",
-            "eurodance",
-            "hands up",
-            "happy hardcore",
-            "dance",
-            // Spoken word/Non-music
-            "audiobook",
-            "spoken word",
-            "podcast",
-            "meditation",
-            "asmr",
-            "relaxation",
-            "sleep",
-            "nature sounds",
-            "white noise",
-            "comedy",
-            "stand-up",
-            // Country (usually incompatible with metal)
-            "country",
-            "bluegrass",
-            "americana",
-            // New age/Wellness
-            "new age",
-            "healing",
-            "spa",
-            "yoga",
-            "mindfulness",
-            "wellness",
-        ];
-
-        // Fetch artist with a few albums (use English locale for consistent genre names)
-        match client
-            .get_artist_with_pagination_and_locale(artist_id, true, Some(5), None, Some("en"))
-            .await
-        {
-            Ok(artist) => {
-                if let Some(albums) = &artist.albums {
-                    for album in &albums.items {
-                        if let Some(genre) = &album.genre {
-                            let genre_lower = genre.name.to_lowercase();
-
-                            // Check if genre matches any incompatible keyword
-                            for incompatible in INCOMPATIBLE_GENRES {
-                                if genre_lower.contains(incompatible) {
-                                    log::debug!(
-                                        "[SuggestionsEngine] Artist '{}' has incompatible genre: '{}' (album: {})",
-                                        artist_name, genre.name, album.title
-                                    );
-                                    return true;
-                                }
-                            }
-                        }
-
-                        // Also check album title for genre hints (e.g., "Latino Bachata Amor")
-                        let title_lower = album.title.to_lowercase();
-                        for incompatible in INCOMPATIBLE_GENRES {
-                            if title_lower.contains(incompatible) {
-                                log::debug!(
-                                    "[SuggestionsEngine] Artist '{}' has incompatible album title: '{}'",
-                                    artist_name, album.title
-                                );
-                                return true;
-                            }
-                        }
-
-                        // Additional title-based checks for non-music content
-                        const INCOMPATIBLE_TITLE_KEYWORDS: &[&str] = &[
-                            "audiobook",
-                            "hörbuch",
-                            "hörspiel",
-                            "gelesen von",
-                            "read by",
-                            "narrated by",
-                            "lesung",
-                            "märchen",
-                            "fairy tale",
-                            "meditation",
-                            "relaxation",
-                            "sleep music",
-                            "yoga music",
-                            "trance mix",
-                            "club mix",
-                            "dance mix",
-                            "dj mix",
-                        ];
-                        for keyword in INCOMPATIBLE_TITLE_KEYWORDS {
-                            if title_lower.contains(keyword) {
-                                log::debug!(
-                                    "[SuggestionsEngine] Artist '{}' has incompatible album title keyword '{}': '{}'",
-                                    artist_name, keyword, album.title
-                                );
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
-            Err(e) => {
-                log::warn!(
-                    "[SuggestionsEngine] Failed to fetch albums for genre check ({}): {}",
-                    artist_name,
-                    e
-                );
-                // On error, don't block - let it through
-                false
             }
         }
     }
@@ -1010,26 +752,22 @@ impl SuggestionsEngine {
     }
 }
 
-/// Normalize a name for comparison (remove accents, lowercase)
-fn normalize_name(name: &str) -> String {
-    name.to_lowercase()
-        .replace('á', "a")
-        .replace('é', "e")
-        .replace('í', "i")
-        .replace('ó', "o")
-        .replace('ú', "u")
-        .replace('à', "a")
-        .replace('è', "e")
-        .replace('ì', "i")
-        .replace('ò', "o")
-        .replace('ù', "u")
-        .replace('ä', "a")
-        .replace('ë', "e")
-        .replace('ï', "i")
-        .replace('ö', "o")
-        .replace('ü', "u")
-        .replace('ñ', "n")
-        .replace('ç', "c")
+fn rank_dedup_and_truncate(
+    mut tracks: Vec<SuggestedTrack>,
+    max_pool_size: usize,
+) -> Vec<SuggestedTrack> {
+    // Stable sorting preserves insertion order for equal scores, so playlist
+    // artists (inserted first) keep priority without discarding the ranking.
+    tracks.sort_by(|left, right| right.similarity_score.total_cmp(&left.similarity_score));
+
+    // Sorting first makes the first title/artist occurrence the highest-score
+    // version, so retain now implements the deduplication promise honestly.
+    let mut seen = HashSet::new();
+    tracks.retain(|track| {
+        seen.insert((track.title.to_lowercase(), track.artist_name.to_lowercase()))
+    });
+    tracks.truncate(max_pool_size);
+    tracks
 }
 
 /// Check if two artist names are similar enough to be considered a match
@@ -1133,5 +871,72 @@ mod tests {
         assert_eq!(config.max_pool_size, 150);
         assert_eq!(config.vector_max_age_days, 7);
         assert!(config.min_similarity > 0.0);
+    }
+
+    fn suggested(track_id: u64, title: &str, artist: &str, score: f32) -> SuggestedTrack {
+        SuggestedTrack {
+            track_id,
+            title: title.to_string(),
+            artist_name: artist.to_string(),
+            artist_id: None,
+            artist_mbid: None,
+            album_title: String::new(),
+            album_id: String::new(),
+            album_image_url: None,
+            duration: 0,
+            similarity_score: score,
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ranking_happens_before_pool_truncation() {
+        let tracks = vec![
+            suggested(1, "Lower", "Artist", 0.3),
+            suggested(2, "Highest", "Artist", 0.9),
+            suggested(3, "Middle", "Artist", 0.6),
+        ];
+
+        let ranked = rank_dedup_and_truncate(tracks, 2);
+
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|track| track.track_id)
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn dedup_keeps_the_highest_score_version() {
+        let tracks = vec![
+            suggested(1, "Duplicate", "Same Artist", 0.3),
+            suggested(2, "DUPLICATE", "SAME ARTIST", 0.9),
+        ];
+
+        let deduped = rank_dedup_and_truncate(tracks, 10);
+
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].track_id, 2);
+        assert_eq!(deduped[0].similarity_score, 0.9);
+    }
+
+    #[test]
+    fn equal_scores_keep_insertion_order() {
+        let tracks = vec![
+            suggested(1, "Playlist Artist", "Seed", 0.8),
+            suggested(2, "Related Artist", "Related", 0.8),
+        ];
+
+        let ranked = rank_dedup_and_truncate(tracks, 10);
+
+        assert_eq!(
+            ranked
+                .iter()
+                .map(|track| track.track_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 }

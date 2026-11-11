@@ -68,42 +68,61 @@ impl DlnaDiscovery {
 
                 if let Ok(stream) = discover {
                     let mut stream = std::pin::pin!(stream);
-                    while let Ok(Some(device)) = stream.try_next().await {
-                        let id = device.udn().to_string();
-                        let name = device.friendly_name().to_string();
-                        let manufacturer = device.manufacturer().to_string();
-                        let model = device.model_name().to_string();
-                        let url = device.url().to_string();
-                        let ip = device.url().host().unwrap_or("unknown").to_string();
+                    // Error-tolerant loop: a single device whose description
+                    // fetch/parse fails must NOT kill the whole window (the
+                    // old `while let Ok(...)` broke on the first Err and
+                    // silently dropped every other responder, forever — the
+                    // #667 class of silent failure). Log and continue.
+                    loop {
+                        match stream.try_next().await {
+                            Ok(Some(device)) => {
+                                let id = device.udn().to_string();
+                                let name = device.friendly_name().to_string();
+                                let manufacturer = device.manufacturer().to_string();
+                                let model = device.model_name().to_string();
+                                let url = device.url().to_string();
+                                let ip = device.url().host().unwrap_or("unknown").to_string();
 
-                        let mut has_av_transport = false;
-                        let mut has_rendering_control = false;
+                                let mut has_av_transport = false;
+                                let mut has_rendering_control = false;
 
-                        for service in device.services_iter() {
-                            // Version-agnostic match: a renderer advertising only
-                            // AVTransport:2/:3 (not :1) must still count as capable.
-                            let service_type = service.service_type().to_string();
-                            if service_type.contains(":service:AVTransport:") {
-                                has_av_transport = true;
+                                for service in device.services_iter() {
+                                    // Version-agnostic match: a renderer advertising only
+                                    // AVTransport:2/:3 (not :1) must still count as capable.
+                                    let service_type = service.service_type().to_string();
+                                    if service_type.contains(":service:AVTransport:") {
+                                        has_av_transport = true;
+                                    }
+                                    if service_type.contains(":service:RenderingControl:") {
+                                        has_rendering_control = true;
+                                    }
+                                }
+
+                                log::info!(
+                                    "[Cast] DLNA discovered: '{name}' ({manufacturer} {model}) at {ip} avt={has_av_transport} rc={has_rendering_control}"
+                                );
+
+                                let discovered = DiscoveredDlnaDevice {
+                                    id: id.clone(),
+                                    name,
+                                    manufacturer,
+                                    model,
+                                    ip,
+                                    url,
+                                    has_av_transport,
+                                    has_rendering_control,
+                                };
+
+                                if let Ok(mut state) = state.lock() {
+                                    state.devices.insert(id, discovered);
+                                }
                             }
-                            if service_type.contains(":service:RenderingControl:") {
-                                has_rendering_control = true;
+                            Ok(None) => break, // window elapsed
+                            Err(e) => {
+                                log::warn!(
+                                    "[Cast] DLNA discovery: skipping a device (description fetch/parse failed): {e}"
+                                );
                             }
-                        }
-
-                        let discovered = DiscoveredDlnaDevice {
-                            id: id.clone(),
-                            name,
-                            manufacturer,
-                            model,
-                            ip,
-                            url,
-                            has_av_transport,
-                            has_rendering_control,
-                        };
-
-                        if let Ok(mut state) = state.lock() {
-                            state.devices.insert(id, discovered);
                         }
                     }
                 }

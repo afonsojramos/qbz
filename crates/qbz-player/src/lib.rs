@@ -32,11 +32,13 @@
 //! ```
 
 pub mod player;
+pub mod remote_stream;
 pub mod queue;
 
 // Re-export main types
 pub use player::{
-    BufferWriter, BufferedMediaSource, IncrementalStreamingSource, PlaybackEvent, PlaybackState,
+    BufferWriter, BufferedMediaSource, ExternalStreamHandle, IncrementalStreamingSource,
+    InMemorySource, PlaybackBufferState, PlaybackEvent, PlaybackState,
     Player, SharedState, StreamingConfig,
 };
-pub use queue::QueueManager;
+pub use queue::{QueueAuthoritySnapshot, QueueManager};

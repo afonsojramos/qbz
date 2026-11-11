@@ -53,6 +53,20 @@ enum MediaSource {
     // that is still being served (#550).
     Data(std::sync::Arc<Vec<u8>>),
     File(PathBuf),
+    /// Bytes that are still ARRIVING while they are served: a Qobuz track
+    /// being downloaded, or a Plex/Jellyfin/Subsonic stream proxied from its
+    /// server. The total size is known up front (advertised as
+    /// Content-Length); reads past the buffered edge block until the bytes
+    /// exist. This is what turns "download 100 MB, then play" into "play
+    /// after the first segment".
+    Reader(Arc<dyn RangeSource>),
+}
+
+/// A range-addressable byte source whose bytes may still be arriving.
+/// `open` returns a reader positioned at `start` that yields at most `len`
+/// bytes and BLOCKS (never errors) while a requested byte is not there yet.
+pub trait RangeSource: Send + Sync {
+    fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn Read + Send>>;
 }
 
 /// Simple HTTP server for audio streaming to cast devices
@@ -91,12 +105,9 @@ impl MediaServer {
         let base_ip = local_ip().unwrap_or_else(|| IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)));
         let base_url = format_base_url(base_ip, port);
 
-        log::info!(
-            "MediaServer: Started on {}:{} (base_url: {})",
-            base_ip,
-            port,
-            base_url
-        );
+        // Do not log the full base_url once the path token is embedded in
+        // request paths — host:port is enough for diagnostics.
+        log::info!("MediaServer: Started on {base_ip}:{port}");
 
         let entries = Arc::new(Mutex::new(HashMap::new()));
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -115,14 +126,25 @@ impl MediaServer {
             while !shutdown_clone.load(Ordering::SeqCst) {
                 match server.recv_timeout(Duration::from_millis(250)) {
                     Ok(Some(request)) => {
-                        let response = handle_request(
-                            request.method(),
-                            request.url(),
-                            &request,
-                            &entries_clone,
-                            &token_clone,
-                        );
-                        let _ = request.respond(response);
+                        // ONE THREAD PER REQUEST. A media body is written at
+                        // the renderer's pace (a 100 MB track takes the whole
+                        // song to drain, and a progressive source blocks on
+                        // bytes that have not arrived), so serving inline
+                        // stalled every other request — the HEAD probe strict
+                        // renderers send before Play, a second Range request
+                        // for a seek — for the duration of the track.
+                        let entries = entries_clone.clone();
+                        let token = token_clone.clone();
+                        thread::spawn(move || {
+                            let response = handle_request(
+                                request.method(),
+                                request.url(),
+                                &request,
+                                &entries,
+                                &token,
+                            );
+                            let _ = request.respond(response);
+                        });
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -172,10 +194,20 @@ impl MediaServer {
 
     /// Register audio data to serve (returns path like "/audio/<token>/123")
     pub fn register_audio(&mut self, id: u64, data: Vec<u8>, content_type: &str) -> String {
+        self.register_audio_shared(id, Arc::new(data), content_type)
+    }
+
+    /// Same, for bytes another consumer keeps alive as well (no copy).
+    pub fn register_audio_shared(
+        &mut self,
+        id: u64,
+        data: Arc<Vec<u8>>,
+        content_type: &str,
+    ) -> String {
         let entry = MediaEntry {
             content_type: content_type.to_string(),
             size: data.len() as u64,
-            source: MediaSource::Data(std::sync::Arc::new(data)),
+            source: MediaSource::Data(data),
         };
 
         if let Ok(mut entries) = self.entries.lock() {
@@ -188,6 +220,29 @@ impl MediaServer {
             entries.insert(id, entry);
         }
 
+        self.audio_path(id)
+    }
+
+    /// Register a range-addressable source whose bytes may still be arriving
+    /// (see [`RangeSource`]). `size` is the FINAL byte length — it is what the
+    /// renderer is told in Content-Length, so it must be exact.
+    pub fn register_reader(
+        &mut self,
+        id: u64,
+        size: u64,
+        content_type: &str,
+        source: Arc<dyn RangeSource>,
+    ) -> String {
+        let entry = MediaEntry {
+            content_type: content_type.to_string(),
+            size,
+            source: MediaSource::Reader(source),
+        };
+        if let Ok(mut entries) = self.entries.lock() {
+            // Same eviction rule as register_audio (#550).
+            entries.retain(|k, _| *k == id);
+            entries.insert(id, entry);
+        }
         self.audio_path(id)
     }
 
@@ -276,12 +331,12 @@ fn handle_request(
     request: &tiny_http::Request,
     entries: &Arc<Mutex<HashMap<u64, MediaEntry>>>,
     expected_token: &str,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+) -> Response<Box<dyn Read>> {
     log::info!(
         "MediaServer: {} request from {:?} for {}",
         method,
         request.remote_addr(),
-        url
+        redact_media_uri(url)
     );
 
     // Allow GET and HEAD. Strict DLNA renderers HEAD-probe the URL to validate
@@ -290,7 +345,7 @@ fn handle_request(
     let is_head = method == &Method::Head;
     if method != &Method::Get && !is_head {
         log::warn!("MediaServer: Rejected unsupported method: {}", method);
-        return Response::from_data(Vec::new()).with_status_code(StatusCode(405));
+        return empty_response(405);
     }
 
     let (token, id) = match parse_audio_request(url) {
@@ -298,16 +353,19 @@ fn handle_request(
         None => {
             log::warn!(
                 "MediaServer: 404 - Could not parse audio request from URL: {}",
-                url
+                redact_media_uri(url)
             );
-            return Response::from_data(Vec::new()).with_status_code(StatusCode(404));
+            return empty_response(404);
         }
     };
 
     // Constant-ish token check — reject LAN peers that don't hold the token.
     if token != expected_token {
-        log::warn!("MediaServer: 403 - token mismatch for URL: {}", url);
-        return Response::from_data(Vec::new()).with_status_code(StatusCode(403));
+        log::warn!(
+            "MediaServer: 403 - token mismatch for URL: {}",
+            redact_media_uri(url)
+        );
+        return empty_response(403);
     }
 
     let entry = match entries.lock().ok().and_then(|map| map.get(&id).cloned()) {
@@ -322,7 +380,7 @@ fn handle_request(
         }
         None => {
             log::warn!("MediaServer: 404 - No entry found for ID: {}", id);
-            return Response::from_data(Vec::new()).with_status_code(StatusCode(404));
+            return empty_response(404);
         }
     };
 
@@ -339,7 +397,7 @@ fn handle_request(
         return Response::new(
             StatusCode(200),
             headers,
-            std::io::Cursor::new(Vec::new()),
+            Box::new(std::io::Cursor::new(Vec::new())) as Box<dyn Read>,
             Some(entry.size as usize),
             None,
         )
@@ -354,18 +412,24 @@ fn handle_request(
 
     let range = range_header.and_then(|header| parse_range(header, entry.size));
 
-    let (data, status_code, content_range) = match read_range(&entry, range) {
+    let (body, body_len, status_code, content_range) = match open_range(&entry, range) {
         Ok(result) => result,
-        Err(_) => return Response::from_data(Vec::new()).with_status_code(StatusCode(500)),
+        Err(_) => return empty_response(500),
     };
 
-    let mut response = Response::from_data(data)
-        .with_chunked_threshold(NO_CHUNK_THRESHOLD)
-        .with_status_code(status_code)
-        .with_header(header("Content-Type", &entry.content_type))
-        .with_header(header("Accept-Ranges", "bytes"))
-        .with_header(header("transferMode.dlna.org", "Streaming"))
-        .with_header(header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES));
+    let mut response = Response::new(
+        status_code,
+        vec![
+            header("Content-Type", &entry.content_type),
+            header("Accept-Ranges", "bytes"),
+            header("transferMode.dlna.org", "Streaming"),
+            header("contentFeatures.dlna.org", DLNA_CONTENT_FEATURES),
+        ],
+        body,
+        Some(body_len),
+        None,
+    )
+    .with_chunked_threshold(NO_CHUNK_THRESHOLD);
 
     if let Some(content_range) = content_range {
         response = response.with_header(header("Content-Range", &content_range));
@@ -374,10 +438,39 @@ fn handle_request(
     response
 }
 
-fn read_range(
+/// Empty-body error response in the boxed-reader shape `handle_request`
+/// returns.
+fn empty_response(code: u16) -> Response<Box<dyn Read>> {
+    Response::new(
+        StatusCode(code),
+        Vec::new(),
+        Box::new(std::io::Cursor::new(Vec::new())),
+        Some(0),
+        None,
+    )
+}
+
+/// Open the requested byte range as a STREAMING reader.
+///
+/// File entries are served straight from disk (seek + bounded `Take`): the
+/// range is never materialized in RAM first. The old read-into-Vec path
+/// stalled the response for seconds on hi-res local files (a 32/384 PCM or
+/// DSD track is 0.7-1.4 GB) — long enough for a strict renderer to time the
+/// fetch out (#646) — spiked RAM by the full file size per request, and
+/// blocked this single-threaded server for the whole copy. In-memory
+/// (Qobuz-stream) entries keep the existing bounded slice copy.
+fn open_range(
     entry: &MediaEntry,
     range: Option<(u64, u64)>,
-) -> Result<(Vec<u8>, StatusCode, Option<String>), std::io::Error> {
+) -> Result<(Box<dyn Read>, usize, StatusCode, Option<String>), std::io::Error> {
+    // 0-byte entries 500'd under the old read-into-Vec path (read_exact of 1
+    // byte past EOF); keep that instead of advertising a lying Content-Length.
+    if entry.size == 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "empty media entry",
+        ));
+    }
     let (start, end, status_code, content_range) = if let Some((start, end)) = range {
         let content_range = format!("bytes {}-{}/{}", start, end, entry.size);
         (start, end, StatusCode(206), Some(content_range))
@@ -385,24 +478,38 @@ fn read_range(
         (0, entry.size.saturating_sub(1), StatusCode(200), None)
     };
 
-    let mut buffer = Vec::new();
-
     match &entry.source {
         MediaSource::Data(data) => {
             let end = end.min(entry.size.saturating_sub(1)) as usize;
             let start = start.min(end as u64) as usize;
-            buffer.extend_from_slice(&data[start..=end]);
+            let buf = data[start..=end].to_vec();
+            let len = buf.len();
+            Ok((
+                Box::new(std::io::Cursor::new(buf)),
+                len,
+                status_code,
+                content_range,
+            ))
         }
         MediaSource::File(path) => {
             let mut file = File::open(path)?;
             file.seek(SeekFrom::Start(start))?;
-            let length = (end - start + 1) as usize;
-            buffer.resize(length, 0);
-            file.read_exact(&mut buffer)?;
+            let length = end - start + 1;
+            Ok((
+                Box::new(file.take(length)),
+                length as usize,
+                status_code,
+                content_range,
+            ))
+        }
+        MediaSource::Reader(source) => {
+            let end = end.min(entry.size.saturating_sub(1));
+            let start = start.min(end);
+            let length = end - start + 1;
+            let reader = source.open(start, length)?;
+            Ok((reader, length as usize, status_code, content_range))
         }
     }
-
-    Ok((buffer, status_code, content_range))
 }
 
 /// Parse `/audio/<token>/<id>` into `(token, id)`. The token is carried in the
@@ -492,6 +599,13 @@ fn content_type_for_path(path: &Path) -> String {
         Some("wav") => "audio/wav".to_string(),
         Some("m4a") | Some("alac") | Some("mp4") => "audio/mp4".to_string(),
         Some("aiff") | Some("aif") => "audio/aiff".to_string(),
+        // DSD containers — de-facto DLNA MIMEs (the MinimServer convention).
+        // DLNA standardizes no DSD profile, so hi-res DSD is always
+        // vendor-extension territory; HQPlayer-class renderers play native
+        // DSF/DFF served with these types (#646). The old octet-stream
+        // fallback made strict renderers reject the stream (AVTransport 714).
+        Some("dsf") => "audio/x-dsf".to_string(),
+        Some("dff") => "audio/x-dff".to_string(),
         Some("ape") => "audio/x-ape".to_string(),
         Some("mp3") => "audio/mpeg".to_string(),
         Some("ogg") | Some("oga") => "audio/ogg".to_string(),
@@ -501,14 +615,45 @@ fn content_type_for_path(path: &Path) -> String {
     }
 }
 
-/// Generate a 128-bit hex session token seeded from OS entropy (via
-/// `RandomState`), without pulling in a `rand` dependency. Not cryptographic,
-/// but enough to stop a LAN peer from guessing `/audio/<id>`.
+/// Generate a 128-bit hex session token from OS CSPRNG entropy.
+/// Embedded in the path (`/audio/<token>/<id>`) so LAN peers cannot guess
+/// a sequential id alone.
 fn generate_token() -> String {
-    use std::hash::BuildHasher;
-    let hi = std::collections::hash_map::RandomState::new().hash_one(0x9E37_79B9u64);
-    let lo = std::collections::hash_map::RandomState::new().hash_one(0x85EB_CA77u64);
-    format!("{:016x}{:016x}", hi, lo)
+    let mut bytes = [0u8; 16];
+    if getrandom::fill(&mut bytes).is_err() {
+        // Extremely rare; fall back to a non-crypto scramble so cast still works.
+        use std::hash::BuildHasher;
+        let hi = std::collections::hash_map::RandomState::new().hash_one(0x9E37_79B9u64);
+        let lo = std::collections::hash_map::RandomState::new().hash_one(0x85EB_CA77u64);
+        return format!("{:016x}{:016x}", hi, lo);
+    }
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Redact the cast media path token in logs (`/audio/<token>/<id>` → `/audio/***/<id>`).
+/// Session tokens must not appear in log bundles.
+pub(crate) fn redact_media_uri(s: &str) -> String {
+    if !s.contains("/audio/") {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/audio/") {
+        out.push_str(&rest[..i]);
+        out.push_str("/audio/");
+        rest = &rest[i + "/audio/".len()..];
+        // token is the next path segment
+        if let Some(slash) = rest.find('/') {
+            out.push_str("***");
+            out.push('/');
+            rest = &rest[slash + 1..];
+        } else {
+            out.push_str("***");
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -540,10 +685,122 @@ mod tests {
         assert_eq!(content_type_for_path(Path::new("a.mp3")), "audio/mpeg");
         assert_eq!(content_type_for_path(Path::new("a.opus")), "audio/opus");
         assert_eq!(content_type_for_path(Path::new("a.m4a")), "audio/mp4");
+        // DSD containers get the de-facto DLNA MIMEs, not octet-stream (#646).
+        assert_eq!(content_type_for_path(Path::new("a.dsf")), "audio/x-dsf");
+        assert_eq!(content_type_for_path(Path::new("a.dff")), "audio/x-dff");
         assert_eq!(
             content_type_for_path(Path::new("a.xyz")),
             "application/octet-stream"
         );
+    }
+
+    #[test]
+    fn redact_media_uri_hides_token() {
+        assert_eq!(
+            redact_media_uri("http://192.168.1.2:9876/audio/deadbeefcafebabe/42"),
+            "http://192.168.1.2:9876/audio/***/42"
+        );
+        assert_eq!(
+            redact_media_uri("/audio/tokentokentoken/7?x=1"),
+            "/audio/***/7?x=1"
+        );
+        let raw = "/audio/aabbccddeeff0011/9";
+        let red = redact_media_uri(raw);
+        assert!(!red.contains("aabbccddeeff0011"));
+        assert!(red.contains("***/9"));
+    }
+
+    struct SliceSource(Vec<u8>);
+    impl RangeSource for SliceSource {
+        fn open(&self, start: u64, len: u64) -> std::io::Result<Box<dyn Read + Send>> {
+            let start = start as usize;
+            let end = (start + len as usize).min(self.0.len());
+            Ok(Box::new(std::io::Cursor::new(self.0[start..end].to_vec())))
+        }
+    }
+
+    #[test]
+    fn open_range_serves_a_range_source_with_exact_lengths() {
+        let data: Vec<u8> = (0..=255u8).collect();
+        let entry = MediaEntry {
+            content_type: "audio/flac".into(),
+            size: data.len() as u64,
+            source: MediaSource::Reader(Arc::new(SliceSource(data.clone()))),
+        };
+        // Whole resource.
+        let (mut r, len, code, cr) = open_range(&entry, None).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0, cr), (256, 200, None));
+        assert_eq!(got, data);
+        // A middle range, then one that overshoots the end (clamped).
+        let (mut r, len, code, cr) = open_range(&entry, Some((10, 19))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!((len, code.0), (10, 206));
+        assert_eq!(cr.as_deref(), Some("bytes 10-19/256"));
+        assert_eq!(got, data[10..=19]);
+        let (mut r, len, _, _) = open_range(&entry, Some((250, 999))).unwrap();
+        let mut got = Vec::new();
+        r.read_to_end(&mut got).unwrap();
+        assert_eq!(len, 6);
+        assert_eq!(got, data[250..]);
+    }
+
+    #[test]
+    fn open_range_streams_file_and_ranges() {
+        // A File entry serves the requested range straight from disk with the
+        // right status / length / Content-Range (#646 streaming rewrite).
+        let bytes: Vec<u8> = (0..=255u8).cycle().take(4096).collect();
+        let path = std::env::temp_dir().join(format!("qbz-cast-test-{}.bin", generate_token()));
+        std::fs::write(&path, &bytes).unwrap();
+        let entry = MediaEntry {
+            content_type: "audio/x-dsf".to_string(),
+            size: bytes.len() as u64,
+            source: MediaSource::File(path.clone()),
+        };
+
+        // Full GET: 200, whole file, streamed through the reader.
+        let (mut body, len, status, cr) = open_range(&entry, None).unwrap();
+        assert_eq!(status, StatusCode(200));
+        assert_eq!(len, bytes.len());
+        assert!(cr.is_none());
+        let mut served = Vec::new();
+        body.read_to_end(&mut served).unwrap();
+        assert_eq!(served, bytes);
+
+        // Range GET: 206 + exact slice + Content-Range header value.
+        let (mut body, len, status, cr) = open_range(&entry, Some((100, 199))).unwrap();
+        assert_eq!(status, StatusCode(206));
+        assert_eq!(len, 100);
+        assert_eq!(cr.as_deref(), Some("bytes 100-199/4096"));
+        let mut served = Vec::new();
+        body.read_to_end(&mut served).unwrap();
+        assert_eq!(served, bytes[100..=199]);
+
+        std::fs::remove_file(&path).ok();
+
+        // In-memory entries keep the bounded slice copy.
+        let entry = MediaEntry {
+            content_type: "audio/flac".to_string(),
+            size: bytes.len() as u64,
+            source: MediaSource::Data(std::sync::Arc::new(bytes.clone())),
+        };
+        let (mut body, len, status, _) = open_range(&entry, Some((0, 9))).unwrap();
+        assert_eq!(status, StatusCode(206));
+        assert_eq!(len, 10);
+        let mut served = Vec::new();
+        body.read_to_end(&mut served).unwrap();
+        assert_eq!(served, bytes[..10]);
+
+        // 0-byte entries error out (old read_exact semantics) instead of
+        // advertising a lying Content-Length.
+        let entry = MediaEntry {
+            content_type: "audio/wav".to_string(),
+            size: 0,
+            source: MediaSource::Data(std::sync::Arc::new(Vec::new())),
+        };
+        assert!(open_range(&entry, None).is_err());
     }
 
     #[test]

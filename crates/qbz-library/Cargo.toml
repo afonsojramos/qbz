@@ -17,15 +17,19 @@ serde_json = "1"
 thiserror = "2"
 
 # Database
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Filesystem
 walkdir = "2"
+notify = "8"
 dirs = "6"
 
 # Audio metadata
-lofty = "0.23"
+lofty.workspace = true
 qbz-dsd = { path = "../qbz-dsd" }
+# SACD images found by the folder scan: signature sniff + Scarlet Book TOC
+# parse + the disc memory (sacd_scan.rs). qbz-disc depends on nothing here.
+qbz-disc = { path = "../qbz-disc" }
 
 # Image processing (thumbnails)
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

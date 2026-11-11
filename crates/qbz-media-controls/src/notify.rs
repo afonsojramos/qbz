@@ -20,6 +20,31 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+const PORTAL_NOTIFICATION_ID: &str = "track-now-playing";
+
+/// The portal id of the LAST toast this process published, so the next one
+/// (or a withdraw) can remove it. Ids are UNIQUE per toast on purpose
+/// (`track-now-playing-<generation>`): re-publishing under one stable id is
+/// an in-place update, and Plasma never re-presents an update as a banner —
+/// `show-as-new` included (measured on the owner's desktop, 2026-08-31: a
+/// same-id replacement with the hint produced NO popup while a fresh id
+/// bannered every time). So each track change publishes a new id and removes
+/// the previous one, which is the fresh-id presentation with the same
+/// no-pileup lifecycle the stable id was for.
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Serializes portal mutations and invalidates slow, stale artwork jobs. A
+/// track-A notification can spend seconds downloading its cover while track B
+/// starts (or playback stops); without this generation check A may overwrite B
+/// or resurrect the notification after it was withdrawn.
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_os = "linux")]
+static PORTAL_NOTIFICATION_GATE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Everything needed to render a track-change notification. The crate formats
 /// the body + quality line itself so the output matches the Tauri notification
 /// exactly, regardless of frontend.
@@ -87,9 +112,9 @@ fn build_body(meta: &NotificationMeta) -> String {
     lines.join("\n")
 }
 
-// --- artwork cache (Linux + macOS) ------------------------------------------
+// --- artwork cache (Linux + macOS + Windows) ------------------------------------------
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn artwork_cache_dir() -> Result<PathBuf, String> {
     let dir = dirs::cache_dir()
         .ok_or_else(|| "Could not find cache directory".to_string())?
@@ -99,7 +124,7 @@ fn artwork_cache_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
     if let Some(path) = url.strip_prefix("file://") {
         // file:// URLs built with url::Url::from_file_path (e.g. the shared
@@ -109,6 +134,29 @@ fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
         let decoded = urlencoding::decode(path)
             .map(|c| c.into_owned())
             .unwrap_or_else(|_| path.to_string());
+        // `file:///C:/x` leaves `/C:/x` here: the empty authority's slash, in
+        // front of a drive letter. PathBuf keeps it and the file never
+        // resolves, so the toast silently shows no cover. Forward slashes
+        // after that are fine -- Windows accepts them.
+        //
+        // Additive: Linux and macOS never match this shape, and their full
+        // percent-decode above is left exactly as it was. It has to stay
+        // full: art_url reaches here from BOTH url::Url::from_file_path
+        // (which escapes spaces as %20) and fs_url::file_url (which escapes
+        // only % # ?), and only the wider decode reads both.
+        #[cfg(target_os = "windows")]
+        {
+            let b = decoded.as_bytes();
+            if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+                return Some(PathBuf::from(&decoded[1..]));
+            }
+            // A non-empty authority is a UNC server: `file://nas/share/x`
+            // names `\\nas\share\x`. Without this it stays RELATIVE and
+            // resolves against the process working directory.
+            if !decoded.starts_with('/') && !decoded.is_empty() {
+                return Some(PathBuf::from(format!("//{decoded}")));
+            }
+        }
         return Some(PathBuf::from(decoded));
     }
     if let Some(path) = url.strip_prefix("asset://localhost/") {
@@ -120,7 +168,7 @@ fn resolve_local_artwork(url: &str) -> Option<PathBuf> {
 
 /// Shared blocking HTTP client (a fresh client per track leaks an fd → EMFILE
 /// over a long session — same reasoning as the Tauri image cache).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn http_client() -> &'static reqwest::blocking::Client {
     static CLIENT: std::sync::OnceLock<reqwest::blocking::Client> = std::sync::OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -136,7 +184,7 @@ fn http_client() -> &'static reqwest::blocking::Client {
 /// `offline` = local paths + md5 cache hits only, never the HTTP download —
 /// the verdict is injected by the caller so this crate stays frontend-agnostic
 /// (no dependency on the app's offline-mode engine).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 fn cache_artwork(url: &str, offline: bool) -> Result<PathBuf, String> {
     use md5::{Digest, Md5};
     use std::io::Write;
@@ -251,9 +299,19 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
     {
         use ashpd::desktop::notification::{Notification as PortalNotification, NotificationProxy};
         use ashpd::desktop::Icon;
+        use std::sync::atomic::Ordering;
 
-        let mut notification =
-            PortalNotification::new(&meta.title).body(Some(body.as_str()));
+        let generation = PORTAL_NOTIFICATION_GENERATION
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+
+        // A UNIQUE id per toast — see PORTAL_NOTIFICATION_LAST for why the
+        // stable-id + show-as-new shape was abandoned: Plasma presents a
+        // same-id replacement as a silent in-place update, hint or not. The
+        // previous toast is removed right before the new publish below, so
+        // the no-pileup lifecycle survives the id change.
+        let notification_id = format!("{PORTAL_NOTIFICATION_ID}-{generation}");
+        let mut notification = PortalNotification::new(&meta.title).body(Some(body.as_str()));
 
         if let Some(url) = meta.art_url.clone() {
             let prepared = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
@@ -273,11 +331,28 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
 
         match NotificationProxy::new().await {
             Ok(proxy) => {
-                if let Err(e) = proxy
-                    .add_notification("track-now-playing", notification)
-                    .await
-                {
-                    log::warn!("[notify] XDG portal add_notification failed: {e}");
+                let _guard = PORTAL_NOTIFICATION_GATE.lock().await;
+                if PORTAL_NOTIFICATION_GENERATION.load(Ordering::Acquire) != generation {
+                    log::debug!("[notify] stale track notification discarded");
+                    return;
+                }
+                // Retire the previous toast FIRST: on a rapid skip its banner
+                // may still be on screen, and the new publish must not stack
+                // on it. The record is swapped before the awaits (a std lock
+                // is never held across them); a failed add then leaves a
+                // dangling id behind, whose later removal is a harmless no-op.
+                let previous = PORTAL_NOTIFICATION_LAST
+                    .lock()
+                    .map(|mut last| last.replace(notification_id.clone()))
+                    .unwrap_or(None);
+                if let Some(prev) = previous {
+                    if let Err(e) = proxy.remove_notification(&prev).await {
+                        log::debug!("[notify] XDG portal remove_notification failed: {e}");
+                    }
+                }
+                match proxy.add_notification(&notification_id, notification).await {
+                    Ok(()) => log::debug!("[notify] XDG portal notification published"),
+                    Err(e) => log::warn!("[notify] XDG portal add_notification failed: {e}"),
                 }
             }
             Err(e) => log::warn!("[notify] XDG notification portal unavailable: {e}"),
@@ -307,10 +382,82 @@ pub async fn show_track_notification(meta: NotificationMeta, offline: bool) {
         .await;
     }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(target_os = "windows")]
+    {
+        let _ = tokio::task::spawn_blocking(move || {
+            let artwork_path = meta.art_url.as_deref().and_then(|url| {
+                match cache_artwork(url, offline) {
+                    Ok(path) => Some(path),
+                    Err(e) => {
+                        log::debug!("[notify] could not cache artwork: {e}");
+                        None
+                    }
+                }
+            });
+            let mut notification = notify_rust::Notification::new();
+            // app_id MUST match the AUMID set in main() and registered by the
+            // MSI, or Windows drops the toast without a word. notify-rust's
+            // Windows arm forwards summary/body/app_id/image and SILENTLY
+            // ignores `actions` (src/windows.rs), so no buttons are attempted
+            // here -- adding them would look implemented and do nothing.
+            notification
+                .summary(&meta.title)
+                .body(&body)
+                .app_id("com.blitzfc.qbz");
+            if let Some(path) = artwork_path.as_ref().and_then(|p| p.to_str()) {
+                notification.image_path(path);
+            }
+            if let Err(e) = notification.show() {
+                log::warn!("[notify] Windows toast failed: {e}");
+            }
+        })
+        .await;
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
     {
         let _ = body;
         let _ = offline;
         log::info!("[notify] desktop notifications not implemented on this platform");
+    }
+}
+
+/// Withdraw the active Linux portal notification, if any. This also
+/// invalidates an in-flight artwork preparation so it cannot publish after a
+/// stop or process shutdown. Other platforms currently have no replaceable
+/// notification handle, so this is a deliberate no-op there.
+pub async fn withdraw_track_notification() {
+    #[cfg(target_os = "linux")]
+    {
+        use ashpd::desktop::notification::NotificationProxy;
+        use std::sync::atomic::Ordering;
+
+        let generation = PORTAL_NOTIFICATION_GENERATION
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        let proxy = match NotificationProxy::new().await {
+            Ok(proxy) => proxy,
+            Err(e) => {
+                log::debug!("[notify] XDG notification portal unavailable during withdrawal: {e}");
+                return;
+            }
+        };
+        let _guard = PORTAL_NOTIFICATION_GATE.lock().await;
+        if PORTAL_NOTIFICATION_GENERATION.load(Ordering::Acquire) != generation {
+            return;
+        }
+        // The ids are per-toast now (see PORTAL_NOTIFICATION_LAST) — take and
+        // remove whichever one this process last published. Nothing published
+        // = nothing to withdraw.
+        let target = PORTAL_NOTIFICATION_LAST
+            .lock()
+            .map(|mut last| last.take())
+            .unwrap_or(None);
+        let Some(target) = target else {
+            return;
+        };
+        if let Err(e) = proxy.remove_notification(&target).await {
+            log::debug!("[notify] XDG portal remove_notification failed: {e}");
+        }
     }
 }

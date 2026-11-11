@@ -28,8 +28,17 @@ pub struct RuntimeDiagnostics {
     pub audio_preferred_sample_rate: Option<u32>,
     pub audio_alsa_plugin: Option<String>,
     pub audio_alsa_hardware_volume: bool,
+    pub audio_alsa_hardware_volume_controls: std::collections::HashMap<
+        qbz_audio::alsa_hardware_volume::StableAlsaRouteKey,
+        qbz_audio::alsa_hardware_volume::AlsaMixerControlId,
+    >,
+    /// Full read-only inventory for the active direct route, including
+    /// rejected controls and their typed reasons.
+    pub audio_alsa_hardware_volume_probe:
+        Option<qbz_audio::alsa_hardware_volume::HardwareVolumeProbe>,
     pub audio_normalization_enabled: bool,
     pub audio_normalization_target_lufs: f32,
+    pub audio_normalization_prevent_clipping: bool,
     pub audio_gapless_enabled: bool,
     pub audio_pw_force_bitperfect: bool,
     pub audio_stream_buffer_seconds: u8,
@@ -121,8 +130,19 @@ pub fn runtime_diagnostics(i: &DiagnosticsInputs<'_>) -> RuntimeDiagnostics {
         audio_preferred_sample_rate: audio.preferred_sample_rate,
         audio_alsa_plugin: audio.alsa_plugin.map(|p| format!("{:?}", p)),
         audio_alsa_hardware_volume: audio.alsa_hardware_volume,
+        audio_alsa_hardware_volume_controls: audio.alsa_hardware_volume_controls.clone(),
+        audio_alsa_hardware_volume_probe: qbz_audio::alsa_direct::uses_alsa_direct_route(audio)
+            .then(|| {
+                qbz_audio::alsa_hardware_volume::enumerate_hardware_volume_controls(
+                    audio
+                        .output_device
+                        .as_deref()
+                        .expect("direct ALSA route has a device id"),
+                )
+            }),
         audio_normalization_enabled: audio.normalization_enabled,
         audio_normalization_target_lufs: audio.normalization_target_lufs,
+        audio_normalization_prevent_clipping: audio.normalization_prevent_clipping,
         audio_gapless_enabled: audio.gapless_enabled,
         audio_pw_force_bitperfect: audio.pw_force_bitperfect,
         audio_stream_buffer_seconds: audio.stream_buffer_seconds,

@@ -19,6 +19,7 @@ pub mod db;
 pub mod downloader;
 pub mod event;
 pub mod maintenance;
+pub mod library_sync;
 pub mod metadata;
 pub mod migration;
 pub mod path_validator;

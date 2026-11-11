@@ -22,6 +22,9 @@ use crate::validate::{
 use crate::{RecoCatalog, RecoInputs};
 
 const DISPLAY_CAP: usize = 20;
+/// Public alias for the paint layer (it composes the visible rows after
+/// filtering/dedup, so it needs the canonical per-rail visible cap).
+pub const ARTIST_DISPLAY_CAP: usize = DISPLAY_CAP;
 const PLAYLIST_CAP: usize = 30;
 const VALIDATE_CONCURRENCY: usize = 6;
 const ARTIST_SEEDS: usize = 6;
@@ -239,7 +242,13 @@ async fn similar_artist_row(
     }
     let candidates: Vec<ArtistCandidate> = round_robin(groups).into_iter().take(45).collect();
     let pool = validate_artist_pool(inputs.catalog, inputs.cache, candidates).await;
-    rotate_take(pool, inputs.rotation_seed, DISPLAY_CAP)
+    // Rotate for daily variety but do NOT truncate at DISPLAY_CAP: the paint
+    // layer composes the visible rows AFTER followed/blacklisted/dismissed
+    // filtering + cross-rail dedup (compose_artist_rails) and keeps the
+    // remaining validated candidates as backfill overflow — they ride the
+    // results blob, so replacements need no extra network.
+    let take = pool.len();
+    rotate_take(pool, inputs.rotation_seed, take)
 }
 
 /// "More like the artists you love" — your COMMON taste (overall top).
@@ -256,6 +265,59 @@ pub async fn build_rec_artists_recent(
     history: &ExtHistory,
 ) -> Vec<ArtistReco> {
     similar_artist_row(inputs, history, "1month").await
+}
+
+// ── Display composition (filter + cross-rail dedup + backfill split) ────────
+
+/// One artist rail after display composition: the visible rows (the first
+/// `cap` survivors) plus the retained overflow (the remaining survivors, in
+/// pool order), which the paint layer keeps for live backfill after a
+/// "not interested" dismissal.
+#[derive(Debug, Clone, Default)]
+pub struct ArtistRailComposition {
+    pub visible: Vec<ArtistReco>,
+    pub overflow: Vec<ArtistReco>,
+}
+
+/// Compose the two Recommended-Artist rails for display:
+///
+/// - drop every candidate whose Qobuz id is in `excluded` (the frontend folds
+///   followed / blacklisted / dismissed ids into that set; fail-soft = pass
+///   an empty set),
+/// - dedup WITHIN and ACROSS rails: an id shows in at most one rail — the
+///   COMMON rail is composed first and wins — and overflow ids are claimed
+///   too, so a common-overflow id cannot resurface in recent's visible,
+/// - the first `cap` survivors per rail are visible; the rest is overflow.
+pub fn compose_artist_rails(
+    common_pool: Vec<ArtistReco>,
+    recent_pool: Vec<ArtistReco>,
+    excluded: &HashSet<u64>,
+    cap: usize,
+) -> (ArtistRailComposition, ArtistRailComposition) {
+    let mut seen: HashSet<u64> = HashSet::new();
+    let common = compose_one_rail(common_pool, excluded, &mut seen, cap);
+    let recent = compose_one_rail(recent_pool, excluded, &mut seen, cap);
+    (common, recent)
+}
+
+fn compose_one_rail(
+    pool: Vec<ArtistReco>,
+    excluded: &HashSet<u64>,
+    seen: &mut HashSet<u64>,
+    cap: usize,
+) -> ArtistRailComposition {
+    let mut out = ArtistRailComposition::default();
+    for reco in pool {
+        if excluded.contains(&reco.qobuz_artist_id) || !seen.insert(reco.qobuz_artist_id) {
+            continue;
+        }
+        if out.visible.len() < cap {
+            out.visible.push(reco);
+        } else {
+            out.overflow.push(reco);
+        }
+    }
+    out
 }
 
 // ── Recommended Albums (Last.fm: your artists' top albums, not scrobbled) ───
@@ -636,4 +698,78 @@ pub async fn build_editorial(inputs: &RecoInputs<'_>) -> (Vec<AlbumReco>, Vec<Ar
     .await;
 
     (top_albums, top_artists)
+}
+
+
+// ── Tests ───────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reco(id: u64) -> ArtistReco {
+        ArtistReco {
+            qobuz_artist_id: id,
+            name: format!("Artist {id}"),
+            image_url: String::new(),
+            subtitle: String::new(),
+            source: RecoSource::LastFm,
+        }
+    }
+
+    fn ids(recos: &[ArtistReco]) -> Vec<u64> {
+        recos.iter().map(|r| r.qobuz_artist_id).collect()
+    }
+
+    #[test]
+    fn compose_excludes_ids_from_visible_and_overflow() {
+        let common = vec![reco(1), reco(2), reco(3), reco(4)];
+        let recent = vec![reco(5), reco(6)];
+        let excluded = HashSet::from([2, 4, 5]);
+        let (c, r) = compose_artist_rails(common, recent, &excluded, 2);
+        assert_eq!(ids(&c.visible), vec![1, 3]);
+        assert!(c.overflow.is_empty(), "excluded ids leave no overflow");
+        assert_eq!(ids(&r.visible), vec![6]);
+    }
+
+    #[test]
+    fn compose_dedups_cross_rail_common_wins() {
+        let common = vec![reco(1), reco(2)];
+        let recent = vec![reco(2), reco(3)];
+        let (c, r) = compose_artist_rails(common, recent, &HashSet::new(), 20);
+        assert_eq!(ids(&c.visible), vec![1, 2]);
+        assert_eq!(ids(&r.visible), vec![3], "id 2 appears only in common");
+    }
+
+    #[test]
+    fn compose_dedups_within_rail() {
+        let common = vec![reco(1), reco(1), reco(2)];
+        let (c, _r) = compose_artist_rails(common, Vec::new(), &HashSet::new(), 20);
+        assert_eq!(ids(&c.visible), vec![1, 2]);
+    }
+
+    #[test]
+    fn compose_splits_visible_and_overflow_in_order() {
+        let common: Vec<ArtistReco> = (1..=5).map(reco).collect();
+        let excluded = HashSet::from([1]);
+        let (c, _r) = compose_artist_rails(common, Vec::new(), &excluded, 3);
+        // The exclusion punches a hole in the first window; the next
+        // candidates move up into the visible rows, the rest is overflow —
+        // both in pool order (the backfill contract).
+        assert_eq!(ids(&c.visible), vec![2, 3, 4]);
+        assert_eq!(ids(&c.overflow), vec![5]);
+    }
+
+    #[test]
+    fn compose_cross_rail_dedup_also_covers_overflow() {
+        // An id sitting in common's OVERFLOW must not resurface in recent's
+        // visible rows (it is still claimed for potential backfill).
+        let common: Vec<ArtistReco> = (1..=3).map(reco).collect();
+        let recent = vec![reco(3), reco(4)];
+        let (c, r) = compose_artist_rails(common, recent, &HashSet::new(), 2);
+        assert_eq!(ids(&c.visible), vec![1, 2]);
+        assert_eq!(ids(&c.overflow), vec![3]);
+        assert_eq!(ids(&r.visible), vec![4], "id 3 is claimed by common");
+        assert!(r.overflow.is_empty());
+    }
 }

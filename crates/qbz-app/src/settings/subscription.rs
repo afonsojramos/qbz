@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 ///
 /// The primary protection for offline files is the CMAF-at-rest cache format.
 /// This grace period is an additional compliance guard, not the main defense.
-const GRACE_PERIOD_SECS: i64 = 30 * 24 * 60 * 60;
+pub const GRACE_PERIOD_SECS: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,7 +55,7 @@ impl SubscriptionStateStore {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open subscription state database: {}", e))?;
 
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=1000;")
             .map_err(|e| {
                 format!(
                     "Failed to enable WAL for subscription state database: {}",

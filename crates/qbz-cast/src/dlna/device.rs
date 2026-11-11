@@ -1,6 +1,6 @@
 //! DLNA device connection and playback via AVTransport SOAP
 
-use rupnp::http::Uri;
+use http::Uri;
 use rupnp::{Device, Service};
 use serde::{Deserialize, Serialize};
 
@@ -49,20 +49,23 @@ pub struct DlnaConnection {
     // CurrentURI when a track ends, which would otherwise make a bare Play
     // (the manual play button, or a late auto-advance) fail permanently.
     last_set_uri_payload: Option<String>,
+    // Last 0-100 volume actually sent, so a drag that quantizes to the same
+    // step does not repeat the SOAP call.
+    last_volume_sent: Option<u32>,
     // Set by `load_media`, cleared by `play`. When true the URI was just set, so
     // `play` skips its idle pre-check (the content is already current) and avoids
     // a redundant SetAVTransportURI. A bare play (manual button / resume) leaves
     // it false so the pre-check runs.
     uri_freshly_set: bool,
     is_playing: bool,
+    // Consecutive GetTransportInfo failures while GetPositionInfo still
+    // answers; only the first and every 60th are logged (the poll is 1 Hz).
+    transport_query_failures: std::sync::atomic::AtomicU32,
 }
 
 impl DlnaConnection {
     /// Connect to a DLNA device and discover service URLs
     pub async fn connect(device: DiscoveredDlnaDevice) -> Result<Self, DlnaError> {
-        // Defensive: the device-description fetch may go over TLS in some
-        // setups; ensure a rustls CryptoProvider is installed (idempotent).
-        crate::ensure_crypto_provider();
         let device_url: Uri = device
             .url
             .parse()
@@ -83,6 +86,24 @@ impl DlnaConnection {
             rendering_control_service.is_some()
         );
 
+        // Clear any residual transport state the renderer kept from a previous
+        // session/app run. Without this, a renderer left mid-playback re-requests
+        // its orphaned CurrentURI against our fresh media server (new path token
+        // -> 403 loop) AND reports a stale PLAYING position, which poisons
+        // `cast_max_position` and trips the premature-STOPPED end-detection guard
+        // into auto-advancing the FIRST cast track. Best-effort: a renderer with
+        // nothing loaded may reject Stop, which is fine.
+        if let Some(av) = av_transport_service.as_ref() {
+            let _ = Self::run_action(
+                av,
+                &device_url,
+                "Stop",
+                "<InstanceID>0</InstanceID>",
+                5,
+            )
+            .await;
+        }
+
         Ok(Self {
             device,
             connected: true,
@@ -91,8 +112,10 @@ impl DlnaConnection {
             rendering_control_service,
             current_uri: None,
             last_set_uri_payload: None,
+            last_volume_sent: None,
             uri_freshly_set: false,
             is_playing: false,
+            transport_query_failures: std::sync::atomic::AtomicU32::new(0),
         })
     }
 
@@ -139,9 +162,13 @@ impl DlnaConnection {
         // Build DIDL-Lite metadata with actual content type
         let didl_metadata = build_didl_metadata(uri, metadata, content_type);
 
-        log::info!("DLNA: Loading media URI: {}", uri);
+        log::info!("DLNA: Loading media URI: {}", redact_media_uri(uri));
         log::info!("DLNA: Content-Type: {}", content_type);
-        log::info!("DLNA: DIDL Metadata:\n{}", didl_metadata);
+        // DIDL embeds the full URI; log only at debug and redacted.
+        log::debug!(
+            "DLNA: DIDL Metadata (redacted URI):\n{}",
+            redact_media_uri(&didl_metadata)
+        );
 
         let payload = format!(
             "<InstanceID>0</InstanceID><CurrentURI>{}</CurrentURI><CurrentURIMetaData>{}</CurrentURIMetaData>",
@@ -169,7 +196,7 @@ impl DlnaConnection {
         // later reports 702 "no contents" (see the retry loop in `play`).
         self.last_set_uri_payload = Some(payload);
         self.uri_freshly_set = true;
-        log::info!("DLNA: Set URI to {}", uri);
+        log::info!("DLNA: Set URI to {}", redact_media_uri(uri));
 
         Ok(())
     }
@@ -437,6 +464,9 @@ impl DlnaConnection {
 
         // DLNA volume is typically 0-100
         let dlna_volume = ((volume.clamp(0.0, 1.0) * 100.0) as u32).min(100);
+        if self.last_volume_sent == Some(dlna_volume) {
+            return Ok(());
+        }
 
         let payload = format!(
             "<InstanceID>0</InstanceID><Channel>Master</Channel><DesiredVolume>{}</DesiredVolume>",
@@ -444,6 +474,7 @@ impl DlnaConnection {
         );
 
         Self::run_action(rc_service, &self.device_url, "SetVolume", &payload, 10).await?;
+        self.last_volume_sent = Some(dlna_volume);
 
         log::info!("DLNA: Set volume to {}", dlna_volume);
         Ok(())
@@ -521,8 +552,11 @@ impl DlnaConnection {
         .map_err(|_| DlnaError::Playback("GetPositionInfo timed out".to_string()))?
         .map_err(|e| DlnaError::Playback(e.to_string()))?;
 
-        // Get transport state
-        let transport_response = tokio::time::timeout(
+        // Get transport state. A renderer that answers GetPositionInfo but
+        // faults on GetTransportInfo (#733: a KEF LSX that also faults on Stop
+        // and Seek) is alive, so this degrades to `UNKNOWN` instead of failing
+        // the whole read — the caller keeps the position and decides on it.
+        let transport_response = match tokio::time::timeout(
             std::time::Duration::from_secs(5),
             av_service.action(
                 &self.device_url,
@@ -531,8 +565,21 @@ impl DlnaConnection {
             ),
         )
         .await
-        .map_err(|_| DlnaError::Playback("GetTransportInfo timed out".to_string()))?
-        .map_err(|e| DlnaError::Playback(e.to_string()))?;
+        {
+            Ok(Ok(response)) => {
+                self.transport_query_failures
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
+                Some(response)
+            }
+            Ok(Err(e)) => {
+                self.note_transport_query_failure(&e.to_string());
+                None
+            }
+            Err(_) => {
+                self.note_transport_query_failure("timed out");
+                None
+            }
+        };
 
         // Parse RelTime (position) - format: "HH:MM:SS" or "H:MM:SS"
         let rel_time = position_response
@@ -548,17 +595,37 @@ impl DlnaConnection {
             .unwrap_or("0:00:00");
         let duration_secs = parse_time_string(track_duration);
 
-        // Get transport state (PLAYING, PAUSED_PLAYBACK, STOPPED, etc.)
-        let transport_state = transport_response
-            .get("CurrentTransportState")
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| "UNKNOWN".to_string());
+        // Get transport state (PLAYING, PAUSED_PLAYBACK, STOPPED, etc.). When
+        // the query itself faulted, fall back to the last transport command
+        // QBZ sent: the position keeps flowing and the end-stall rule in the
+        // poll takes over if it freezes at the end.
+        let transport_state = match transport_response
+            .as_ref()
+            .and_then(|r| r.get("CurrentTransportState"))
+        {
+            Some(state) => state.to_string(),
+            None if transport_response.is_some() => "UNKNOWN".to_string(),
+            None if self.is_playing => "PLAYING".to_string(),
+            None => "PAUSED_PLAYBACK".to_string(),
+        };
 
         Ok(DlnaPositionInfo {
             position_secs,
             duration_secs,
             transport_state,
         })
+    }
+
+    fn note_transport_query_failure(&self, reason: &str) {
+        let n = self
+            .transport_query_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
+        if n == 1 || n % 60 == 0 {
+            log::warn!(
+                "DLNA: GetTransportInfo failed ({n} in a row, position still answers): {reason}"
+            );
+        }
     }
 }
 
@@ -662,9 +729,42 @@ fn find_service_any_version(device: &Device, service: &str) -> Option<Service> {
         .cloned()
 }
 
+/// Redact the cast media path token in logs (`/audio/<token>/<id>` → `/audio/***/<id>`).
+fn redact_media_uri(s: &str) -> String {
+    // Fast path: no cast audio path.
+    if !s.contains("/audio/") {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find("/audio/") {
+        out.push_str(&rest[..i]);
+        out.push_str("/audio/");
+        rest = &rest[i + "/audio/".len()..];
+        // token until next /
+        if let Some(slash) = rest.find('/') {
+            out.push_str("***/");
+            rest = &rest[slash + 1..];
+        } else {
+            out.push_str("***");
+            rest = "";
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::service_type_matches;
+    use super::{redact_media_uri, service_type_matches};
+
+    #[test]
+    fn redacts_path_token() {
+        assert_eq!(
+            redact_media_uri("http://192.168.1.2:9876/audio/deadbeefcafebabe/42"),
+            "http://192.168.1.2:9876/audio/***/42"
+        );
+    }
 
     #[test]
     fn matches_any_upnp_version() {

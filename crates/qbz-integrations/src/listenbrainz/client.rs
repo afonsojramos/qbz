@@ -56,7 +56,7 @@ impl ListenBrainzClient {
     pub fn with_config(config: ListenBrainzConfig) -> Self {
         let version = "1.0.0".to_string();
         let user_agent = format!(
-            "QBZ/{} (https://github.com/vicrodh/qbz; qbz@vicrodh.dev)",
+            "QBZ/{} (https://github.com/afonsojramos/qbz)",
             version
         );
 

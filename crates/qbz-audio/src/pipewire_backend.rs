@@ -152,9 +152,30 @@ impl PipeWireBackend {
     }
 
     /// Query the current PipeWire graph sample rate via pw-metadata.
+    /// The rate the PipeWire graph is ACTUALLY running at.
+    ///
+    /// `clock.force-rate` is the key this backend writes and the one that
+    /// drives the graph; `clock.rate` is the graph's NOMINAL default and does
+    /// not move when a rate is forced. Verifying the former by reading the
+    /// latter is how this check spent releases reporting "Audio may play at
+    /// wrong speed" over perfectly correct output — measured on a Fosi ZH3:
+    /// `clock.force-rate` = 96000 and `clock.rate` = 48000 at the same instant,
+    /// with the DAC's own display reading 96 kHz. The retry did not help
+    /// because the delay was never the problem.
+    ///
+    /// Falls back to `clock.rate` when nothing is forced (`force-rate` then
+    /// reads 0 or is absent), which is the honest answer in that case.
     fn get_pipewire_current_rate() -> Option<u32> {
+        Self::read_pw_setting("clock.force-rate")
+            .filter(|rate| *rate > 0)
+            .or_else(|| Self::read_pw_setting("clock.rate"))
+    }
+
+    /// One `pw-metadata` settings read, parsed. Split out so the two keys above
+    /// cannot drift apart.
+    fn read_pw_setting(key: &str) -> Option<u32> {
         let output = Command::new("pw-metadata")
-            .args(["-n", "settings", "0", "clock.rate"])
+            .args(["-n", "settings", "0", key])
             .output()
             .ok()?;
         if !output.status.success() {
@@ -162,8 +183,12 @@ impl PipeWireBackend {
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
         // pw-metadata output: "Found "settings" metadata 0\nupdate: id:0 key:'clock.rate' value:'96000' type:''"
+        // EXACT key match: `clock.rate` is a SUBSTRING of `clock.force-rate`, so
+        // a `contains(key)` would happily read the forced rate while asked for
+        // the nominal one. pw-metadata prints `key:'<name>'`.
+        let needle = format!("key:'{key}'");
         for line in stdout.lines() {
-            if line.contains("clock.rate") && line.contains("value:") {
+            if line.contains(&needle) && line.contains("value:") {
                 // Extract value between single quotes after "value:"
                 if let Some(start) = line.find("value:'") {
                     let after = &line[start + 7..];
@@ -354,10 +379,61 @@ impl PipeWireBackend {
         for (idx, dev) in devices.iter().enumerate() {
             log::info!(
                 "  [{}] {} (id: {}, bus: {:?}, hw: {}, default: {})",
-                idx, dev.name, dev.id, dev.device_bus, dev.is_hardware, dev.is_default
+                idx,
+                dev.name,
+                dev.id,
+                dev.device_bus,
+                dev.is_hardware,
+                dev.is_default
             );
         }
         Some(devices)
+    }
+}
+
+/// Runs `program args...` with all stdio discarded and reports whether it
+/// exited successfully within `timeout`. Availability probing only — a missing
+/// binary, a failing exit, or a timeout all mean "not available". Bounded so
+/// the audio thread can never hang on a wedged daemon (#591/#592: playback
+/// start must fail fast and fall back, not sit behind the 45s UI watchdog).
+fn probe_command_ok(program: &str, args: &[&str], timeout: std::time::Duration) -> bool {
+    use std::process::Stdio;
+    let mut child = match Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false, // binary not present (sandbox / not installed)
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    log::warn!(
+                        "[PipeWire Backend] availability probe `{}` timed out after {:?}",
+                        program,
+                        timeout
+                    );
+                    return false;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(e) => {
+                log::warn!(
+                    "[PipeWire Backend] availability probe `{}` failed: {}",
+                    program,
+                    e
+                );
+                return false;
+            }
+        }
     }
 }
 
@@ -801,6 +877,8 @@ impl AudioBackend for PipeWireBackend {
             .map_err(|e| format!("Failed to create device sink builder: {}", e))?
             .with_supported_config(&supported_config)
             .with_buffer_size(cpal_buffer_size)
+            // #660: shared rate-limited callback + wedge latch (see stream_health).
+            .with_error_callback(crate::stream_health::error_callback("PipeWire"))
             .open_stream()
             .map_err(|e| {
                 format!(
@@ -879,10 +957,7 @@ impl AudioBackend for PipeWireBackend {
                         }
                     }
                 } else {
-                    log::info!(
-                        "[PipeWire Backend] Rate verified: {}Hz",
-                        actual_rate
-                    );
+                    log::info!("[PipeWire Backend] Rate verified: {}Hz", actual_rate);
                 }
             }
         }
@@ -891,12 +966,25 @@ impl AudioBackend for PipeWireBackend {
     }
 
     fn is_available(&self) -> bool {
-        // Check if pactl is available (PipeWire/PulseAudio)
-        Command::new("pactl")
-            .arg("info")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
+        // #591/#592: this probe used to require `pactl` (pulseaudio-utils +
+        // pipewire-pulse). Sandboxed and minimal installs (Snap, Flatpak, .deb
+        // without pulseaudio-utils) can lack it even though PipeWire itself is
+        // up — device enumeration already succeeds natively via `pw-dump` on
+        // those systems, so the availability probe must accept the same proof.
+        // Order: native socket (no subprocess) → pw-dump → pactl (kept as the
+        // fallback for PulseAudio-only systems, preserving pre-2.0 behavior).
+        // Subprocess probes are time-bounded so a wedged daemon can never
+        // stall stream init on the audio thread.
+        if let Some(runtime_dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+            if std::path::Path::new(&runtime_dir)
+                .join("pipewire-0")
+                .exists()
+            {
+                return true;
+            }
+        }
+        probe_command_ok("pw-dump", &[], std::time::Duration::from_secs(3))
+            || probe_command_ok("pactl", &["info"], std::time::Duration::from_secs(3))
     }
 
     fn description(&self) -> &'static str {
@@ -965,7 +1053,11 @@ mod pw_dump_tests {
     fn parses_sinks_only_with_node_names_bus_and_default() {
         let devs = parse_pw_dump_sinks(FIXTURE);
         // The Audio/Source must be excluded.
-        assert_eq!(devs.len(), 2, "should parse exactly the two Audio/Sink nodes");
+        assert_eq!(
+            devs.len(),
+            2,
+            "should parse exactly the two Audio/Sink nodes"
+        );
 
         let usb = devs
             .iter()
@@ -975,7 +1067,10 @@ mod pw_dump_tests {
         assert_eq!(usb.device_bus.as_deref(), Some("usb")); // read from node props
         assert!(usb.is_hardware);
         assert!(usb.is_default, "usb sink is the default per Metadata");
-        assert!(usb.max_sample_rate.is_none(), "rate comes from the capability probe, not pw-dump");
+        assert!(
+            usb.max_sample_rate.is_none(),
+            "rate comes from the capability probe, not pw-dump"
+        );
 
         let pci = devs
             .iter()

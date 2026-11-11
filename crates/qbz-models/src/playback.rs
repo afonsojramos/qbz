@@ -56,6 +56,32 @@ pub struct QueueTrack {
     /// (the skip commands fall back to album_id when this is absent).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_item_id_hint: Option<String>,
+    /// The container this track was launched FROM — the "playing from" origin
+    /// used by the now-playing song-card "layers" button. `context_kind` is one
+    /// of "album" | "artist" | "playlist" | "label"; `context_id` is that
+    /// container's navigation id. Stamped per-track at enqueue time so the
+    /// button always carries the CURRENT track's true source and is re-derived
+    /// on every track change (never a stale single global). None = no container
+    /// origin (bare single-track / favorites / mix / search play) → the button
+    /// falls back to the track's own album. `serde(default)` keeps the persisted
+    /// session-queue back-compatible (older payloads restore as None).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+    /// Cross-source identity keys, when the source knows them: the ISRC (the
+    /// one key Qobuz always has) and the MusicBrainz recording id (Picard-
+    /// tagged local files, media servers that expose provider ids). Purely
+    /// additive — `None` everywhere that has not been taught them — and
+    /// stamped into the listen log, which is the only consumer today.
+    ///
+    /// NOT an identity on their own: numeric `id`s collide across sources,
+    /// so `(source, native item id)` stays the row identity and these are
+    /// the JOIN keys between sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isrc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_mbid: Option<String>,
 }
 
 fn default_streamable() -> bool {
@@ -87,6 +113,10 @@ pub struct QueueState {
     pub repeat: RepeatMode,
     pub total_tracks: usize,
     pub stop_after_track_id: Option<u64>,
+    /// Manual-block size (#442): how many entries right after `current_index`
+    /// were hand-queued ("Play next" / "Play later") and play before the
+    /// source resumes.
+    pub manual_next_count: usize,
 }
 
 // ============ Playback State ============

@@ -432,6 +432,47 @@ impl DiscogsClient {
         Ok(cache_path.to_string_lossy().to_string())
     }
 
+    /// Download one previously returned Discogs image without trusting its
+    /// size or exposing the proxy URL to a frontend. The editor stages these
+    /// bytes and validates the decoded image before any tag/file mutation.
+    pub async fn download_artwork_bytes(
+        &self,
+        image_url: &str,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>, String> {
+        let proxy_url = format!(
+            "{}/image?url={}",
+            DISCOGS_PROXY_URL,
+            urlencoding::encode(image_url)
+        );
+        let mut response = self
+            .client
+            .get(&proxy_url)
+            .send()
+            .await
+            .map_err(|error| format!("Failed to download Discogs image: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("Discogs image request failed: {error}"))?;
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes as u64)
+        {
+            return Err("Discogs image is larger than the editor limit".to_string());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("Failed to read Discogs image: {error}"))?
+        {
+            if bytes.len().saturating_add(chunk.len()) > max_bytes {
+                return Err("Discogs image is larger than the editor limit".to_string());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
+    }
+
     /// Search for artists and return search results
     pub async fn search_artist(&self, query: &str) -> Result<SearchResponse, String> {
         let url = format!(

@@ -363,6 +363,10 @@ mod tests {
             source: None,
             parental_warning: false,
             source_item_id_hint: None,
+            context_kind: None,
+            context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 

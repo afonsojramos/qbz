@@ -33,7 +33,19 @@ pub async fn resolve_offline_bytes(
 ) -> Option<Vec<u8>> {
     let row = {
         let guard = offline.db.lock().await;
-        guard.as_ref()?.get_cmaf_bundle(track_id).ok().flatten()?
+        let db = guard.as_ref()?;
+        let row = db.get_cmaf_bundle(track_id).ok().flatten()?;
+        // A play IS an access: keep `last_accessed_at` truthful (before this
+        // only the download wrote it). Nothing evicts on it today —
+        // `maintenance::check_cache_limit` only REFUSES new downloads at the
+        // limit, and downloaded albums are user data kept until removed in
+        // the offline manager — but it is the stamp any future space-reclaim
+        // policy must order by. This is the one place every offline play
+        // funnels through (both frontends and qbzd resolve here).
+        if let Err(e) = db.touch(track_id) {
+            log::debug!("[OfflineResolve] touch({track_id}) failed: {e}");
+        }
+        row
     };
 
     match row.cache_format {

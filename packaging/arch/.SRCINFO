@@ -2,7 +2,7 @@ pkgbase = qbz
 	pkgdesc = Native Qobuz client for Linux with bit-perfect playback
 	pkgver = 0.1.0
 	pkgrel = 1
-	url = https://github.com/vicrodh/qbz
+	url = https://github.com/afonsojramos/qbz
 	arch = x86_64
 	license = MIT
 	depends = alsa-lib
@@ -17,7 +17,7 @@ pkgbase = qbz
 	makedepends = cargo
 	makedepends = pkgconf
 	makedepends = clang
-	source = https://github.com/vicrodh/qbz/archive/refs/tags/v0.1.0.tar.gz
+	source = https://github.com/afonsojramos/qbz/archive/refs/tags/v0.1.0.tar.gz
 	sha256sums = SKIP
 
 pkgname = qbz

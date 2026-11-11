@@ -19,7 +19,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Cache (per-user SQLite, WAL per ADR-002)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
 
 # Logging
 log = { workspace = true }

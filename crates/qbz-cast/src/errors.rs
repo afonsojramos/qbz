@@ -23,6 +23,12 @@ pub enum CastError {
     #[error("Not connected to a cast device")]
     NotConnected,
 
+    /// Connected to the receiver, but no media app / media session has been
+    /// launched yet (nothing loaded since connect). Distinct from
+    /// `NotConnected` on purpose: an idle receiver is NOT a lost one.
+    #[error("Connected, but no media session yet")]
+    NoMediaSession,
+
     #[error("Device not found: {0}")]
     DeviceNotFound(String),
 
