@@ -7,8 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-// Public verification key from the shipping Tauri updater. Not an API secret.
-const PUBLIC_KEY: &str = "RWSGlbvrbc5/P3/4zoXZfBd+pee5Kw7h5/gUIE7B9GiL47dvUSNpNGLm";
+// Release signing public key (private half: TAURI_SIGNING_PRIVATE_KEY). Not an API secret.
+const PUBLIC_KEY: &str = "RWSmkTQs7UZtAsrD/4rgjaP6qwWCmcIlkgXqULq+XbSyGo637k8+d+5a";
 const MAX_DOWNLOAD: u64 = 2 * 1024 * 1024 * 1024;
 
 pub enum InstallOutcome {
@@ -417,6 +417,17 @@ mod tests {
         assert!(minisign_verify::PublicKey::from_base64(PUBLIC_KEY).is_ok());
         let f = tempfile::NamedTempFile::new().unwrap();
         assert!(verify(f.path(), "not a signature").is_err());
+    }
+    #[test]
+    fn release_key_signature_verifies_against_embedded_public_key() {
+        // Signed with TAURI_SIGNING_PRIVATE_KEY via `tauri signer sign`, as the
+        // release workflows do. Fails if PUBLIC_KEY drifts from the CI key.
+        let signature = "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTbWtUUXM3VVp0QW9jdFBsQytqZEFtM2tqQ21OeTBEN1hDTFVpcVMwd3V1a09acGg3RCtpZWdTaEgwYU1zdmFGUTU3QlFxd2dScUM0QW5hYjJ3V29uenNPbHhUNU1LQ2dFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk0Mzk3NDM2CWZpbGU6Zml4dHVyZS5iaW4KVE9rLzJCNmMyc3YrWVNkOHc1dThyQ2Q5VlpaeEZTT1lEK0tWUHh4OVQxVUpsclNKcmxkSTlRYUVQb1hjVFhLOGxSajFHVXdoMWdxQ0REc3NZLy9WQUE9PQo=";
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), b"qbz release signing key").unwrap();
+        assert!(verify(f.path(), signature).is_ok());
+        std::fs::write(f.path(), b"tampered").unwrap();
+        assert!(verify(f.path(), signature).is_err());
     }
     #[test]
     fn tauri_envelope_verifies_bytes_and_rejects_tampering_or_wrong_key() {
