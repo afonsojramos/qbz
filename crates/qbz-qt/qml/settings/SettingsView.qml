@@ -281,6 +281,25 @@ Item {
                     interactive: contentHeight > height
                     boundsBehavior: Flickable.StopAtBounds
 
+                    // Opening the fold scrolls its rows into view, keeping the
+                    // Advanced row on screen. Waits for the column to grow,
+                    // which happens after advancedOpen changes.
+                    property bool revealAdvanced: false
+                    Connections {
+                        target: root
+                        function onAdvancedOpenChanged() {
+                            subNavFlick.revealAdvanced = root.advancedOpen
+                        }
+                    }
+                    onContentHeightChanged: {
+                        if (!revealAdvanced) {
+                            returnToBounds()
+                            return
+                        }
+                        revealAdvanced = false
+                        contentY = Math.max(0, Math.min(advancedRow.y, contentHeight - height))
+                    }
+
                     Column {
                         id: subNavCol
                         width: subNavFlick.width
@@ -349,6 +368,7 @@ Item {
                         // reads as active while it is closed over the selected
                         // page, so the column never shows nothing selected.
                         SubNavItem {
+                            id: advancedRow
                             name: "sliders-horizontal"
                             trailing: root.advancedOpen ? "chevron-down" : "chevron-right"
                             label: QbzSession.tr("Advanced", QbzSession.trRev)
