@@ -71,7 +71,7 @@
   <releases>
     <release version="2.2.0" date="2026-11-11">
       <description>
-        <p>QBZ moves to its new home at github.com/afonsojramos/qbz. Updates, release notes and in-app links now use the new repository, and updates are signed with a new release key. The app is otherwise the same as 2.1.2.</p>
+        <p>First release from afonsojramos's fork at github.com/afonsojramos/qbz, maintained in keep-the-lights-on mode: security fixes, bug fixes and compatibility updates, with no new features planned. Updates and in-app links now use the fork, and updates are signed with the fork's release key. The app is otherwise the same as 2.1.2.</p>
       </description>
     </release>
     <release version="2.1.2" date="2026-09-16">
