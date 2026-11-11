@@ -20,7 +20,9 @@ fn quote(value: &str) -> String { format!("'{}'", value.replace('\'', "'\\''")) 
 
 fn access_command(path: &str, flatpak: Option<&str>, snap: Option<&str>) -> (String, String) {
     if let Some(app) = flatpak {
-        let command = if Path::new(path).is_absolute() {
+        // Flatpak paths are Linux paths on every host; Path::is_absolute is
+        // false for them on Windows.
+        let command = if path.starts_with('/') {
             format!("flatpak override --user --filesystem={} {}", quote(&format!("{path}:rw")), quote(app))
         } else { String::new() };
         return ("Flatpak".into(), command);
