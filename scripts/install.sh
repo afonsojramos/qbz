@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# QBZ per-user installer. Canonical source: vicrodh/qbz scripts/install.sh.
-# Published verbatim at https://qbz.lol/install.sh with the 2.1.2 website.
+# QBZ per-user installer. Canonical source: afonsojramos/qbz scripts/install.sh.
+# Served from the main branch at https://raw.githubusercontent.com/afonsojramos/qbz/main/scripts/install.sh.
 # Keep execution after the complete function definition: a truncated download
 # must not start installing half a script. Compatible with macOS Bash 3.2.
 qbz_install_main() (
@@ -111,10 +111,10 @@ qbz_install_main() (
     trap 'exit 130' INT
     trap 'exit 143' TERM
     fetch() { curl --proto '=https' --proto-redir '=https' --tlsv1.2 --fail --location --silent --show-error --connect-timeout 10 --max-time 600 --max-filesize 2147483648 --retry 2 --output "$2" "$1"; }
-    local api='https://api.github.com/repos/vicrodh/qbz/releases/latest'
+    local api='https://api.github.com/repos/afonsojramos/qbz/releases/latest'
     if [ -n "$requested" ]; then
         [[ "$requested" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail '--version must be a stable X.Y.Z version.'
-        api="https://api.github.com/repos/vicrodh/qbz/releases/tags/v$requested"
+        api="https://api.github.com/repos/afonsojramos/qbz/releases/tags/v$requested"
     fi
     printf '%s\n' 'Finding the latest stable QBZ package...'
     fetch "$api" "$scratch/release.json" || fail 'Cannot read the release. Check your connection or GitHub rate limit.'
@@ -175,7 +175,7 @@ PY
             size=$(json_get "assets.$i.size")
         fi
     done
-    [ "$url" = "https://github.com/vicrodh/qbz/releases/download/$tag/$filename" ] || fail "The official $platform package is not available yet. Try again after its release build finishes."
+    [ "$url" = "https://github.com/afonsojramos/qbz/releases/download/$tag/$filename" ] || fail "The official $platform package is not available yet. Try again after its release build finishes."
     [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || fail 'The release has no SHA-256 digest. Refusing an unchecked download.'
     [[ "$size" =~ ^[0-9]+$ ]] && [ "$size" -gt 0 ] && [ "$size" -le 2147483648 ] || fail 'Invalid package size.'
     printf 'QBZ %s · %s\nDestination: %s\n' "$version" "$platform" "$destination"
@@ -201,8 +201,8 @@ PY
         [ "$(od -An -tx1 -j8 -N3 "$scratch/package" | tr -d ' \n')" = 414902 ] || fail 'The package is not a type-2 AppImage.'
         cp "$scratch/package" "$stage/QBZ.AppImage"
         chmod 755 "$stage/QBZ.AppImage"
-        # The logo is data from the same website that hosts this script.
-        fetch 'https://qbz.lol/assets/brand/64x64.png' "$stage/qbz.png" || fail 'Could not download the application icon.'
+        # The logo comes from the same repository that hosts this script.
+        fetch 'https://raw.githubusercontent.com/afonsojramos/qbz/main/packaging/icons/64x64.png' "$stage/qbz.png" || fail 'Could not download the application icon.'
         mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
         {
             printf '%s\n' '#!/usr/bin/env bash' '# QBZ one-line installer'

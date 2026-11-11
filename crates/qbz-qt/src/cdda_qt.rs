@@ -98,7 +98,7 @@ async fn lookup_musicbrainz(disc_id: &str) -> Option<DiscMeta> {
         .user_agent(concat!(
             "QBZ/",
             env!("CARGO_PKG_VERSION"),
-            " (https://github.com/vicrodh/qbz)"
+            " (https://github.com/afonsojramos/qbz)"
         ))
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -305,7 +305,7 @@ async fn fetch_cover_at(key: &str) -> Option<String> {
         .user_agent(concat!(
             "QBZ/",
             env!("CARGO_PKG_VERSION"),
-            " (https://github.com/vicrodh/qbz)"
+            " (https://github.com/afonsojramos/qbz)"
         ))
         .timeout(std::time::Duration::from_secs(15))
         .build()

@@ -6,8 +6,8 @@
 		<name>blitzkriegfc</name>
 	</maintainer>
 	<upstream>
-		<remote-id type="github">vicrodh/qbz</remote-id>
-		<bugs-to>https://github.com/vicrodh/qbz/issues</bugs-to>
+		<remote-id type="github">afonsojramos/qbz</remote-id>
+		<bugs-to>https://github.com/afonsojramos/qbz/issues</bugs-to>
 	</upstream>
 	<use>
 		<flag name="jack">Install the JACK runtime backend</flag>

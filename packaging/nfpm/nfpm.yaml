@@ -26,12 +26,12 @@ platform: linux
 version: ${QBZ_VERSION}
 section: sound
 priority: optional
-maintainer: Victor Rodriguez <vicrodh@users.noreply.github.com>
+maintainer: Afonso Jorge Ramos <afonsojramos@users.noreply.github.com>
 description: |
   Native Qobuz client with hi-res audio support.
   Bit-perfect playback, DAC passthrough, offline cache, local library.
 vendor: QBZ
-homepage: https://github.com/vicrodh/qbz
+homepage: https://github.com/afonsojramos/qbz
 license: MIT
 # The desktop package already carries /usr/bin/qbzd and its optional user
 # unit. Advertise that capability and make the daemon-only package an

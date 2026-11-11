@@ -464,7 +464,7 @@ Item {
                         spacing: 12
                         LinkButton {
                             label: "GitHub"
-                            onClicked: QbzShell.openExternalUrl("https://github.com/vicrodh/qbz")
+                            onClicked: QbzShell.openExternalUrl("https://github.com/afonsojramos/qbz")
                         }
                         LinkButton {
                             label: QbzSession.tr("Release", QbzSession.trRev)

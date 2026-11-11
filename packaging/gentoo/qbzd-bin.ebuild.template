@@ -6,12 +6,12 @@ EAPI=8
 inherit optfeature
 
 DESCRIPTION="QBZ headless Qobuz daemon for servers and appliances (prebuilt binary)"
-HOMEPAGE="https://qbz.lol https://github.com/vicrodh/qbz"
+HOMEPAGE="https://qbz.lol https://github.com/afonsojramos/qbz"
 
 MY_PV="${PV}"
 SRC_URI="
-	amd64? ( https://github.com/vicrodh/qbz/releases/download/v${MY_PV}/qbzd-${MY_PV}-linux-amd64.tar.gz )
-	arm64? ( https://github.com/vicrodh/qbz/releases/download/v${MY_PV}/qbzd-${MY_PV}-linux-aarch64.tar.gz )
+	amd64? ( https://github.com/afonsojramos/qbz/releases/download/v${MY_PV}/qbzd-${MY_PV}-linux-amd64.tar.gz )
+	arm64? ( https://github.com/afonsojramos/qbz/releases/download/v${MY_PV}/qbzd-${MY_PV}-linux-aarch64.tar.gz )
 "
 
 LICENSE="MIT"

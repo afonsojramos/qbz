@@ -7,12 +7,12 @@ RUST_MIN_VER="1.89.0"
 inherit cargo xdg
 
 DESCRIPTION="Native hi-fi Qobuz desktop player for Linux"
-HOMEPAGE="https://qbz.lol https://github.com/vicrodh/qbz"
+HOMEPAGE="https://qbz.lol https://github.com/afonsojramos/qbz"
 
 MY_PV="${PV}"
 SRC_URI="
-	https://github.com/vicrodh/qbz/archive/refs/tags/v${MY_PV}.tar.gz -> qbz-${MY_PV}.tar.gz
-	https://github.com/vicrodh/qbz/releases/download/v${MY_PV}/qbz-${MY_PV}-cargo-vendor.tar.xz
+	https://github.com/afonsojramos/qbz/archive/refs/tags/v${MY_PV}.tar.gz -> qbz-${MY_PV}.tar.gz
+	https://github.com/afonsojramos/qbz/releases/download/v${MY_PV}/qbz-${MY_PV}-cargo-vendor.tar.xz
 "
 
 LICENSE="MIT"

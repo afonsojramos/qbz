@@ -41,4 +41,4 @@ pub(crate) const BROWSER_USER_AGENT: &str =
      Chrome/126.0.0.0 Safari/537.36";
 
 /// ListenBrainz asks API clients to identify themselves.
-pub(crate) const LB_USER_AGENT: &str = "QBZ/2.0 ( https://github.com/vicrodh/qbz )";
+pub(crate) const LB_USER_AGENT: &str = "QBZ/2.0 ( https://github.com/afonsojramos/qbz )";
